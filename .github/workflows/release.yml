@@ -21,6 +21,25 @@ jobs:
           go-version: "1.24"
           cache: true
 
+      - name: Verify HOMEBREW_TAP_TOKEN propagates + can write to homebrew-tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN secret is empty / unset"
+            exit 1
+          fi
+          echo "token length: ${#HOMEBREW_TAP_TOKEN}"
+          echo "token prefix: ${HOMEBREW_TAP_TOKEN:0:14}…"
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token $HOMEBREW_TAP_TOKEN" \
+            https://api.github.com/repos/Facets-cloud/homebrew-tap)
+          echo "GET homebrew-tap returned HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::error::Token cannot read homebrew-tap (HTTP $code) — goreleaser will fail"
+            exit 1
+          fi
+
       - name: Run goreleaser
         uses: goreleaser/goreleaser-action@v6
         with:
