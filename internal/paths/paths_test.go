@@ -3,13 +3,11 @@ package paths
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
-// withHome temporarily redirects $HOME (and on darwin/linux that's what
-// os.UserHomeDir() reads) to a temp dir, so the package's filesystem
-// operations are isolated.
+// withHome temporarily redirects $HOME so the package's filesystem-derived
+// helpers are deterministic.
 func withHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -29,63 +27,29 @@ func TestDir_BuildsUnderHome(t *testing.T) {
 	}
 }
 
-func TestEnsure_CreatesDirWith0700(t *testing.T) {
+func TestDir_NoHome(t *testing.T) {
+	// Both HOME (Unix) and USERPROFILE (Windows) cleared so os.UserHomeDir()
+	// errors. We don't assert on the exact error message — just that one is
+	// returned and Dir doesn't paper over it.
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	if _, err := Dir(); err == nil {
+		t.Fatal("Dir() should error when home is unresolvable, got nil")
+	}
+}
+
+func TestCredentials_UnderDotPraxis(t *testing.T) {
 	home := withHome(t)
-	got, err := Ensure()
+	got, err := Credentials()
 	if err != nil {
-		t.Fatalf("Ensure err = %v", err)
+		t.Fatalf("Credentials err = %v", err)
 	}
-	if got != filepath.Join(home, ".praxis") {
-		t.Errorf("Ensure() = %q, want under home", got)
-	}
-	info, err := os.Stat(got)
-	if err != nil {
-		t.Fatalf("stat %s: %v", got, err)
-	}
-	if !info.IsDir() {
-		t.Errorf("%s is not a directory", got)
-	}
-	if mode := info.Mode().Perm(); mode != 0700 {
-		t.Errorf("perm = %o, want 0700", mode)
+	want := filepath.Join(home, ".praxis", "credentials")
+	if got != want {
+		t.Errorf("Credentials() = %q, want %q", got, want)
 	}
 }
 
-func TestEnsure_Idempotent(t *testing.T) {
-	withHome(t)
-	if _, err := Ensure(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Ensure(); err != nil {
-		t.Errorf("second Ensure() should not fail: %v", err)
-	}
-}
-
-func TestPaths_AllUnderDotPraxis(t *testing.T) {
-	home := withHome(t)
-	wantPrefix := filepath.Join(home, ".praxis") + string(filepath.Separator)
-
-	tests := []struct {
-		name string
-		fn   func() (string, error)
-		want string
-	}{
-		{"Config", Config, "config.json"},
-		{"Credentials", Credentials, "credentials"},
-		{"Installed", Installed, "installed.json"},
-		{"InstallReceipt", InstallReceipt, "install.json"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.fn()
-			if err != nil {
-				t.Fatalf("%s err = %v", tt.name, err)
-			}
-			if !strings.HasPrefix(got, wantPrefix) {
-				t.Errorf("%s = %q, want prefix %q", tt.name, got, wantPrefix)
-			}
-			if filepath.Base(got) != tt.want {
-				t.Errorf("%s base = %q, want %q", tt.name, filepath.Base(got), tt.want)
-			}
-		})
-	}
-}
+// We don't write to disk in tests — Credentials() returns a path; actual
+// reads/writes happen in the cmd layer.
+var _ = os.Remove

@@ -42,24 +42,27 @@ credentials. See [README.md](README.md) for the user-facing story.
 
 ```
 main.go               entrypoint — calls cmd.Execute()
-cmd/                  cobra command tree
+cmd/                  cobra command tree (only commands that DO something
+                       — no stubs; later phases add commands when their
+                       implementation lands)
   root.go             root cmd, version vars (ldflags-injected)
-  version.go          `praxis version` subcommand
-  doctor.go           `praxis doctor`
+  version.go          `praxis version`
   update.go           `praxis update` (self-update via GitHub Releases)
   completion.go       `praxis completion {bash|zsh|fish|powershell}`
-  auth.go             login (stub), logout, whoami (stub)
-  skill.go            skill {list|show|install|uninstall|...} (stubs)
-  mcp.go              universal `mcp <mcp> <fn> [--arg val ...]`
-  helpers.go          shared helpers (notImplemented stub)
-internal/             pure logic, fully unit-tested
+  logout.go           `praxis logout` (deletes ~/.praxis/credentials)
+internal/             pure logic, unit-tested
   paths/              ~/.praxis filesystem locations
-  harness/            AI host detection (Claude Code, Cursor, Gemini CLI)
   selfupdate/         GitHub Releases fetch, checksum, atomic replace
 Makefile              build (with ldflags), install, test, lint, clean
 .goreleaser.yml       release config — raw binaries × 4 arches + brew tap
 .github/workflows/    ci.yml (every push), release.yml (on tag)
 ```
+
+**Don't add stub commands.** A cobra command that prints "not yet
+implemented" is worse than no command — it lies to users and to
+`--help`. Phase 2 will add `skill *` commands when skill sourcing
+actually works; Phase 3 will add `login`, `whoami`, `mcp` when the
+server gateway exists.
 
 ## Build & run
 

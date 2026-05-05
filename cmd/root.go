@@ -18,17 +18,14 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "praxis",
 	Short: "Bring Praxis cloud capabilities to any local AI host",
-	Long: `Praxis CLI exposes your organization's Praxis cloud to your local AI tool
-(Claude Code, Cursor, Gemini CLI). Skills are sourced and run inside your
-AI; MCP tools execute server-side using org-managed credentials.
+	Long: `Praxis CLI exposes your organization's Praxis cloud to your local AI
+tool (Claude Code, Cursor, Gemini CLI). Skills will be sourced and run
+inside your AI; MCP tools will execute server-side using org-managed
+credentials. No AWS/kube/terraform credentials on your laptop.
 
-No AWS/kube/terraform credentials on your laptop.
-
-Common commands:
-  praxis login                              connect your Praxis account
-  praxis skill install <name>               install a skill into your AI host
-  praxis mcp <mcp> <fn> [--arg val ...]     invoke any Praxis MCP function
-  praxis doctor                             diagnose your installation
+This is an early release. Today the CLI only ships installation,
+versioning, and self-update plumbing. Skill sourcing and MCP invocation
+land in subsequent releases.
 
 Run 'praxis <command> --help' for details on any command.`,
 	SilenceUsage:  true,

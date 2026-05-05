@@ -35,31 +35,33 @@ praxis version
 praxis doctor
 ```
 
-## Quick start
+## Verify
 
 ```bash
-praxis login                                   # OAuth into your Praxis cloud
-praxis skill install release-debugging         # install into all detected AI hosts
-# Open Claude Code (or Cursor, or Gemini CLI):
-#   "debug my failed prod release rel_8a2f1"
-# Claude calls `praxis mcp …` under the hood. No laptop creds needed.
+praxis version
+praxis completion zsh > "${fpath[1]}/_praxis"
 ```
 
-## Surface
+The skill / MCP commands aren't shipped yet — see "Coming in subsequent
+releases" below.
+
+## Surface today (v0.0.x — install + plumbing only)
 
 ```
-AUTH      praxis login | logout | whoami
-SKILLS    praxis skill list | show <name> | install <name> [--host X]
-                  | uninstall <name> | list-installed | refresh
-MCP       praxis mcp list                              list MCP servers
-          praxis mcp <mcp>                             list functions in an MCP
-          praxis mcp <mcp> <fn> [--key val …]          invoke a function
-UTILITY   praxis doctor | update | completion | --help | version
+praxis version              build version, commit, date, runtime
+praxis update               self-update against GitHub Releases
+praxis completion <shell>   bash | zsh | fish | powershell
+praxis logout               delete ~/.praxis/credentials
+praxis --help / -v
 ```
 
-Every command supports `--json` for machine-readable output. When stdout is
-not a terminal, JSON is emitted by default — so AI hosts spawning praxis as
-a subprocess always get parseable output.
+## Coming in subsequent releases
+
+```
+v0.1   skill list | show <name> | install [--host X] | uninstall | …
+v0.2   login | whoami | mcp list | mcp <mcp> | mcp <mcp> <fn> [--arg val …]
+       (server gateway must ship first)
+```
 
 ## Why a CLI (and not an MCP server)?
 

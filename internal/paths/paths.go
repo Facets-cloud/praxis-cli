@@ -1,4 +1,6 @@
-// Package paths centralizes ~/.praxis filesystem locations.
+// Package paths centralizes ~/.praxis filesystem locations. Only the helpers
+// actually called by Phase 1 commands live here; later phases should add
+// their own paths (skill receipt, server config, etc.) as they need them.
 package paths
 
 import (
@@ -17,38 +19,9 @@ func Dir() (string, error) {
 	return filepath.Join(home, dirName), nil
 }
 
-// Ensure returns ~/.praxis, creating it (mode 0700) if missing.
-func Ensure() (string, error) {
-	d, err := Dir()
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(d, 0700); err != nil {
-		return "", err
-	}
-	return d, nil
-}
-
-// Config is the per-user config file (PRAXIS_API_URL, defaults).
-func Config() (string, error) {
-	d, err := Dir()
-	return filepath.Join(d, "config.json"), err
-}
-
-// Credentials is the bearer-token store.
+// Credentials is the bearer-token store. Used by `praxis logout`; will
+// also be used by `praxis login` once that lands.
 func Credentials() (string, error) {
 	d, err := Dir()
 	return filepath.Join(d, "credentials"), err
-}
-
-// Installed is the receipt of skills installed across AI hosts.
-func Installed() (string, error) {
-	d, err := Dir()
-	return filepath.Join(d, "installed.json"), err
-}
-
-// InstallReceipt records how the binary itself was installed (brew/curl/etc).
-func InstallReceipt() (string, error) {
-	d, err := Dir()
-	return filepath.Join(d, "install.json"), err
 }
