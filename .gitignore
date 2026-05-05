@@ -1,0 +1,24 @@
+# Built binary
+/praxis
+
+# Go test/build artifacts
+*.test
+*.out
+*.exe
+coverage.txt
+
+# goreleaser output
+/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Local config
+.env
+.env.local

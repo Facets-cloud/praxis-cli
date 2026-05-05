@@ -1,0 +1,85 @@
+version: 2
+
+# Praxis CLI release config.
+#
+# Produces RAW BINARIES (not tarballs) for darwin/linux × amd64/arm64,
+# named `praxis_<os>_<arch>`. The `praxis update` self-updater downloads
+# these directly and verifies them against checksums.txt.
+
+project_name: praxis
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: praxis
+    main: .
+    binary: praxis
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/Facets-cloud/praxis-cli/cmd.version={{ .Version }}
+      - -X github.com/Facets-cloud/praxis-cli/cmd.commit={{ .ShortCommit }}
+      - -X github.com/Facets-cloud/praxis-cli/cmd.date={{ .Date }}
+
+archives:
+  - id: praxis
+    ids: [praxis]
+    formats: [binary]
+    name_template: "praxis_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ .Version }}-snapshot-{{ .ShortCommit }}"
+
+release:
+  github:
+    owner: Facets-cloud
+    name: praxis-cli
+  draft: false
+  prerelease: auto
+  name_template: "v{{ .Version }}"
+
+brews:
+  - name: praxis
+    ids: [praxis]
+    repository:
+      owner: Facets-cloud
+      name: homebrew-tap
+      branch: main
+    directory: Formula
+    homepage: https://askpraxis.ai
+    description: Bring Praxis cloud capabilities to any local AI host
+    license: MIT
+    install: |
+      bin.install Dir["*"].first => "praxis"
+      generate_completions_from_executable(bin/"praxis", "completion")
+    test: |
+      system "#{bin}/praxis", "version"
+    commit_author:
+      name: praxis-bot
+      email: bot@askpraxis.ai
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
