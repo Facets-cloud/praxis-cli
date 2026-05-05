@@ -17,10 +17,11 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Show version, commit, and build metadata",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("praxis version %s\n", version)
-		fmt.Printf("  commit:  %s\n", commit)
-		fmt.Printf("  built:   %s\n", date)
-		fmt.Printf("  go:      %s\n", runtime.Version())
-		fmt.Printf("  os/arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		out := cmd.OutOrStdout()
+		fmt.Fprintf(out, "praxis version %s\n", version)
+		fmt.Fprintf(out, "  commit:  %s\n", commit)
+		fmt.Fprintf(out, "  built:   %s\n", date)
+		fmt.Fprintf(out, "  go:      %s\n", runtime.Version())
+		fmt.Fprintf(out, "  os/arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	},
 }

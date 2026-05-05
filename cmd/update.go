@@ -12,6 +12,17 @@ import (
 
 var updateYes bool
 
+// Package-level seams so unit tests can stub network + filesystem deps
+// without spawning a subprocess. Tests assign and restore via defer.
+var (
+	fetchLatestRelease = selfupdate.LatestRelease
+	downloadAsset      = selfupdate.Download
+	fetchTextBody      = selfupdate.FetchText
+	verifyChecksum     = selfupdate.VerifyChecksum
+	parseChecksums     = selfupdate.ParseChecksums
+	atomicReplace      = selfupdate.AtomicReplace
+)
+
 func init() {
 	updateCmd.Flags().BoolVarP(&updateYes, "yes", "y", false, "skip confirmation prompt")
 	rootCmd.AddCommand(updateCmd)
@@ -28,7 +39,7 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 
-		rel, err := selfupdate.LatestRelease()
+		rel, err := fetchLatestRelease()
 		if err != nil {
 			return fmt.Errorf("check for updates: %w", err)
 		}
@@ -66,18 +77,18 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 
 		var expected string
 		if sumAsset != nil {
-			body, err := selfupdate.FetchText(sumAsset.BrowserDownloadURL)
+			body, err := fetchTextBody(sumAsset.BrowserDownloadURL)
 			if err != nil {
 				return fmt.Errorf("fetch checksums: %w", err)
 			}
-			expected, err = selfupdate.ParseChecksums(body, binAsset.Name)
+			expected, err = parseChecksums(body, binAsset.Name)
 			if err != nil {
 				return err
 			}
 		}
 
 		fmt.Fprintln(out, "Downloading…")
-		tmpPath, err := selfupdate.Download(binAsset.BrowserDownloadURL)
+		tmpPath, err := downloadAsset(binAsset.BrowserDownloadURL)
 		if err != nil {
 			return fmt.Errorf("download: %w", err)
 		}
@@ -85,7 +96,7 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 
 		if expected != "" {
 			fmt.Fprintln(out, "Verifying checksum…")
-			if err := selfupdate.VerifyChecksum(tmpPath, expected); err != nil {
+			if err := verifyChecksum(tmpPath, expected); err != nil {
 				return err
 			}
 		} else {
@@ -93,7 +104,7 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 		}
 
 		fmt.Fprintln(out, "Installing…")
-		if err := selfupdate.AtomicReplace(myPath, tmpPath); err != nil {
+		if err := atomicReplace(myPath, tmpPath); err != nil {
 			return fmt.Errorf("install: %w", err)
 		}
 

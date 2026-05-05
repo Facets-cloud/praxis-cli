@@ -23,10 +23,11 @@ credentials. See [README.md](README.md) for the user-facing story.
   passes after.
 - `make test` (= `go test -race ./...`) must stay green on every commit
   to `main`. CI gates merges on this.
-- Coverage target: **≥ 75%** for `internal/*` packages (use
-  `go test -cover ./internal/...` before opening a PR). Cobra command
-  files in `cmd/*` are exempt — they're best covered by end-to-end
-  binary tests, not unit tests.
+- Coverage target: **≥ 75%** across the board. Use
+  `go test -cover ./...` before opening a PR. This includes `cmd/*`
+  cobra commands — test them with `cmd.SetOut(&buf)` and call
+  `RunE`/`Run` directly. Mock external dependencies via package-level
+  function vars (see `cmd/update.go`'s seams as a reference).
 
 ### Conventions
 
