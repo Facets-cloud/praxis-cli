@@ -28,9 +28,10 @@ jobs:
           version: latest
           args: release --clean
         env:
-          # GITHUB_TOKEN can publish releases on this repo.
+          # GITHUB_TOKEN can publish releases on this repo only.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # HOMEBREW_TAP_TOKEN must be a PAT with repo scope on
-          # Facets-cloud/homebrew-tap so goreleaser can push the brew
-          # formula update.
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # HOMEBREW_TAP_TOKEN is referenced by .goreleaser.yml's
+          # brews[].repository.token to push the formula update to
+          # Facets-cloud/homebrew-tap (a different repo than this one).
+          # Must be a PAT with write access to that repo.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

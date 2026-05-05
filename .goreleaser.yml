@@ -60,6 +60,13 @@ brews:
       owner: Facets-cloud
       name: homebrew-tap
       branch: main
+      # Without an explicit token, goreleaser falls back to the
+      # workflow's GITHUB_TOKEN — which is scoped only to praxis-cli
+      # and cannot write to a different repo (returns 403 "Resource
+      # not accessible by integration"). The HOMEBREW_TAP_TOKEN
+      # env var is set by .github/workflows/release.yml from the
+      # repo secret of the same name.
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
     homepage: https://askpraxis.ai
     description: Bring Praxis cloud capabilities to any local AI host
