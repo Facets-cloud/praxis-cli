@@ -44,6 +44,13 @@ terminal (i.e. you're piping to another tool), JSON is emitted by default.`,
 	DisableFlagParsing: true,
 	Args:               cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// DisableFlagParsing lets --arg val on invoke pass through, but it
+		// also lets --help / -h leak in as positional args. Catch them.
+		for _, a := range args {
+			if a == "--help" || a == "-h" {
+				return cmd.Help()
+			}
+		}
 		switch {
 		case len(args) == 0:
 			return cmd.Help()
