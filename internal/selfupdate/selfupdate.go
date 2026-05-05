@@ -41,7 +41,16 @@ type Asset struct {
 
 // LatestRelease returns metadata for the most recent published release.
 func LatestRelease() (*Release, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
+	return fetchRelease(latestReleaseURL())
+}
+
+func latestReleaseURL() string {
+	return fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
+}
+
+// fetchRelease is the testable seam for LatestRelease — pass a httptest URL
+// to exercise it without hitting api.github.com.
+func fetchRelease(url string) (*Release, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {

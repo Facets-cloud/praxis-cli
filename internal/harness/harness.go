@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 )
 
 // Harness is one AI host (Claude Code, Cursor, Gemini CLI, …).
@@ -80,11 +79,10 @@ func detectCursor(home string) Harness {
 	if _, err := os.Stat(filepath.Join(home, ".cursor")); err == nil {
 		h.Detected = true
 	}
-	if runtime.GOOS == "darwin" {
-		if _, err := os.Stat("/Applications/Cursor.app"); err == nil {
-			h.Detected = true
-		}
-	}
+	// Note: an installed-but-never-launched /Applications/Cursor.app on macOS
+	// would not have ~/.cursor and is not a useful skill-install target until
+	// the user has run Cursor at least once. Don't let its mere presence
+	// inflate the detection signal.
 	return h
 }
 
