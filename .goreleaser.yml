@@ -72,7 +72,12 @@ brews:
     description: Bring Praxis cloud capabilities to any local AI host
     license: MIT
     install: |
-      bin.install Dir["*"].first => "praxis"
+      # Raw-binary assets shipped via GitHub Releases arrive with mode
+      # 0644 (GitHub strips the executable bit on upload). chmod before
+      # the test-step or install call tries to exec the binary.
+      binary = Dir["*"].find { |f| File.file?(f) }
+      File.chmod(0755, binary)
+      bin.install binary => "praxis"
       generate_completions_from_executable(bin/"praxis", "completion")
     test: |
       system "#{bin}/praxis", "version"
