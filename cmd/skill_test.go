@@ -38,7 +38,7 @@ func withSeams(t *testing.T,
 	})
 }
 
-func TestSkillInstall_NoArg_DefaultsToPraxis(t *testing.T) {
+func TestInstallSkill_PassesPraxisName(t *testing.T) {
 	var capturedName string
 	withSeams(t,
 		func() []harness.Harness { return []harness.Harness{{Name: "claude-code", Detected: true}} },
@@ -47,21 +47,21 @@ func TestSkillInstall_NoArg_DefaultsToPraxis(t *testing.T) {
 			return []skillinstall.Installation{{SkillName: name, Harness: "claude-code", Path: "/p"}}, nil
 		}, nil, nil)
 
-	skillInstallCmd.SetOut(&bytes.Buffer{})
-	if err := skillInstallCmd.RunE(skillInstallCmd, nil); err != nil {
+	installSkillCmd.SetOut(&bytes.Buffer{})
+	if err := installSkillCmd.RunE(installSkillCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
 	if capturedName != "praxis" {
-		t.Errorf("install called with name %q, want %q", capturedName, defaultSkillName)
+		t.Errorf("install called with name %q, want praxis", capturedName)
 	}
 }
 
-func TestSkillInstall_NoHosts(t *testing.T) {
+func TestInstallSkill_NoHosts(t *testing.T) {
 	withSeams(t, func() []harness.Harness { return nil }, nil, nil, nil)
 
 	var buf bytes.Buffer
-	skillInstallCmd.SetOut(&buf)
-	if err := skillInstallCmd.RunE(skillInstallCmd, nil); err != nil {
+	installSkillCmd.SetOut(&buf)
+	if err := installSkillCmd.RunE(installSkillCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
 	if !strings.Contains(buf.String(), "No supported AI hosts detected") {
@@ -69,7 +69,7 @@ func TestSkillInstall_NoHosts(t *testing.T) {
 	}
 }
 
-func TestSkillInstall_Success(t *testing.T) {
+func TestInstallSkill_Success(t *testing.T) {
 	withSeams(t,
 		func() []harness.Harness {
 			return []harness.Harness{
@@ -92,8 +92,8 @@ func TestSkillInstall_Success(t *testing.T) {
 		nil, nil)
 
 	var buf bytes.Buffer
-	skillInstallCmd.SetOut(&buf)
-	if err := skillInstallCmd.RunE(skillInstallCmd, nil); err != nil {
+	installSkillCmd.SetOut(&buf)
+	if err := installSkillCmd.RunE(installSkillCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
 	out := buf.String()
@@ -104,7 +104,7 @@ func TestSkillInstall_Success(t *testing.T) {
 	}
 }
 
-func TestSkillInstall_PropagatesError(t *testing.T) {
+func TestInstallSkill_PropagatesError(t *testing.T) {
 	withSeams(t,
 		func() []harness.Harness {
 			return []harness.Harness{{Name: "claude-code", Detected: true}}
@@ -114,23 +114,21 @@ func TestSkillInstall_PropagatesError(t *testing.T) {
 		},
 		nil, nil)
 
-	skillInstallCmd.SetOut(&bytes.Buffer{})
-	err := skillInstallCmd.RunE(skillInstallCmd, nil)
+	installSkillCmd.SetOut(&bytes.Buffer{})
+	err := installSkillCmd.RunE(installSkillCmd, nil)
 	if err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Errorf("err = %v, want substring 'disk full'", err)
 	}
 }
 
-func TestSkillUninstall_NothingFound(t *testing.T) {
+func TestUninstallSkill_NothingFound(t *testing.T) {
 	withSeams(t, nil, nil,
-		func(string) ([]skillinstall.Installation, error) {
-			return nil, nil
-		},
+		func(string) ([]skillinstall.Installation, error) { return nil, nil },
 		nil)
 
 	var buf bytes.Buffer
-	skillUninstallCmd.SetOut(&buf)
-	if err := skillUninstallCmd.RunE(skillUninstallCmd, nil); err != nil {
+	uninstallSkillCmd.SetOut(&buf)
+	if err := uninstallSkillCmd.RunE(uninstallSkillCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
 	if !strings.Contains(buf.String(), "No installations of \"praxis\"") {
@@ -138,7 +136,7 @@ func TestSkillUninstall_NothingFound(t *testing.T) {
 	}
 }
 
-func TestSkillUninstall_RemovesAndReports(t *testing.T) {
+func TestUninstallSkill_RemovesAndReports(t *testing.T) {
 	withSeams(t, nil, nil,
 		func(name string) ([]skillinstall.Installation, error) {
 			return []skillinstall.Installation{
@@ -149,8 +147,8 @@ func TestSkillUninstall_RemovesAndReports(t *testing.T) {
 		nil)
 
 	var buf bytes.Buffer
-	skillUninstallCmd.SetOut(&buf)
-	if err := skillUninstallCmd.RunE(skillUninstallCmd, nil); err != nil {
+	uninstallSkillCmd.SetOut(&buf)
+	if err := uninstallSkillCmd.RunE(uninstallSkillCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
 	out := buf.String()
@@ -161,13 +159,13 @@ func TestSkillUninstall_RemovesAndReports(t *testing.T) {
 	}
 }
 
-func TestSkillListInstalled_Empty(t *testing.T) {
+func TestListSkills_Empty(t *testing.T) {
 	withSeams(t, nil, nil, nil,
 		func() ([]skillinstall.Installation, error) { return nil, nil })
 
 	var buf bytes.Buffer
-	skillListInstalledCmd.SetOut(&buf)
-	if err := skillListInstalledCmd.RunE(skillListInstalledCmd, nil); err != nil {
+	listSkillsCmd.SetOut(&buf)
+	if err := listSkillsCmd.RunE(listSkillsCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
 	if !strings.Contains(buf.String(), "No skills installed") {
@@ -175,7 +173,7 @@ func TestSkillListInstalled_Empty(t *testing.T) {
 	}
 }
 
-func TestSkillListInstalled_Populated(t *testing.T) {
+func TestListSkills_Populated(t *testing.T) {
 	withSeams(t, nil, nil, nil,
 		func() ([]skillinstall.Installation, error) {
 			return []skillinstall.Installation{
@@ -185,8 +183,8 @@ func TestSkillListInstalled_Populated(t *testing.T) {
 		})
 
 	var buf bytes.Buffer
-	skillListInstalledCmd.SetOut(&buf)
-	if err := skillListInstalledCmd.RunE(skillListInstalledCmd, nil); err != nil {
+	listSkillsCmd.SetOut(&buf)
+	if err := listSkillsCmd.RunE(listSkillsCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
 	out := buf.String()

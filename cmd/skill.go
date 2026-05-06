@@ -17,55 +17,37 @@ var (
 	listInstalledSkill = skillinstall.List
 )
 
+// skillName is the only skill v0.1 ships. Once the server-driven catalog
+// lands, install/uninstall will accept an optional name argument to
+// override this.
+const skillName = "praxis"
+
 func init() {
-	skillCmd.AddCommand(skillInstallCmd)
-	skillCmd.AddCommand(skillUninstallCmd)
-	skillCmd.AddCommand(skillListInstalledCmd)
-	rootCmd.AddCommand(skillCmd)
+	rootCmd.AddCommand(installSkillCmd)
+	rootCmd.AddCommand(uninstallSkillCmd)
+	rootCmd.AddCommand(listSkillsCmd)
 }
 
-var skillCmd = &cobra.Command{
-	Use:   "skill",
-	Short: "Install and manage Praxis skills in your AI hosts",
-	Long: `A "skill" is a markdown file (SKILL.md) following the Agent Skills
-open standard (agentskills.io). Install one and your local Claude Code,
-Codex, and Gemini CLI will know how to do that workflow.
-
-v0.1.x ships only one placeholder skill named "praxis" so you can test
-the multi-harness install machinery. The real catalog lands in
-subsequent CLI releases as the Praxis cloud gateway ships.`,
-}
-
-// defaultSkillName is the only skill v0.1 ships. Once the server-driven
-// catalog lands, install/uninstall will accept an optional name argument
-// to override this default.
-const defaultSkillName = "praxis"
-
-var skillInstallCmd = &cobra.Command{
-	Use:   "install [name]",
+var installSkillCmd = &cobra.Command{
+	Use:   "install-skill",
 	Short: "Install the praxis skill into every detected AI host",
-	Long: `Write the SKILL.md file into the user-scope skill directory of every
-detected AI host on this machine:
+	Long: `Write the praxis SKILL.md (Agent Skills open-standard format) into
+the user-scope skill directory of every detected AI host on this machine:
 
   Claude Code  →  ~/.claude/skills/praxis/SKILL.md
   Codex        →  ~/.agents/skills/praxis/SKILL.md
   Gemini CLI   →  ~/.gemini/skills/praxis/SKILL.md
 
-Installations are recorded in ~/.praxis/installed.json so list-installed
-and uninstall can find them later. Cursor is not included — it has no
-user-scope skills directory and needs per-repo install (planned for a
-future release).
+Installations are recorded in ~/.praxis/installed.json so list-skills
+and uninstall-skill can find them later. Cursor is not included — it
+has no user-scope skill directory and needs per-repo install (planned
+for a future release).
 
-v0.1.x only ships the placeholder skill named "praxis", so the [name]
-argument is optional. Once the server-driven catalog lands, you'll pass
-a real skill name here.`,
-	Args: cobra.MaximumNArgs(1),
+v0.1.x ships only the placeholder skill named "praxis"; no name argument
+is needed. The real catalog lands in subsequent releases.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
-		name := defaultSkillName
-		if len(args) == 1 {
-			name = args[0]
-		}
 
 		hosts := detectHarnesses()
 		if len(hosts) == 0 {
@@ -74,47 +56,44 @@ a real skill name here.`,
 			return nil
 		}
 
-		results, err := installSkill(name, hosts)
+		results, err := installSkill(skillName, hosts)
 		if err != nil {
 			return err
 		}
 		for _, in := range results {
 			fmt.Fprintf(out, "  ✓ %-12s installed at %s\n", in.Harness, in.Path)
 		}
-		fmt.Fprintf(out, "\nInstalled %q into %d host(s).\n", name, len(results))
+		fmt.Fprintf(out, "\nInstalled %q into %d host(s).\n", skillName, len(results))
 		return nil
 	},
 }
 
-var skillUninstallCmd = &cobra.Command{
-	Use:   "uninstall [name]",
+var uninstallSkillCmd = &cobra.Command{
+	Use:   "uninstall-skill",
 	Short: "Remove the praxis skill from every host where it's installed",
-	Args:  cobra.MaximumNArgs(1),
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
-		name := defaultSkillName
-		if len(args) == 1 {
-			name = args[0]
-		}
-		removed, err := uninstallSkill(name)
+		removed, err := uninstallSkill(skillName)
 		if err != nil {
 			return err
 		}
 		if len(removed) == 0 {
-			fmt.Fprintf(out, "No installations of %q found.\n", name)
+			fmt.Fprintf(out, "No installations of %q found.\n", skillName)
 			return nil
 		}
 		for _, in := range removed {
 			fmt.Fprintf(out, "  ✓ %-12s removed from %s\n", in.Harness, in.Path)
 		}
-		fmt.Fprintf(out, "\nUninstalled %q from %d host(s).\n", name, len(removed))
+		fmt.Fprintf(out, "\nUninstalled %q from %d host(s).\n", skillName, len(removed))
 		return nil
 	},
 }
 
-var skillListInstalledCmd = &cobra.Command{
-	Use:   "list-installed",
+var listSkillsCmd = &cobra.Command{
+	Use:   "list-skills",
 	Short: "Show installed skills and where they live",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		entries, err := listInstalledSkill()
@@ -122,7 +101,7 @@ var skillListInstalledCmd = &cobra.Command{
 			return err
 		}
 		if len(entries) == 0 {
-			fmt.Fprintln(out, "No skills installed. Try `praxis skill install praxis`.")
+			fmt.Fprintln(out, "No skills installed. Try `praxis install-skill`.")
 			return nil
 		}
 		fmt.Fprintf(out, "%-20s  %-12s  PATH\n", "SKILL", "HARNESS")

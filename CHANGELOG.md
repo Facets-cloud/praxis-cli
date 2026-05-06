@@ -6,7 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(Empty — see 0.1.0 below.)
+(Empty — see 0.2.0 below.)
+
+## [0.2.0] — 2026-05-06
+
+### Changed (breaking)
+- Flattened the `praxis skill *` subtree to top-level commands:
+  - `praxis skill install`        →  `praxis install-skill`
+  - `praxis skill uninstall`      →  `praxis uninstall-skill`
+  - `praxis skill list-installed` →  `praxis list-skills`
+- The `[name]` argument has been removed from install/uninstall
+  (v0.1's optional arg). Until the server-driven catalog lands, only
+  the placeholder "praxis" skill exists, so no name is needed.
+- The `praxis skill` parent command no longer exists.
 
 ## [0.1.0] — 2026-05-06
 

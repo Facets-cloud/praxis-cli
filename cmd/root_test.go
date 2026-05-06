@@ -19,13 +19,13 @@ func TestRoot_HelpListsAllShippedCommands(t *testing.T) {
 		t.Fatalf("Execute --help err = %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"completion", "logout", "update", "version"} {
+	for _, want := range []string{"completion", "logout", "update", "version", "install-skill", "uninstall-skill", "list-skills"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("--help output missing %q\nfull output:\n%s", want, out)
 		}
 	}
-	// Stub commands removed in this release should NOT appear in help.
-	for _, mustNot := range []string{"login", "whoami", "praxis skill", "praxis mcp", "praxis doctor"} {
+	// Removed/never-implemented commands should NOT appear in help.
+	for _, mustNot := range []string{"login", "whoami", "praxis mcp", "praxis doctor"} {
 		if strings.Contains(out, mustNot) {
 			t.Errorf("--help still advertises removed command %q", mustNot)
 		}
