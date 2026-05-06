@@ -168,6 +168,79 @@ func TestList_FreshHome_EmptyNotError(t *testing.T) {
 	}
 }
 
+func TestRefresh_RewritesEachInstalledFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+	if _, err := Install("praxis", hosts); err != nil {
+		t.Fatal(err)
+	}
+
+	// Tamper with one of the installed files to simulate stale content.
+	entries, _ := List()
+	if err := os.WriteFile(entries[0].Path, []byte("STALE"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	refreshed, err := Refresh()
+	if err != nil {
+		t.Fatalf("Refresh err = %v", err)
+	}
+	if len(refreshed) != 3 {
+		t.Errorf("Refresh returned %d, want 3", len(refreshed))
+	}
+
+	body, err := os.ReadFile(entries[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) == "STALE" {
+		t.Errorf("file %s still contains STALE — Refresh did not rewrite", entries[0].Path)
+	}
+	if !strings.Contains(string(body), "name: praxis") {
+		t.Errorf("file content missing skill body after refresh")
+	}
+}
+
+func TestRefresh_EmptyReceipt_NoOp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	got, err := Refresh()
+	if err != nil {
+		t.Errorf("Refresh on empty receipt should not error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("Refresh on empty receipt returned %d entries, want 0", len(got))
+	}
+}
+
+func TestRefresh_SkipsUnknownSkill(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+	if _, err := Install("praxis", hosts); err != nil {
+		t.Fatal(err)
+	}
+
+	// Manually inject a phantom installation for a skill that doesn't exist
+	// in the dummy catalog. Refresh should skip it without erroring.
+	receipt, _ := loadReceipt()
+	receipt.Skills = append(receipt.Skills, Installation{
+		SkillName: "phantom-skill",
+		Harness:   "claude-code",
+		Path:      filepath.Join(t.TempDir(), "phantom", "SKILL.md"),
+	})
+	if err := saveReceipt(receipt); err != nil {
+		t.Fatal(err)
+	}
+
+	refreshed, err := Refresh()
+	if err != nil {
+		t.Fatalf("Refresh err = %v", err)
+	}
+	// 3 real praxis entries refreshed; phantom skipped.
+	if len(refreshed) != 3 {
+		t.Errorf("Refresh returned %d, want 3 (phantom should be skipped)", len(refreshed))
+	}
+}
+
 func TestSaveReceipt_AtomicWrite_SurvivesParseRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	hosts := fakeHosts(t)

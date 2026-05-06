@@ -15,6 +15,7 @@ var (
 	installSkill       = skillinstall.Install
 	uninstallSkill     = skillinstall.Uninstall
 	listInstalledSkill = skillinstall.List
+	refreshSkills      = skillinstall.Refresh
 )
 
 // skillName is the only skill v0.1 ships. Once the server-driven catalog
@@ -26,6 +27,7 @@ func init() {
 	rootCmd.AddCommand(installSkillCmd)
 	rootCmd.AddCommand(uninstallSkillCmd)
 	rootCmd.AddCommand(listSkillsCmd)
+	rootCmd.AddCommand(refreshSkillsCmd)
 }
 
 var installSkillCmd = &cobra.Command{
@@ -109,6 +111,33 @@ var listSkillsCmd = &cobra.Command{
 		for _, e := range entries {
 			fmt.Fprintf(out, "%-20s  %-12s  %s\n", e.SkillName, e.Harness, e.Path)
 		}
+		return nil
+	},
+}
+
+var refreshSkillsCmd = &cobra.Command{
+	Use:   "refresh-skills",
+	Short: "Re-write installed SKILL.md files with current content",
+	Long: `Re-write the SKILL.md file for every installed skill using the
+current binary's catalog content. Useful after manual edits to the
+installed files, or to confirm the catalog hasn't changed under you.
+
+praxis update calls this automatically after replacing the binary.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		out := cmd.OutOrStdout()
+		refreshed, err := refreshSkills()
+		if err != nil {
+			return err
+		}
+		if len(refreshed) == 0 {
+			fmt.Fprintln(out, "No skills installed — nothing to refresh.")
+			return nil
+		}
+		for _, in := range refreshed {
+			fmt.Fprintf(out, "  ✓ %-12s refreshed at %s\n", in.Harness, in.Path)
+		}
+		fmt.Fprintf(out, "\nRefreshed %d skill installation(s).\n", len(refreshed))
 		return nil
 	},
 }

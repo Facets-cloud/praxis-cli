@@ -6,7 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(Empty — see 0.2.0 below.)
+(Empty — see 0.3.0 below.)
+
+## [0.3.0] — 2026-05-06
+
+### Added
+- `praxis refresh-skills` — rewrite every installed SKILL.md with the
+  current binary's catalog content. Useful after manual edits to
+  installed files, or to confirm nothing has drifted.
+- `praxis update` now automatically calls the refresh after a successful
+  binary replace. Best-effort: a refresh failure does not roll back the
+  binary update, only logs a warning.
+- `internal/skillinstall.Refresh()` for programmatic use; entries
+  pointing at skills the catalog no longer knows about are skipped (not
+  removed) so the file can be repopulated by a future catalog version.
 
 ## [0.2.0] — 2026-05-06
 

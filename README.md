@@ -45,7 +45,7 @@ praxis completion zsh > "${fpath[1]}/_praxis"
 The skill / MCP commands aren't shipped yet — see "Coming in subsequent
 releases" below.
 
-## Surface today (v0.2.x)
+## Surface today (v0.3.x)
 
 ```
 praxis install-skill        install the praxis skill into every detected
@@ -54,8 +54,11 @@ praxis install-skill        install the praxis skill into every detected
                              skill dir.
 praxis uninstall-skill      remove from every host where installed
 praxis list-skills          show what's installed and where
+praxis refresh-skills       rewrite installed SKILL.md files with current
+                             content (called automatically by `praxis
+                             update`)
 praxis version              build version, commit, date, runtime
-praxis update               self-update against GitHub Releases
+praxis update               self-update + auto-refresh installed skills
 praxis completion <shell>   bash | zsh | fish | powershell
 praxis logout               delete ~/.praxis/credentials
 praxis --help / -v

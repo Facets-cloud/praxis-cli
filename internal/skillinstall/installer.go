@@ -109,6 +109,40 @@ func List() ([]Installation, error) {
 	return receipt.Skills, nil
 }
 
+// Refresh re-writes the SKILL.md for every installation in the receipt
+// using the current ContentFor(). Used after `praxis update` to pick up
+// new skill content, and exposed as `praxis refresh-skills` for manual
+// invocation. Entries whose skill no longer exists in ContentFor are
+// skipped (not removed) so a future update reintroducing the skill can
+// repopulate them. Returns the entries actually refreshed.
+func Refresh() ([]Installation, error) {
+	receipt, err := loadReceipt()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	refreshed := make([]Installation, 0, len(receipt.Skills))
+	for i, entry := range receipt.Skills {
+		body, err := ContentFor(entry.SkillName)
+		if err != nil {
+			// Skill no longer in catalog — leave the file alone, skip.
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(entry.Path), 0700); err != nil {
+			return refreshed, fmt.Errorf("ensure dir for %s: %w", entry.Path, err)
+		}
+		if err := os.WriteFile(entry.Path, []byte(body), 0600); err != nil {
+			return refreshed, fmt.Errorf("refresh %s: %w", entry.Path, err)
+		}
+		receipt.Skills[i].InstalledAt = now
+		refreshed = append(refreshed, receipt.Skills[i])
+	}
+	if err := saveReceipt(receipt); err != nil {
+		return refreshed, fmt.Errorf("save receipt: %w", err)
+	}
+	return refreshed, nil
+}
+
 // upsert replaces an existing (skill, harness) entry or appends a new one.
 func upsert(r Receipt, in Installation) Receipt {
 	for i, e := range r.Skills {

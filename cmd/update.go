@@ -109,6 +109,20 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 		}
 
 		fmt.Fprintf(out, "✓ Updated to %s.\n", latest)
+
+		// Refresh installed skills with the new binary's content. This is
+		// best-effort — a refresh failure shouldn't roll back the binary
+		// update. Note that the refresh is performed by the still-running
+		// OLD process, so in v0.2 (where skill content is hardcoded in
+		// the binary) the rewritten content matches what's already on
+		// disk. When Phase 3 lands and skill content comes from the
+		// server, this same code fetches fresh content correctly.
+		refreshed, refreshErr := refreshSkills()
+		if refreshErr != nil {
+			fmt.Fprintf(out, "  ⚠ skill refresh skipped: %v\n", refreshErr)
+		} else if len(refreshed) > 0 {
+			fmt.Fprintf(out, "  ✓ refreshed %d installed skill(s)\n", len(refreshed))
+		}
 		return nil
 	},
 }
