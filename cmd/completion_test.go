@@ -8,8 +8,8 @@ import (
 
 func TestCompletionCmd_AllShellsEmitNonEmpty(t *testing.T) {
 	tests := []struct {
-		shell    string
-		wantSub  string // a substring distinctive to that shell's output
+		shell   string
+		wantSub string // a substring distinctive to that shell's output
 	}{
 		{"bash", "complete"},
 		{"zsh", "compdef"},
