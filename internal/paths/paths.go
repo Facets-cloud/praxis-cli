@@ -26,6 +26,13 @@ func Credentials() (string, error) {
 	return filepath.Join(d, "credentials"), err
 }
 
+// Config is the per-user CLI configuration (currently just the Praxis
+// deployment URL override).
+func Config() (string, error) {
+	d, err := Dir()
+	return filepath.Join(d, "config.json"), err
+}
+
 // Installed is the JSON receipt of skills installed across AI hosts.
 // Used by `praxis skill install/uninstall/list-installed`.
 func Installed() (string, error) {
