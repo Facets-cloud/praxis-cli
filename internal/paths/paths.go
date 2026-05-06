@@ -25,3 +25,10 @@ func Credentials() (string, error) {
 	d, err := Dir()
 	return filepath.Join(d, "credentials"), err
 }
+
+// Installed is the JSON receipt of skills installed across AI hosts.
+// Used by `praxis skill install/uninstall/list-installed`.
+func Installed() (string, error) {
+	d, err := Dir()
+	return filepath.Join(d, "installed.json"), err
+}

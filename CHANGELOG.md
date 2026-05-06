@@ -6,19 +6,40 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+(Empty — see 0.1.0 below.)
+
+## [0.1.0] — 2026-05-06
+
+### Added
+- `praxis skill install` — write a SKILL.md (Agent Skills open standard
+  format) into every detected AI host's user-scope skill directory.
+  Targets Claude Code (`~/.claude/skills/`), Codex (`~/.agents/skills/`),
+  and Gemini CLI (`~/.gemini/skills/`). Cursor is intentionally
+  excluded — it has no user-scope skill directory.
+- `praxis skill uninstall` — remove the skill from every host where
+  it's installed.
+- `praxis skill list-installed` — show installed skills and their paths.
+- `internal/harness` (re-introduced) — detection for the 3 user-scope
+  harnesses.
+- `internal/skillinstall` — install/uninstall/list logic + JSON
+  receipt at `~/.praxis/installed.json` (atomic writes).
+- v0.1 ships with one placeholder skill named `praxis` so the
+  multi-harness install machinery is provable end-to-end. The
+  server-driven catalog lands in v0.2 once the gateway is shipped.
+
+## [0.0.2] — 2026-05-05
+
 ### Removed
-- `praxis login`, `praxis whoami`, `praxis skill *`, `praxis mcp *`,
-  `praxis doctor` — these were placeholder cobra wirings printing
-  "not yet implemented" and are removed until their actual
-  implementations land. Listing them in `--help` was misleading. The
-  cobra surface now only advertises commands that actually do
-  something.
-- `internal/harness` package (only consumer was `praxis doctor`;
-  Phase 2's skill installer will reintroduce it when needed).
+- `praxis login`, `praxis whoami`, `praxis skill *` (stubs),
+  `praxis mcp *`, `praxis doctor` — these were placeholder cobra
+  wirings printing "not yet implemented" and were removed until their
+  actual implementations land.
+- `internal/harness` package (later reintroduced in v0.1.0).
 
 ### Changed
 - `internal/paths` trimmed to only the helpers used by current
   commands (`Dir`, `Credentials`).
+- Cobra-level unit tests added for every shipped command.
 
 ## [0.0.1] — 2026-05-05
 

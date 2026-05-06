@@ -1,0 +1,188 @@
+package skillinstall
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/Facets-cloud/praxis-cli/internal/harness"
+)
+
+// fakeHosts builds a slice of Harnesses pointing at temp-dir skill paths,
+// so tests don't touch the real ~/.claude or ~/.gemini.
+func fakeHosts(t *testing.T) []harness.Harness {
+	t.Helper()
+	root := t.TempDir()
+	return []harness.Harness{
+		{Name: "claude-code", DisplayName: "Claude Code", Detected: true,
+			SkillDir: filepath.Join(root, "claude", "skills")},
+		{Name: "codex", DisplayName: "OpenAI Codex", Detected: true,
+			SkillDir: filepath.Join(root, "agents", "skills")},
+		{Name: "gemini-cli", DisplayName: "Gemini CLI", Detected: true,
+			SkillDir: filepath.Join(root, "gemini", "skills")},
+	}
+}
+
+func TestContentFor_PraxisExists(t *testing.T) {
+	body, err := ContentFor("praxis")
+	if err != nil {
+		t.Fatalf("ContentFor('praxis') err = %v", err)
+	}
+	for _, want := range []string{"---", "name: praxis", "description:", "Praxis CLI"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dummy content missing %q", want)
+		}
+	}
+}
+
+func TestContentFor_UnknownSkill(t *testing.T) {
+	_, err := ContentFor("release-debugging")
+	if err == nil {
+		t.Fatal("expected error for unknown skill, got nil")
+	}
+	if !strings.Contains(err.Error(), "release-debugging") {
+		t.Errorf("err should mention the skill name, got %v", err)
+	}
+}
+
+func TestInstall_WritesToEachHostAndUpdatesReceipt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // receipt lives under HOME
+	hosts := fakeHosts(t)
+
+	results, err := Install("praxis", hosts)
+	if err != nil {
+		t.Fatalf("Install err = %v", err)
+	}
+	if len(results) != 3 {
+		t.Errorf("got %d installs, want 3", len(results))
+	}
+
+	// Each host's SKILL.md should exist with the right content.
+	for _, in := range results {
+		body, err := os.ReadFile(in.Path)
+		if err != nil {
+			t.Errorf("read %s: %v", in.Path, err)
+			continue
+		}
+		if !strings.Contains(string(body), "name: praxis") {
+			t.Errorf("file %s missing skill content", in.Path)
+		}
+	}
+
+	// Receipt should list all 3.
+	recorded, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorded) != 3 {
+		t.Errorf("List() = %d entries, want 3", len(recorded))
+	}
+}
+
+func TestInstall_Idempotent_NoDuplicateReceiptEntries(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+
+	if _, err := Install("praxis", hosts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install("praxis", hosts); err != nil {
+		t.Fatal(err)
+	}
+
+	recorded, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorded) != 3 {
+		t.Errorf("after second install, receipt has %d entries (want 3) — install isn't idempotent", len(recorded))
+	}
+}
+
+func TestInstall_OnlySpecifiedHosts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+	results, err := Install("praxis", hosts[:1]) // claude-code only
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Errorf("got %d installs, want 1", len(results))
+	}
+	if results[0].Harness != "claude-code" {
+		t.Errorf("harness = %s, want claude-code", results[0].Harness)
+	}
+}
+
+func TestUninstall_RemovesFilesAndReceiptEntries(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+	if _, err := Install("praxis", hosts); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := Uninstall("praxis")
+	if err != nil {
+		t.Fatalf("Uninstall err = %v", err)
+	}
+	if len(removed) != 3 {
+		t.Errorf("Uninstall returned %d, want 3", len(removed))
+	}
+
+	for _, e := range removed {
+		if _, err := os.Stat(e.Path); !os.IsNotExist(err) {
+			t.Errorf("file %s should be gone, stat err = %v", e.Path, err)
+		}
+	}
+
+	recorded, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorded) != 0 {
+		t.Errorf("List() after uninstall = %d entries, want 0", len(recorded))
+	}
+}
+
+func TestUninstall_UnknownSkill_NoOp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	removed, err := Uninstall("never-installed")
+	if err != nil {
+		t.Errorf("Uninstall of nothing should not error: %v", err)
+	}
+	if len(removed) != 0 {
+		t.Errorf("Uninstall returned %d, want 0", len(removed))
+	}
+}
+
+func TestList_FreshHome_EmptyNotError(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	got, err := List()
+	if err != nil {
+		t.Errorf("List() on fresh home = err %v, want nil", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("List() = %d entries, want 0", len(got))
+	}
+}
+
+func TestSaveReceipt_AtomicWrite_SurvivesParseRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+	if _, err := Install("praxis", hosts); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read the on-disk JSON directly and verify it round-trips.
+	r, err := loadReceipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(r)
+	var roundTripped Receipt
+	if err := json.Unmarshal(raw, &roundTripped); err != nil {
+		t.Errorf("receipt JSON does not round-trip: %v", err)
+	}
+}

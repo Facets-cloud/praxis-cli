@@ -45,22 +45,39 @@ praxis completion zsh > "${fpath[1]}/_praxis"
 The skill / MCP commands aren't shipped yet — see "Coming in subsequent
 releases" below.
 
-## Surface today (v0.0.x — install + plumbing only)
+## Surface today (v0.1.x)
 
 ```
-praxis version              build version, commit, date, runtime
-praxis update               self-update against GitHub Releases
-praxis completion <shell>   bash | zsh | fish | powershell
-praxis logout               delete ~/.praxis/credentials
+praxis skill install                  install the praxis skill into every
+                                       detected AI host (Claude Code, Codex,
+                                       Gemini CLI). User-scope only — Cursor
+                                       has no user-level skill dir.
+praxis skill uninstall                remove from every host where installed
+praxis skill list-installed           show what's installed and where
+praxis version                        build version, commit, date, runtime
+praxis update                         self-update against GitHub Releases
+praxis completion <shell>             bash | zsh | fish | powershell
+praxis logout                         delete ~/.praxis/credentials
 praxis --help / -v
+```
+
+## Try it
+
+```bash
+brew install Facets-cloud/tap/praxis
+praxis skill install                  # writes the praxis skill into your
+                                       # detected AI hosts
+praxis skill list-installed           # confirm where it landed
 ```
 
 ## Coming in subsequent releases
 
 ```
-v0.1   skill list | show <name> | install [--host X] | uninstall | …
 v0.2   login | whoami | mcp list | mcp <mcp> | mcp <mcp> <fn> [--arg val …]
-       (server gateway must ship first)
+       Server-driven skill catalog (skill list / show <name>); per-repo
+       Cursor install. The placeholder "praxis" skill gets replaced with
+       real catalogued skills (release-debugging, k8s-investigation,
+       terraform-plan-explain, …).
 ```
 
 ## Why a CLI (and not an MCP server)?
