@@ -12,18 +12,17 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"time"
 
-	"github.com/Facets-cloud/praxis-cli/internal/config"
+	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
-	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
 )
 
 var (
+	loginProfile string
 	loginURL     string
 	loginToken   string
 	loginJSON    bool
@@ -31,7 +30,8 @@ var (
 )
 
 func init() {
-	loginCmd.Flags().StringVar(&loginURL, "url", "", "Praxis deployment URL (overrides PRAXIS_URL/config)")
+	loginCmd.Flags().StringVar(&loginProfile, "profile", "", "save under this profile name (default: \"default\")")
+	loginCmd.Flags().StringVar(&loginURL, "url", "", "Praxis deployment URL (default: existing profile URL or "+credentials.DefaultURL+")")
 	loginCmd.Flags().StringVar(&loginToken, "token", "", "skip browser flow; save and verify the given API key directly")
 	loginCmd.Flags().BoolVar(&loginJSON, "json", false, "JSON output")
 	loginCmd.Flags().DurationVar(&loginTimeout, "timeout", 90*time.Second, "max time to wait for browser callback")
@@ -46,30 +46,54 @@ key via a one-shot localhost listener. The user clicks "Create Key" once;
 this command handles the rest.
 
 For non-interactive use (e.g. CI, or AI hosts that already have a token),
-pass --token sk_live_…`,
+pass --token sk_live_…
+
+Multiple deployments? Use --profile to keep them separate:
+
+  praxis login                                    → saves to "default"
+  praxis login --profile acme --url https://...   → saves to "acme"
+  praxis login --profile vymo --url https://...   → saves to "vymo"
+
+Then switch contexts with:
+
+  praxis use acme                  (sets active profile)
+  PRAXIS_PROFILE=acme praxis ...   (one-shell override)
+  praxis ... --profile acme        (one-command override)`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(loginJSON, false, out)
 
-		resolved, err := config.ResolveURL(loginURL)
-		if err != nil {
-			return err
+		profileName := loginProfile
+		if profileName == "" {
+			profileName = credentials.DefaultProfileName
 		}
-		baseURL := resolved.URL
+		baseURL := resolveLoginURL(profileName, loginURL)
 
 		if loginToken != "" {
-			return saveAndVerifyToken(out, asJSON, baseURL, loginToken)
+			return saveAndVerifyToken(out, asJSON, profileName, baseURL, loginToken)
 		}
-
-		return browserCallbackLogin(out, asJSON, baseURL, loginTimeout)
+		return browserCallbackLogin(out, asJSON, profileName, baseURL, loginTimeout)
 	},
+}
+
+// resolveLoginURL resolves the URL for a NEW or EXISTING profile during
+// login: explicit --url > existing profile's saved URL > built-in default.
+func resolveLoginURL(profileName, flagURL string) string {
+	if flagURL != "" {
+		return flagURL
+	}
+	store, _ := credentials.Load()
+	if p, ok := store[profileName]; ok && p.URL != "" {
+		return p.URL
+	}
+	return credentials.DefaultURL
 }
 
 // browserCallbackLogin opens the browser, waits up to timeout for the
 // browser to POST the new key to the localhost listener, then saves +
-// verifies the captured token.
-func browserCallbackLogin(out io.Writer, asJSON bool, baseURL string, timeout time.Duration) error {
+// verifies the captured token under profileName.
+func browserCallbackLogin(out io.Writer, asJSON bool, profileName, baseURL string, timeout time.Duration) error {
 	sessionNonce := randomNonce()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -86,7 +110,6 @@ func browserCallbackLogin(out io.Writer, asJSON bool, baseURL string, timeout ti
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/key", func(w http.ResponseWriter, r *http.Request) {
-		// CORS for the cross-origin POST from baseURL.
 		w.Header().Set("Access-Control-Allow-Origin", baseURL)
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
@@ -130,9 +153,6 @@ func browserCallbackLogin(out io.Writer, asJSON bool, baseURL string, timeout ti
 	}()
 
 	openURL := buildLoginURL(baseURL, port, sessionNonce)
-	// Print progress to stderr so even --json callers (and tests piping
-	// stdout) can see what URL was opened. Stdout stays reserved for the
-	// final structured result.
 	fmt.Fprintln(os.Stderr, "Opening browser to create a Praxis API key…")
 	fmt.Fprintln(os.Stderr, "  ", openURL)
 	fmt.Fprintf(os.Stderr, "Waiting for callback (timeout %s)…\n", timeout)
@@ -144,10 +164,10 @@ func browserCallbackLogin(out io.Writer, asJSON bool, baseURL string, timeout ti
 	case res := <-resultCh:
 		if res.err != nil {
 			render.PrintError(out, asJSON, res.err.Error(),
-				"the browser callback failed; check the page console", exitcode.Auth)
+				"the browser callback failed", exitcode.Auth)
 			os.Exit(exitcode.Auth)
 		}
-		return saveAndVerifyToken(out, asJSON, baseURL, res.key)
+		return saveAndVerifyToken(out, asJSON, profileName, baseURL, res.key)
 	case <-time.After(timeout):
 		render.PrintError(out, asJSON, "login timed out",
 			"finish the API key creation in the browser within the timeout", exitcode.Auth)
@@ -156,8 +176,6 @@ func browserCallbackLogin(out io.Writer, asJSON bool, baseURL string, timeout ti
 	return nil
 }
 
-// buildLoginURL composes the api-keys page URL with the cli-callback
-// query params the agent-factory ApiKeyCreateModal reads.
 func buildLoginURL(baseURL string, callbackPort int, sessionNonce string) string {
 	u, _ := url.Parse(baseURL + "/ui/ai/settings/api-keys")
 	q := u.Query()
@@ -168,15 +186,7 @@ func buildLoginURL(baseURL string, callbackPort int, sessionNonce string) string
 	return u.String()
 }
 
-// Credentials is the on-disk schema at ~/.praxis/credentials.
-type Credentials struct {
-	URL         string `json:"url"`
-	AccessToken string `json:"access_token"`
-	UserID      string `json:"user_id,omitempty"`
-	UserEmail   string `json:"user_email,omitempty"`
-}
-
-func saveAndVerifyToken(out io.Writer, asJSON bool, baseURL, token string) error {
+func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token string) error {
 	user, err := fetchAuthMe(baseURL, token)
 	if err != nil {
 		render.PrintError(out, asJSON,
@@ -186,33 +196,24 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, baseURL, token string) error
 		os.Exit(exitcode.Auth)
 	}
 
-	credPath, err := paths.Credentials()
-	if err != nil {
-		return err
+	prof := credentials.Profile{
+		URL:      baseURL,
+		Username: user.Email,
+		Token:    token,
 	}
-	if err := os.MkdirAll(filepath.Dir(credPath), 0700); err != nil {
-		return err
-	}
-	creds := Credentials{
-		URL:         baseURL,
-		AccessToken: token,
-		UserID:      user.UserID,
-		UserEmail:   user.Email,
-	}
-	data, _ := json.MarshalIndent(creds, "", "  ")
-	if err := os.WriteFile(credPath, data, 0600); err != nil {
-		return fmt.Errorf("write credentials: %w", err)
+	if err := credentials.Put(profileName, prof); err != nil {
+		return fmt.Errorf("save credentials: %w", err)
 	}
 
 	if asJSON {
 		return render.JSON(out, map[string]any{
-			"ok":         true,
-			"user_email": user.Email,
-			"user_id":    user.UserID,
-			"url":        baseURL,
+			"ok":       true,
+			"profile":  profileName,
+			"username": user.Email,
+			"url":      baseURL,
 		})
 	}
-	fmt.Fprintf(out, "✓ Logged in as %s (%s)\n", user.Email, baseURL)
+	fmt.Fprintf(out, "✓ Logged in as %s (profile: %s, url: %s)\n", user.Email, profileName, baseURL)
 	return nil
 }
 
@@ -251,8 +252,6 @@ func randomNonce() string {
 	return hex.EncodeToString(b)
 }
 
-// openBrowser launches the user's default browser. Caller doesn't wait
-// for it to exit — browser stays open as a child of init.
 var openBrowser = func(rawURL string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
