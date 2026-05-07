@@ -125,7 +125,7 @@ func installCatalogSkills(out io.Writer, hosts []harness.Harness) error {
 	failures := 0
 	for _, sk := range skills {
 		prefixed := sk.PrefixedName()
-		results, err := installSkillBody(prefixed, sk.Content, hosts)
+		results, err := installSkillBody(prefixed, sk.RenderedContent(), hosts)
 		if err != nil {
 			fmt.Fprintf(out, "  ✗ %-40s failed: %v\n", prefixed, err)
 			failures++

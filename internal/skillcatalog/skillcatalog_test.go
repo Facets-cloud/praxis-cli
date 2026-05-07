@@ -95,6 +95,86 @@ func TestFetch_BadJSON(t *testing.T) {
 	}
 }
 
+func TestRenderedContent_InsertsPreambleAfterFrontmatter(t *testing.T) {
+	s := Skill{
+		Name: "k8s-operations",
+		Content: `---
+name: k8s-operations
+description: Use when investigating pod failures
+triggers: [kubectl, k8s]
+---
+
+# K8s Operations
+
+Use ` + "`run_k8s_cli`" + ` to investigate.
+`,
+	}
+	rendered := s.RenderedContent()
+
+	// Frontmatter still at top, intact
+	if !strings.HasPrefix(rendered, "---\nname: k8s-operations") {
+		t.Errorf("frontmatter should still be at top, got prefix: %q", rendered[:80])
+	}
+	// Closing --- still present
+	if !strings.Contains(rendered, "\n---\n") {
+		t.Errorf("closing frontmatter fence missing")
+	}
+	// Preamble appears AFTER closing --- and BEFORE the body
+	preambleIdx := strings.Index(rendered, "Execution context")
+	closingFence := strings.Index(rendered, "\n---\n")
+	bodyHeading := strings.Index(rendered, "# K8s Operations")
+	if !(closingFence < preambleIdx && preambleIdx < bodyHeading) {
+		t.Errorf(
+			"order should be: closing-fence(%d) < preamble(%d) < body(%d)",
+			closingFence, preambleIdx, bodyHeading)
+	}
+	// Original body content preserved verbatim
+	if !strings.Contains(rendered, "Use `run_k8s_cli` to investigate.") {
+		t.Errorf("original body missing")
+	}
+}
+
+func TestRenderedContent_NoFrontmatter_PrependsPreamble(t *testing.T) {
+	s := Skill{
+		Name:    "plain",
+		Content: "# Just a heading\n\nNo frontmatter here.\n",
+	}
+	rendered := s.RenderedContent()
+	if !strings.HasPrefix(rendered, "> **Execution context**") {
+		t.Errorf("preamble should be at top when no frontmatter, got: %q", rendered[:60])
+	}
+	if !strings.Contains(rendered, "# Just a heading") {
+		t.Errorf("original body missing")
+	}
+}
+
+func TestRenderedContent_PreservesBodyByteForByte(t *testing.T) {
+	originalBody := `---
+name: x
+description: d
+---
+
+# Body
+
+Some content with special chars: $foo `+"`bar`"+` and "quotes".
+
+` + "```bash" + `
+echo "code block"
+` + "```" + `
+
+End.
+`
+	s := Skill{Name: "x", Content: originalBody}
+	rendered := s.RenderedContent()
+	// The original body content (everything after the closing ---)
+	// must appear verbatim in the rendered output.
+	bodyStart := strings.Index(originalBody, "\n# Body")
+	expectedBodyTail := originalBody[bodyStart:]
+	if !strings.Contains(rendered, strings.TrimLeft(expectedBodyTail, "\n")) {
+		t.Errorf("body not preserved verbatim")
+	}
+}
+
 func TestPrefixedName_AlwaysPrefixed(t *testing.T) {
 	cases := []struct {
 		in, want string

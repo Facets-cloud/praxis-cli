@@ -239,8 +239,13 @@ func TestInstallSkill_CatalogFlow(t *testing.T) {
 	if bodyCalls[0].name != "praxis-incident-investigator" {
 		t.Errorf("first install name = %q", bodyCalls[0].name)
 	}
-	if bodyCalls[0].body != "# inv body" {
-		t.Errorf("first install body = %q", bodyCalls[0].body)
+	// Body has the execution preamble injected (RenderedContent) AND
+	// preserves the original body content.
+	if !strings.Contains(bodyCalls[0].body, "Execution context") {
+		t.Errorf("first install body missing execution preamble")
+	}
+	if !strings.Contains(bodyCalls[0].body, "# inv body") {
+		t.Errorf("first install body missing original content; got: %q", bodyCalls[0].body)
 	}
 	if bodyCalls[1].name != "praxis-k8s-operations" {
 		t.Errorf("second install name = %q", bodyCalls[1].name)
