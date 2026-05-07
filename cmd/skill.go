@@ -26,7 +26,6 @@ var (
 	fetchCatalog       = skillcatalog.Fetch
 )
 
-
 // skillName is the only skill v0.1 ships. Once the server-driven catalog
 // lands, install/uninstall will accept an optional name argument to
 // override this.

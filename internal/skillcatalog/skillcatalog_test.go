@@ -156,7 +156,7 @@ description: d
 
 # Body
 
-Some content with special chars: $foo `+"`bar`"+` and "quotes".
+Some content with special chars: $foo ` + "`bar`" + ` and "quotes".
 
 ` + "```bash" + `
 echo "code block"
