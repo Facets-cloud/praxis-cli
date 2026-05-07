@@ -82,8 +82,34 @@ These are local-only and safe to call freely:
 ## What needs auth
 
   - ` + "`praxis whoami`" + ` — calls /ai-api/auth/me with the saved token
+  - ` + "`praxis mcp`" + ` — list / call server-side MCP tools (cloud, k8s, catalog)
   - (more commands land in subsequent CLI releases — when you see a
     server-side capability in --help, expect it to require login)
+
+## Discovering and calling MCP tools
+
+The server gateway exposes tools grouped by MCP namespace
+(` + "`cloud_cli`" + `, ` + "`k8s_cli`" + `, ` + "`catalog_ops`" + `, …). Each tool runs server-side
+under the org's managed credentials — your laptop never holds AWS / kube
+secrets.
+
+  - **List**: ` + "`praxis mcp --json`" + ` → live fetch of every MCP + function
+    plus arg shapes. Use this to discover what's available.
+  - **Snapshot**: ` + "`~/.praxis/mcp-tools.json`" + ` is rewritten on every
+    ` + "`praxis install-skill`" + ` and ` + "`praxis refresh-skills`" + `. Grep this
+    file when you need tool names without going to the network.
+  - **Call**: ` + "`praxis mcp <mcp> <fn> --arg k=v ... --json`" + ` (or
+    ` + "`--body '<json>'`" + ` for nested args). Output is the raw MCP envelope
+    (` + "`{content: [...], isError?: bool}`" + `).
+
+Example flow:
+` + "```bash" + `
+praxis mcp --json | jq '.mcps.k8s_cli'         # what's in k8s_cli?
+praxis mcp k8s_cli list_connected_clusters --json
+praxis mcp k8s_cli run_k8s_cli \
+  --arg integration_name=prod-cluster \
+  --arg command='get pods -n default' --json
+` + "```" + `
 
 ## Multi-deployment users
 

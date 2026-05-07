@@ -7,6 +7,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
+	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
@@ -139,7 +140,28 @@ func installCatalogSkills(out io.Writer, hosts []harness.Harness) error {
 		fmt.Fprintf(out, "\nInstalled %d catalog skill(s) into %d host(s).\n",
 			len(skills), len(hosts))
 	}
+
+	snapshotMCPManifest(out, active.Profile.URL, active.Profile.Token)
 	return nil
+}
+
+// snapshotMCPManifest fetches the gateway's tool manifest and writes a
+// snapshot to ~/.praxis/mcp-tools.json so AI hosts can grep the file
+// instead of doing a live fetch on every turn. Best-effort — a failure
+// here doesn't fail the parent command, since a stale or missing
+// snapshot just means the AI host falls back to `praxis mcp` (live).
+func snapshotMCPManifest(out io.Writer, url, token string) {
+	raw, err := mcpmanifest.Fetch(url, token, mcpmanifest.DefaultTimeout)
+	if err != nil {
+		fmt.Fprintf(out, "\nMCP tool snapshot skipped: %v\n", err)
+		return
+	}
+	dest, err := mcpmanifest.WriteSnapshot(raw)
+	if err != nil {
+		fmt.Fprintf(out, "\nMCP tool snapshot skipped: %v\n", err)
+		return
+	}
+	fmt.Fprintf(out, "\nMCP tool snapshot written to %s\n", dest)
 }
 
 var uninstallSkillCmd = &cobra.Command{
@@ -189,10 +211,15 @@ var listSkillsCmd = &cobra.Command{
 
 var refreshSkillsCmd = &cobra.Command{
 	Use:   "refresh-skills",
-	Short: "Re-write installed SKILL.md files with current content",
+	Short: "Re-write installed SKILL.md files and refresh the MCP tool snapshot",
 	Long: `Re-write the SKILL.md file for every installed skill using the
-current binary's catalog content. Useful after manual edits to the
-installed files, or to confirm the catalog hasn't changed under you.
+current binary's catalog content. Also re-fetches the MCP tool manifest
+from the active profile's gateway and rewrites ~/.praxis/mcp-tools.json
+so AI hosts can grep for available tool names without going to the
+network.
+
+If you're not logged in, the snapshot step is soft-skipped and only the
+local SKILL.md files are refreshed.
 
 praxis update calls this automatically after replacing the binary.`,
 	Args: cobra.NoArgs,
@@ -204,12 +231,25 @@ praxis update calls this automatically after replacing the binary.`,
 		}
 		if len(refreshed) == 0 {
 			fmt.Fprintln(out, "No skills installed — nothing to refresh.")
+		} else {
+			for _, in := range refreshed {
+				fmt.Fprintf(out, "  ✓ %-12s refreshed at %s\n", in.Harness, in.Path)
+			}
+			fmt.Fprintf(out, "\nRefreshed %d skill installation(s).\n", len(refreshed))
+		}
+
+		// Refresh the MCP tool snapshot too. Soft-skip when not logged in.
+		active, err := credentials.ResolveActive("")
+		if err != nil {
+			return err
+		}
+		if !active.Loaded || active.Profile.Token == "" {
+			fmt.Fprintf(out,
+				"\nMCP tool snapshot not refreshed — not logged in for profile %q.\n",
+				active.Name)
 			return nil
 		}
-		for _, in := range refreshed {
-			fmt.Fprintf(out, "  ✓ %-12s refreshed at %s\n", in.Harness, in.Path)
-		}
-		fmt.Fprintf(out, "\nRefreshed %d skill installation(s).\n", len(refreshed))
+		snapshotMCPManifest(out, active.Profile.URL, active.Profile.Token)
 		return nil
 	},
 }

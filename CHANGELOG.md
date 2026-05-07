@@ -6,7 +6,41 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(Empty — see 0.5.0 below.)
+(Empty — see 0.6.0 below.)
+
+## [0.6.0] — 2026-05-07
+
+### Added
+- `praxis mcp` (no args) — list every MCP namespace and function the
+  gateway exposes, including each function's description and arg shape.
+  Use `--json` for AI-host-friendly output. Live fetch from
+  `/ai-api/v1/mcp/manifest`.
+- `~/.praxis/mcp-tools.json` snapshot — written automatically by
+  `praxis install-skill` and `praxis refresh-skills` after the skill
+  catalog pull. AI hosts can grep this file for available tool names
+  without making a network call. Soft-skipped when not logged in (live
+  `praxis mcp` still works as a fallback).
+- New `internal/mcpmanifest` package — `Fetch()` and `WriteSnapshot()`
+  helpers, separated so both `cmd/mcp.go` (live) and `cmd/skill.go`
+  (snapshot) can reuse them.
+- `paths.MCPTools()` — canonical location for the snapshot.
+- Discovery section added to the praxis meta-skill body, teaching AI
+  hosts to use `praxis mcp --json` (live) and the snapshot file (cached).
+- Skill execution preamble extended with the same discovery hint, so
+  every server-fetched org skill inherits the rule too.
+
+### Changed
+- `praxis refresh-skills` now also re-fetches the MCP tool manifest and
+  rewrites the snapshot. Pre-0.6 behavior (just rewriting SKILL.md
+  files) is preserved when not logged in.
+
+### Server (agent-factory)
+- `GET /ai-api/v1/mcp/manifest` — new gateway route, API-key
+  authenticated. Returns `{mcps: {<mcp>: {<fn>: {description, args}}}}`
+  by introspecting registered dispatchers.
+- Each dispatcher now exposes `describe()` returning per-function
+  `FunctionSpec` (description + `ArgSpec` list). Names mirror the
+  in-process MCP exactly so seeded skill content works verbatim.
 
 ## [0.5.0] — 2026-05-07
 
