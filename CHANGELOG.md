@@ -6,7 +6,58 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(Empty — see 0.4.0 below.)
+(Empty — see 0.5.0 below.)
+
+## [0.5.0] — 2026-05-07
+
+### Added
+- `praxis mcp <mcp> <fn>` — invoke a server-side MCP tool function via
+  the agent-factory CLI gateway. The CLI never holds AWS / kube /
+  terraform credentials; the server resolves the org from the active
+  profile's bearer token and runs the call under org-managed integration
+  credentials. Supports `--arg key=value` (repeatable), `--body '<json>'`
+  (or `--body -` for stdin), `--json`, `--timeout`. HTTP status →
+  exit-code mapping: 401/403 → Auth(3), 404 → NoConfig(4), 5xx → Network(5),
+  HTTP 200 + `{isError: true}` → Error(1).
+- Skill catalog auto-install — `praxis install-skill` now (also) pulls
+  the org skill catalog from `/ai-api/v1/skills/bundle` and installs each
+  skill as `praxis-<name>` into every detected AI host. Skills are
+  namespaced by prefix so they never collide with user-authored or
+  third-party skills. Soft-skips with a hint when not logged in.
+- New `internal/skillcatalog` package + `Skill.RenderedContent()` that
+  prepends an execution preamble to each installed skill, teaching
+  Claude the rewrite rule (`<mcp>.<fn>(...)` → `praxis mcp <mcp> <fn>`)
+  without modifying the skill body. Inserted after YAML frontmatter so
+  Claude's normal frontmatter discovery still works.
+
+### Changed
+- **Active-profile priority** — `~/.praxis/config.json` (set by
+  `praxis use`) now beats `PRAXIS_PROFILE` env var. New chain:
+  `--profile` flag > `praxis use` > `PRAXIS_PROFILE` > `default`.
+  Rationale: `praxis use X` is an explicit, persistent choice — it
+  shouldn't be silently overridden by an env var.
+- **Removed `--profile` flag** from USE-style commands (`whoami`,
+  `mcp`, `status`, `init`, `install-skill`). Active profile is
+  resolved exclusively via the chain above. The flag is **kept on
+  `login` and `logout`** because there it's the *target* profile name
+  (a different semantic).
+
+### Hardening
+- `internal/credentials`: new `validateProfileName` regex rejects
+  names that would corrupt the INI store (whitespace, control chars,
+  `[`, `]`, `=`, `\n`, leading `.`). Wired into `Put`, `Delete`,
+  `SetActive`.
+- `cmd/login.go`: `url.Parse` errors handled explicitly — no more
+  nil-pointer panic on malformed `--url`. New `cmd/login_test.go`
+  covers the malformed-URL path.
+- `cmd/init.go`: surface `ResolveActive` errors instead of swallowing
+  them as "logged out".
+- `cmd/skill.go`: catalog-install failures return through cobra `RunE`
+  instead of `os.Exit` mid-function.
+- Routine cleanup: drop dead imports in `cmd/whoami.go`, errcheck-clean
+  `defer resp.Body.Close()` in `internal/skillcatalog`, and assert
+  `DeleteAll` actually removes both credentials + config files in
+  `credentials_test.go`.
 
 ## [0.4.0] — 2026-05-06
 
