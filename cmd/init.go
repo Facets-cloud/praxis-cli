@@ -53,7 +53,10 @@ you to run praxis login (which the AI can also do directly).`,
 
 		// Step 2 — report state (URL + auth) so the caller can decide
 		// whether to run `praxis login` next.
-		active, _ := credentials.ResolveActive("")
+		active, err := credentials.ResolveActive("")
+		if err != nil {
+			return fmt.Errorf("read credentials: %w", err)
+		}
 
 		var nextSteps []string
 		if !active.Loaded || active.Profile.Token == "" {

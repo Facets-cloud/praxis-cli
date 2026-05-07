@@ -22,7 +22,7 @@ func TestRoot_HelpListsAllShippedCommands(t *testing.T) {
 	for _, want := range []string{
 		"completion", "logout", "update", "version",
 		"install-skill", "uninstall-skill", "list-skills", "refresh-skills",
-		"login", "whoami", "status", "init", "use",
+		"login", "whoami", "status", "init", "use", "mcp",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("--help output missing %q\nfull output:\n%s", want, out)
@@ -30,7 +30,7 @@ func TestRoot_HelpListsAllShippedCommands(t *testing.T) {
 	}
 	// Stubs removed in earlier releases that have NOT yet been
 	// reimplemented. Re-add to the positive list above when they ship.
-	for _, mustNot := range []string{"praxis mcp", "praxis doctor", "configure"} {
+	for _, mustNot := range []string{"doctor", "configure"} {
 		if strings.Contains(out, mustNot) {
 			t.Errorf("--help still advertises removed command %q", mustNot)
 		}

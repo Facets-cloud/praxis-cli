@@ -22,10 +22,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `praxis init` — idempotent first-run bootstrap: installs the praxis
   skill into all detected AI hosts and reports state as JSON.
 - `praxis use <profile>` — kubectl-style: persist active profile to
-  `~/.praxis/config`.
+  `~/.praxis/config.json`.
 - Multi-profile credentials store at `~/.praxis/credentials` in INI
   format matching `~/.facets/credentials`. Profile resolution
-  priority: `--profile` flag > `PRAXIS_PROFILE` env > `~/.praxis/config`
+  priority: `--profile` flag > `PRAXIS_PROFILE` env > `~/.praxis/config.json`
   active-profile pointer > literal `default` section. Single-profile
   users see no behavior change.
 - Browser-callback flow on the agent-factory side
@@ -50,9 +50,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 - `internal/config` package. URL is now stored per-profile inside
-  `~/.praxis/credentials`. The legacy `~/.praxis/config.json` (if any)
-  is ignored; `~/.praxis/config` (no .json) takes its place as the
-  active-profile pointer file.
+  `~/.praxis/credentials`. The legacy `~/.praxis/config.json` JSON
+  blob (if any) is ignored; `~/.praxis/config.json` is now the
+  active-profile pointer file (INI-formatted, despite the suffix).
 
 ## [0.3.0] — 2026-05-06
 

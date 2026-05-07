@@ -97,7 +97,7 @@ and everything resolves there silently.
                          …
                          (chmod 0600)
 
-~/.praxis/config        Active-profile pointer, set by `praxis use`.
+~/.praxis/config.json   Active-profile pointer, set by `praxis use`.
                          Doesn't exist until first `use` call.
                          (chmod 0600)
 ```

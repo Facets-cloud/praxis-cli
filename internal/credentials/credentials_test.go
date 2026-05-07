@@ -180,8 +180,7 @@ func TestDeleteAll_AlsoClearsActivePointer(t *testing.T) {
 		t.Errorf("credentials file still exists after DeleteAll")
 	}
 	if _, err := os.Stat(filepath.Join(home, ".praxis", "config.json")); !os.IsNotExist(err) {
-		// Note: SetActive writes to config (no .json suffix), but test
-		// using paths.Config() directly is more accurate:
+		t.Errorf("config.json file still exists after DeleteAll")
 	}
 	a, _ := ResolveActive("")
 	if a.Source != SourceDefault {
@@ -257,6 +256,42 @@ func TestClearActive_AfterSetActive_FallsBackToDefault(t *testing.T) {
 	a, _ := ResolveActive("")
 	if a.Name != "default" || a.Source != SourceDefault {
 		t.Errorf("after ClearActive, expected default/default, got %+v", a)
+	}
+}
+
+func TestPutRejectsInvalidNames(t *testing.T) {
+	withHome(t)
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"empty", ""},
+		{"newline", "ac\nme"},
+		{"closing-bracket", "ac]me"},
+		{"opening-bracket", "ac[me"},
+		{"equals", "a=b"},
+		{"space", "ac me"},
+		{"leading-dot", ".acme"},
+		{"leading-dash", "-acme"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Put(c.in, Profile{URL: "https://x", Token: "t"})
+			if err == nil {
+				t.Errorf("Put(%q) returned nil error; want validation failure", c.in)
+			}
+			if err2 := SetActive(c.in); err2 == nil {
+				t.Errorf("SetActive(%q) returned nil error; want validation failure", c.in)
+			}
+			if err3 := Delete(c.in); err3 == nil {
+				t.Errorf("Delete(%q) returned nil error; want validation failure", c.in)
+			}
+		})
+	}
+
+	// Sanity-check: a valid name still works.
+	if err := Put("acme-prod.1", Profile{URL: "https://x", Token: "t"}); err != nil {
+		t.Errorf("Put valid name failed: %v", err)
 	}
 }
 

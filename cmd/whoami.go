@@ -1,11 +1,8 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
-	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
@@ -31,7 +28,7 @@ var whoamiCmd = &cobra.Command{
 		asJSON := render.UseJSON(whoamiJSON, false, out)
 
 		// Active profile resolved via the standard chain:
-		//   ~/.praxis/config (set by `praxis use`) → PRAXIS_PROFILE env → "default"
+		//   ~/.praxis/config.json (set by `praxis use`) → PRAXIS_PROFILE env → "default"
 		active, err := credentials.ResolveActive("")
 		if err != nil {
 			return err
@@ -70,8 +67,3 @@ var whoamiCmd = &cobra.Command{
 		return nil
 	},
 }
-
-// httpHelpers (whoami doesn't need anything beyond fetchAuthMe defined in login.go)
-var _ = http.MethodGet
-var _ = json.Marshal
-var _ = time.Second

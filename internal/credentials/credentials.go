@@ -15,7 +15,7 @@
 // Active-profile resolution (highest priority first):
 //
 //  1. --profile flag passed to a command (where it exists)
-//  2. ~/.praxis/config "default profile" pointer (set by `praxis use`)
+//  2. ~/.praxis/config.json "default profile" pointer (set by `praxis use`)
 //  3. PRAXIS_PROFILE environment variable
 //  4. literal "default" section
 //
@@ -32,11 +32,30 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
+
+// profileNameRE bounds profile names to chars that round-trip cleanly through
+// the INI section header `[name]` — no `[`, `]`, `=`, `\n`, or whitespace.
+// Matches credentials-style identifiers (kubectl context, AWS profile, etc).
+var profileNameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+// validateProfileName rejects names that would corrupt the credentials INI.
+// Empty, whitespace, control chars, `[`, `]`, `=`, `\n` are all blocked.
+// A leading `.` is rejected so names can't shadow hidden-file conventions.
+func validateProfileName(name string) error {
+	if name == "" {
+		return fmt.Errorf("profile name cannot be empty")
+	}
+	if !profileNameRE.MatchString(name) {
+		return fmt.Errorf("invalid profile name %q: must match [a-zA-Z0-9][a-zA-Z0-9_.-]*", name)
+	}
+	return nil
+}
 
 // DefaultURL is the built-in fallback when a profile has no URL set.
 const DefaultURL = "https://askpraxis.ai"
@@ -154,6 +173,9 @@ func Save(store map[string]Profile) error {
 
 // Put updates (or adds) one profile. Use case: a successful login.
 func Put(name string, p Profile) error {
+	if err := validateProfileName(name); err != nil {
+		return err
+	}
 	store, err := Load()
 	if err != nil {
 		return err
@@ -164,6 +186,9 @@ func Put(name string, p Profile) error {
 
 // Delete removes one profile. No-op if it didn't exist.
 func Delete(name string) error {
+	if err := validateProfileName(name); err != nil {
+		return err
+	}
 	store, err := Load()
 	if err != nil {
 		return err
@@ -215,15 +240,19 @@ func sortedKeys(m map[string]Profile) []string {
 	return out
 }
 
-// ─── Active-profile pointer (~/.praxis/config) ──────────────────────────
+// ─── Active-profile pointer (~/.praxis/config.json) ──────────────────────
 
-// configFile is the on-disk shape of ~/.praxis/config.
+// configFile is the on-disk shape of ~/.praxis/config.json (INI-formatted
+// despite the filename — the .json suffix predates the format choice).
 type configFile struct {
 	Profile string
 }
 
 // SetActive writes the active-profile pointer (kubectl-style "use").
 func SetActive(name string) error {
+	if err := validateProfileName(name); err != nil {
+		return err
+	}
 	path, err := paths.Config()
 	if err != nil {
 		return err

@@ -152,7 +152,13 @@ func browserCallbackLogin(out io.Writer, asJSON bool, profileName, baseURL strin
 		_ = srv.Shutdown(ctx)
 	}()
 
-	openURL := buildLoginURL(baseURL, port, sessionNonce)
+	openURL, err := buildLoginURL(baseURL, port, sessionNonce)
+	if err != nil {
+		render.PrintError(out, asJSON, err.Error(),
+			"check the --url value (or PRAXIS_URL) — it must be a valid URL",
+			exitcode.Usage)
+		os.Exit(exitcode.Usage)
+	}
 	fmt.Fprintln(os.Stderr, "Opening browser to create a Praxis API key…")
 	fmt.Fprintln(os.Stderr, "  ", openURL)
 	fmt.Fprintf(os.Stderr, "Waiting for callback (timeout %s)…\n", timeout)
@@ -176,14 +182,17 @@ func browserCallbackLogin(out io.Writer, asJSON bool, profileName, baseURL strin
 	return nil
 }
 
-func buildLoginURL(baseURL string, callbackPort int, sessionNonce string) string {
-	u, _ := url.Parse(baseURL + "/ui/ai/settings/api-keys")
+func buildLoginURL(baseURL string, callbackPort int, sessionNonce string) (string, error) {
+	u, err := url.Parse(baseURL + "/ui/ai/settings/api-keys")
+	if err != nil {
+		return "", fmt.Errorf("invalid login URL %q: %w", baseURL, err)
+	}
 	q := u.Query()
 	q.Set("cli_callback", fmt.Sprintf("http://127.0.0.1:%d/key", callbackPort))
 	q.Set("cli_session", sessionNonce)
 	q.Set("suggested_name", "praxis-cli")
 	u.RawQuery = q.Encode()
-	return u.String()
+	return u.String(), nil
 }
 
 func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token string) error {

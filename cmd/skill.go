@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
@@ -91,7 +90,7 @@ is needed. The real catalog lands in subsequent releases.`,
 // Per-skill install failures are logged but don't abort the batch.
 func installCatalogSkills(out io.Writer, hosts []harness.Harness) error {
 	// Active profile is resolved via the standard chain:
-	//   PRAXIS_PROFILE env → ~/.praxis/config (set by `praxis use`) → "default"
+	//   PRAXIS_PROFILE env → ~/.praxis/config.json (set by `praxis use`) → "default"
 	active, err := credentials.ResolveActive("")
 	if err != nil {
 		return err
@@ -112,7 +111,7 @@ func installCatalogSkills(out io.Writer, hosts []harness.Harness) error {
 			fmt.Sprintf("catalog fetch failed: %v", err),
 			"check the profile URL and that your API key is still valid",
 			exitcode.Network)
-		os.Exit(exitcode.Network)
+		return fmt.Errorf("catalog fetch failed: %w", err)
 	}
 	if len(skills) == 0 {
 		fmt.Fprintln(out, "Catalog is empty for this org — nothing to install.")

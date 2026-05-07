@@ -20,7 +20,7 @@ func init() {
 var useCmd = &cobra.Command{
 	Use:   "use <profile>",
 	Short: "Set the active profile (kubectl-style)",
-	Long: `Persist the active profile in ~/.praxis/config so all subsequent
+	Long: `Persist the active profile in ~/.praxis/config.json so all subsequent
 commands use it without --profile or PRAXIS_PROFILE.
 
 The profile must exist in ~/.praxis/credentials (created by
