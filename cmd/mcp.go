@@ -13,6 +13,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
+	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
 )
@@ -33,25 +34,30 @@ func init() {
 }
 
 var mcpCmd = &cobra.Command{
-	Use:   "mcp <mcp> <fn>",
-	Short: "Invoke a server-side MCP tool function",
-	Long: `Call an MCP tool function exposed by the Praxis server gateway.
+	Use:   "mcp [<mcp> <fn>]",
+	Short: "List or invoke server-side MCP tool functions",
+	Long: `Call an MCP tool function exposed by the Praxis server gateway,
+or — with no arguments — list every function the gateway exposes.
 
 The CLI never holds AWS / kube / terraform credentials — the server
 resolves the org from your API key and runs the call under the
 org-managed integration credentials.
 
 Examples:
+  praxis mcp                                            # list every mcp + fn
+  praxis mcp --json                                     # same, JSON for AI hosts
   praxis mcp cloud_cli list_cloud_integrations
   praxis mcp cloud_cli run_cloud_cli --arg integration_name=aws-prod --arg command='ec2 describe-instances --output json'
   echo '{"integration_name":"aws-prod","command":"ec2 describe-regions"}' | praxis mcp cloud_cli run_cloud_cli --body -`,
-	Args: cobra.ExactArgs(2),
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 || len(args) == 2 {
+			return nil
+		}
+		return fmt.Errorf("accepts either 0 args (list manifest) or 2 args (<mcp> <fn>); got %d", len(args))
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(mcpJSON, false, out)
-
-		mcpName := args[0]
-		fnName := args[1]
 
 		active, err := credentials.ResolveActive("")
 		if err != nil {
@@ -64,6 +70,14 @@ Examples:
 				exitcode.Auth)
 			os.Exit(exitcode.Auth)
 		}
+
+		// No args → list manifest.
+		if len(args) == 0 {
+			return runManifestList(out, asJSON, active)
+		}
+
+		mcpName := args[0]
+		fnName := args[1]
 
 		body, err := buildMCPBody(mcpArgs, mcpBody, cmd.InOrStdin())
 		if err != nil {
@@ -178,6 +192,117 @@ func buildMCPBody(argFlags []string, bodyFlag string, stdin io.Reader) ([]byte, 
 		}
 	}
 	return json.Marshal(obj)
+}
+
+// runManifestList fetches /v1/mcp/manifest, prints either JSON (AI host
+// friendly) or a human-readable grouped listing. Exits the process on
+// network/auth errors so the rest of the dispatch RunE doesn't run.
+//
+// HTTP-level errors come back from mcpmanifest.Fetch as a Go error rather
+// than (status, body) since the manifest endpoint has only one success
+// shape. We classify the error string to pick an exit code; if the user
+// wants the structured detail they can pipe `praxis mcp --json` through
+// jq instead.
+func runManifestList(out io.Writer, asJSON bool, active credentials.Active) error {
+	raw, err := mcpmanifest.Fetch(active.Profile.URL, active.Profile.Token, mcpTimeout)
+	if err != nil {
+		// Auth-failure shape from Fetch: "manifest fetch returned HTTP 401: ..."
+		errStr := err.Error()
+		if strings.Contains(errStr, "HTTP 401") || strings.Contains(errStr, "HTTP 403") {
+			render.PrintError(out, asJSON,
+				errStr,
+				"the API key may be missing or revoked; run `praxis login --profile "+active.Name+"`",
+				exitcode.Auth)
+			os.Exit(exitcode.Auth)
+		}
+		if strings.Contains(errStr, "HTTP 404") {
+			render.PrintError(out, asJSON,
+				errStr,
+				"the gateway does not expose /v1/mcp/manifest — server may be older than CLI",
+				exitcode.NoConfig)
+			os.Exit(exitcode.NoConfig)
+		}
+		render.PrintError(out, asJSON,
+			errStr,
+			"check the deployment URL and network connectivity",
+			exitcode.Network)
+		os.Exit(exitcode.Network)
+	}
+
+	if asJSON {
+		_, _ = out.Write(append(bytes.TrimRight(raw, "\n"), '\n'))
+		return nil
+	}
+	return printManifestPretty(out, raw)
+}
+
+// printManifestPretty renders a grouped human listing. Tolerant of
+// missing/extra fields — server contract may evolve.
+func printManifestPretty(out io.Writer, raw []byte) error {
+	var manifest struct {
+		Mcps map[string]map[string]struct {
+			Description string `json:"description"`
+			Args        []struct {
+				Name        string `json:"name"`
+				Required    bool   `json:"required"`
+				Description string `json:"description"`
+				Type        string `json:"type"`
+			} `json:"args"`
+		} `json:"mcps"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		// Server returned something we can't parse — fall back to raw.
+		fmt.Fprintln(out, prettyJSON(raw))
+		return nil
+	}
+	if len(manifest.Mcps) == 0 {
+		fmt.Fprintln(out, "(no MCPs registered on this gateway)")
+		return nil
+	}
+
+	mcpNames := make([]string, 0, len(manifest.Mcps))
+	for name := range manifest.Mcps {
+		mcpNames = append(mcpNames, name)
+	}
+	sortStrings(mcpNames)
+
+	for i, mcpName := range mcpNames {
+		if i > 0 {
+			fmt.Fprintln(out)
+		}
+		fmt.Fprintf(out, "%s\n", mcpName)
+		fns := manifest.Mcps[mcpName]
+		fnNames := make([]string, 0, len(fns))
+		for name := range fns {
+			fnNames = append(fnNames, name)
+		}
+		sortStrings(fnNames)
+		for _, fnName := range fnNames {
+			fn := fns[fnName]
+			fmt.Fprintf(out, "  %s\n", fnName)
+			if fn.Description != "" {
+				fmt.Fprintf(out, "    %s\n", fn.Description)
+			}
+			for _, a := range fn.Args {
+				marker := " "
+				if a.Required {
+					marker = "*"
+				}
+				fmt.Fprintf(out, "    %s %s — %s\n", marker, a.Name, a.Description)
+			}
+		}
+	}
+	fmt.Fprintln(out, "\n(* = required arg)")
+	return nil
+}
+
+// sortStrings is a tiny dependency-free sort to keep the list deterministic.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
 }
 
 // callMCP is the HTTP seam — tests swap it to avoid hitting the network.

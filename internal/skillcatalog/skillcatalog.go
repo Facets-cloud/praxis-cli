@@ -79,7 +79,13 @@ const executionPreamble = "" +
 	"> laptop never holds AWS / kube / terraform secrets.\n" +
 	">\n" +
 	"> If `praxis mcp <mcp> <fn>` returns 404, that tool isn't yet exposed\n" +
-	"> by the gateway; fall back to whatever non-MCP path the skill suggests.\n"
+	"> by the gateway; fall back to whatever non-MCP path the skill suggests.\n" +
+	">\n" +
+	"> **Discovering what's available** — to see every MCP and function the\n" +
+	"> gateway exposes, run `praxis mcp --json` (live fetch). A snapshot\n" +
+	"> from your last `praxis install-skill` / `praxis refresh-skills` lives\n" +
+	"> at `~/.praxis/mcp-tools.json` — grep that file when you need the\n" +
+	"> tool list without making a network call.\n"
 
 // RenderedContent is the SKILL.md body actually written to disk on a
 // local AI host: original content with executionPreamble inserted just

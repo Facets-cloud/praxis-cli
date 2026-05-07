@@ -39,3 +39,11 @@ func Installed() (string, error) {
 	d, err := Dir()
 	return filepath.Join(d, "installed.json"), err
 }
+
+// MCPTools is the snapshot of the gateway's /v1/mcp/manifest, written by
+// install-skill / refresh-skills so AI hosts can grep the file for tool
+// names instead of fetching live on every invocation.
+func MCPTools() (string, error) {
+	d, err := Dir()
+	return filepath.Join(d, "mcp-tools.json"), err
+}
