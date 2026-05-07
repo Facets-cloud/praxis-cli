@@ -6,7 +6,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(Empty — see 0.3.0 below.)
+(Empty — see 0.4.0 below.)
+
+## [0.4.0] — 2026-05-06
+
+### Added
+- `praxis login` — browser-callback authentication. Opens the user's
+  default browser to create an API key, captures the new key via a
+  one-shot localhost listener, validates against `/ai-api/auth/me`,
+  saves credentials. Supports `--profile`, `--url`, `--token`,
+  `--timeout` flags.
+- `praxis whoami` — live identity check against `/ai-api/auth/me`.
+- `praxis status` — read-only local snapshot (active profile, URL,
+  login state, installed skills) — designed for AI hosts to inspect.
+- `praxis init` — idempotent first-run bootstrap: installs the praxis
+  skill into all detected AI hosts and reports state as JSON.
+- `praxis use <profile>` — kubectl-style: persist active profile to
+  `~/.praxis/config.json`.
+- Multi-profile credentials store at `~/.praxis/credentials` in INI
+  format matching `~/.facets/credentials`. Profile resolution
+  priority: `--profile` flag > `PRAXIS_PROFILE` env > `~/.praxis/config.json`
+  active-profile pointer > literal `default` section. Single-profile
+  users see no behavior change.
+- Browser-callback flow on the agent-factory side
+  (PR Facets-cloud/agent-factory#1048): the API-key create modal
+  reads `cli_callback`, `cli_session`, `suggested_name` query params,
+  auto-opens with the name pre-filled, POSTs the new key to the
+  localhost listener after creation, redirects to `/ui/ai/cli-success`.
+- Named exit codes (`internal/exitcode`): 3 = auth missing/expired,
+  4 = no config, 5 = network, 6 = no AI host. Pinned in tests.
+- Structured `--json` output mode + auto-non-TTY default
+  (`internal/render`).
+- Skill content rewrite — the placeholder `praxis` skill now teaches
+  AI hosts how to operate the CLI (always `--json`, run `praxis login`
+  yourself, exit-code semantics, etc.).
+
+### Changed (breaking)
+- `~/.praxis/credentials` format changed from a single JSON object to
+  an INI profile map. Existing v0.3 single-credential files are not
+  auto-migrated; re-run `praxis login`.
+- `praxis logout` now takes `--profile X` (default: active profile)
+  or `--all` (wipe everything + active-profile pointer).
+
+### Removed
+- `internal/config` package. URL is now stored per-profile inside
+  `~/.praxis/credentials`. The legacy `~/.praxis/config.json` JSON
+  blob (if any) is ignored; `~/.praxis/config.json` is now the
+  active-profile pointer file (INI-formatted, despite the suffix).
 
 ## [0.3.0] — 2026-05-06
 

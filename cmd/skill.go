@@ -2,8 +2,13 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 
+	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
+	"github.com/Facets-cloud/praxis-cli/internal/render"
+	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"github.com/spf13/cobra"
 )
@@ -13,9 +18,11 @@ import (
 var (
 	detectHarnesses    = harness.Detected
 	installSkill       = skillinstall.Install
+	installSkillBody   = skillinstall.InstallWithBody
 	uninstallSkill     = skillinstall.Uninstall
 	listInstalledSkill = skillinstall.List
 	refreshSkills      = skillinstall.Refresh
+	fetchCatalog       = skillcatalog.Fetch
 )
 
 // skillName is the only skill v0.1 ships. Once the server-driven catalog
@@ -66,8 +73,73 @@ is needed. The real catalog lands in subsequent releases.`,
 			fmt.Fprintf(out, "  ✓ %-12s installed at %s\n", in.Harness, in.Path)
 		}
 		fmt.Fprintf(out, "\nInstalled %q into %d host(s).\n", skillName, len(results))
-		return nil
+
+		// Always pull org skills alongside the meta-skill so the user
+		// gets the full Praxis surface. If they're not logged in we
+		// skip with a hint — meta-only install is still useful by itself.
+		return installCatalogSkills(out, hosts)
 	},
+}
+
+// installCatalogSkills fetches the skill bundle for the active profile
+// and installs every entry as a praxis-prefixed skill in each host.
+//
+// Not-logged-in is a soft skip — meta-only install is still useful, so
+// we print a hint and continue without erroring. A real fetch failure
+// (network, server error) DOES error out so the user sees the cause.
+// Per-skill install failures are logged but don't abort the batch.
+func installCatalogSkills(out io.Writer, hosts []harness.Harness) error {
+	// Active profile is resolved via the standard chain:
+	//   PRAXIS_PROFILE env → ~/.praxis/config.json (set by `praxis use`) → "default"
+	active, err := credentials.ResolveActive("")
+	if err != nil {
+		return err
+	}
+	if !active.Loaded || active.Profile.Token == "" {
+		fmt.Fprintf(out,
+			"\nSkipping org skill catalog — not logged in for profile %q.\n"+
+				"Run `praxis login` (or `praxis login --profile %s`) "+
+				"and re-run install-skill to pull your org's catalog.\n",
+			active.Name, active.Name)
+		return nil
+	}
+
+	fmt.Fprintf(out, "\nFetching skill catalog from %s ...\n", active.Profile.URL)
+	skills, err := fetchCatalog(active.Profile.URL, active.Profile.Token)
+	if err != nil {
+		render.PrintError(out, false,
+			fmt.Sprintf("catalog fetch failed: %v", err),
+			"check the profile URL and that your API key is still valid",
+			exitcode.Network)
+		return fmt.Errorf("catalog fetch failed: %w", err)
+	}
+	if len(skills) == 0 {
+		fmt.Fprintln(out, "Catalog is empty for this org — nothing to install.")
+		return nil
+	}
+
+	fmt.Fprintf(out, "Got %d catalog skill(s); installing as praxis-<name>:\n",
+		len(skills))
+	failures := 0
+	for _, sk := range skills {
+		prefixed := sk.PrefixedName()
+		results, err := installSkillBody(prefixed, sk.RenderedContent(), hosts)
+		if err != nil {
+			fmt.Fprintf(out, "  ✗ %-40s failed: %v\n", prefixed, err)
+			failures++
+			continue
+		}
+		for _, in := range results {
+			fmt.Fprintf(out, "  ✓ %-40s → %s\n", prefixed, in.Path)
+		}
+	}
+	if failures > 0 {
+		fmt.Fprintf(out, "\n%d catalog skill(s) failed to install.\n", failures)
+	} else {
+		fmt.Fprintf(out, "\nInstalled %d catalog skill(s) into %d host(s).\n",
+			len(skills), len(hosts))
+	}
+	return nil
 }
 
 var uninstallSkillCmd = &cobra.Command{

@@ -32,12 +32,23 @@ type Receipt struct {
 // Install writes the named skill into every detected harness's user-level
 // skill directory and records the installations in the receipt. Returns
 // the per-host results in the order the hosts were given.
+//
+// The body comes from ContentFor — used for binary-embedded skills (the
+// "praxis" meta-skill in v0.x). For server-fetched org skills, use
+// InstallWithBody instead.
 func Install(skillName string, hosts []harness.Harness) ([]Installation, error) {
 	body, err := ContentFor(skillName)
 	if err != nil {
 		return nil, err
 	}
+	return InstallWithBody(skillName, body, hosts)
+}
 
+// InstallWithBody is like Install but takes the file body directly,
+// bypassing ContentFor. Used by the catalog flow where the skill body
+// arrives from the server's /v1/skills/bundle endpoint and isn't
+// embedded in the binary.
+func InstallWithBody(skillName, body string, hosts []harness.Harness) ([]Installation, error) {
 	receipt, err := loadReceipt()
 	if err != nil {
 		return nil, err

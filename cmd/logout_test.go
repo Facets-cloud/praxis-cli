@@ -2,49 +2,118 @@ package cmd
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 )
 
-// TestLogoutCmd_NoCredentials covers the "nothing to remove" branch.
-func TestLogoutCmd_NoCredentials(t *testing.T) {
+// resetLogoutFlags clears flag state between tests since cobra commands
+// are package globals.
+func resetLogoutFlags() {
+	logoutProfile = ""
+	logoutAll = false
+	logoutJSON = false
+}
+
+// Tests pass a bytes.Buffer to capture output, which is non-TTY → render
+// auto-emits JSON. So assertions check JSON content; the human-readable
+// text path is exercised manually + via the e2e test against a TTY.
+
+func TestLogoutCmd_NoCredentials_Default(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PRAXIS_PROFILE", "")
+	resetLogoutFlags()
+
 	var buf bytes.Buffer
 	logoutCmd.SetOut(&buf)
-
 	if err := logoutCmd.RunE(logoutCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
-	if !strings.Contains(buf.String(), "No credentials to remove") {
-		t.Errorf("output = %q, want substring 'No credentials to remove'", buf.String())
+	out := buf.String()
+	for _, want := range []string{`"note": "profile not present"`, `"removed": null`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\nfull: %s", want, out)
+		}
 	}
 }
 
-// TestLogoutCmd_RemovesExisting covers the file-present branch.
-func TestLogoutCmd_RemovesExisting(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+func TestLogoutCmd_RemovesActive(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PRAXIS_PROFILE", "")
+	resetLogoutFlags()
 
-	credPath := filepath.Join(home, ".praxis", "credentials")
-	if err := os.MkdirAll(filepath.Dir(credPath), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(credPath, []byte("token-data"), 0600); err != nil {
+	if err := credentials.Put("default", credentials.Profile{
+		URL:      "https://askpraxis.ai",
+		Username: "x@x.com",
+		Token:    "sk_live_abc",
+	}); err != nil {
 		t.Fatal(err)
 	}
 
 	var buf bytes.Buffer
 	logoutCmd.SetOut(&buf)
-
 	if err := logoutCmd.RunE(logoutCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
-	if !strings.Contains(buf.String(), "Removed") {
-		t.Errorf("output = %q, want substring 'Removed'", buf.String())
+	if !strings.Contains(buf.String(), `"removed": "default"`) {
+		t.Errorf("output = %q, want JSON 'removed: default'", buf.String())
 	}
-	if _, err := os.Stat(credPath); !os.IsNotExist(err) {
-		t.Errorf("credentials file should be gone, stat err = %v", err)
+
+	store, _ := credentials.Load()
+	if _, ok := store["default"]; ok {
+		t.Errorf("default profile should be gone after logout")
+	}
+}
+
+func TestLogoutCmd_RemovesNamedProfile_LeavesOthers(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PRAXIS_PROFILE", "")
+	resetLogoutFlags()
+
+	_ = credentials.Put("default", credentials.Profile{URL: "x", Token: "t1"})
+	_ = credentials.Put("acme", credentials.Profile{URL: "y", Token: "t2"})
+
+	logoutProfile = "acme"
+	defer resetLogoutFlags()
+	var buf bytes.Buffer
+	logoutCmd.SetOut(&buf)
+	if err := logoutCmd.RunE(logoutCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	if !strings.Contains(buf.String(), `"removed": "acme"`) {
+		t.Errorf("expected JSON acme removal, got %q", buf.String())
+	}
+	store, _ := credentials.Load()
+	if _, ok := store["acme"]; ok {
+		t.Errorf("acme should be gone")
+	}
+	if _, ok := store["default"]; !ok {
+		t.Errorf("default should remain")
+	}
+}
+
+func TestLogoutCmd_All_WipesEverything(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PRAXIS_PROFILE", "")
+	resetLogoutFlags()
+
+	_ = credentials.Put("default", credentials.Profile{URL: "x", Token: "t1"})
+	_ = credentials.Put("acme", credentials.Profile{URL: "y", Token: "t2"})
+	_ = credentials.SetActive("acme")
+
+	logoutAll = true
+	defer resetLogoutFlags()
+	var buf bytes.Buffer
+	logoutCmd.SetOut(&buf)
+	if err := logoutCmd.RunE(logoutCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	if !strings.Contains(buf.String(), `"removed": "all"`) {
+		t.Errorf("expected JSON removed: all, got %q", buf.String())
+	}
+	store, _ := credentials.Load()
+	if len(store) != 0 {
+		t.Errorf("store should be empty, got %d", len(store))
 	}
 }
