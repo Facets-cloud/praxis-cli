@@ -38,7 +38,10 @@ var Fetch = func(baseURL, token string, timeout time.Duration) ([]byte, error) {
 	if token == "" {
 		return nil, errors.New("profile has no token")
 	}
-	if timeout == 0 {
+	// http.Client.Timeout treats any non-positive value as "no timeout"
+	// (per net/http source). Default the negative case too, not just 0,
+	// so a misconfigured caller can't accidentally disable the deadline.
+	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
 	url := strings.TrimRight(baseURL, "/") + "/ai-api/v1/mcp/manifest"
@@ -52,10 +55,16 @@ var Fetch = func(baseURL, token string, timeout time.Duration) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch manifest: %w", err)
 	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read manifest body: %w", err)
+	// Read first so Close() doesn't truncate the body, then report
+	// read errors before close errors (more meaningful failure surfaces).
+	// Matches the strict close-error handling in WriteSnapshot below.
+	raw, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read manifest body: %w", readErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close manifest body: %w", closeErr)
 	}
 	if resp.StatusCode != http.StatusOK {
 		// Trim very long bodies so error messages stay readable.

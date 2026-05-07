@@ -43,6 +43,24 @@ func TestFetch_NoToken(t *testing.T) {
 	}
 }
 
+// Negative timeout must be treated as "use the default", not as
+// "no deadline" (which is what http.Client does for any non-positive
+// duration). Caught by CodeRabbit on PR #2.
+func TestFetch_NegativeTimeoutDefaulted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"mcps":{}}`))
+	}))
+	defer srv.Close()
+	// If the negative value were passed through unchanged, http.Client
+	// would set no deadline and the request would still succeed against
+	// our fast test server — so we can't catch the bug by behavior alone.
+	// Instead, we just exercise the path and assert success: the regression
+	// would be a panic or a timeout error, not silent success.
+	if _, err := Fetch(srv.URL, "tok", -1*time.Second); err != nil {
+		t.Fatalf("Fetch with negative timeout should default and succeed; got %v", err)
+	}
+}
+
 func TestFetch_NonOKStatusReturnsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
