@@ -18,7 +18,6 @@ import (
 )
 
 var (
-	mcpProfile string
 	mcpJSON    bool
 	mcpArgs    []string
 	mcpBody    string
@@ -26,7 +25,6 @@ var (
 )
 
 func init() {
-	mcpCmd.Flags().StringVar(&mcpProfile, "profile", "", "use this profile (default: active)")
 	mcpCmd.Flags().BoolVar(&mcpJSON, "json", false, "JSON output (default when stdout is non-TTY)")
 	mcpCmd.Flags().StringSliceVar(&mcpArgs, "arg", nil, "key=value pair (repeatable); merged into request body")
 	mcpCmd.Flags().StringVar(&mcpBody, "body", "", "raw JSON body (use '-' for stdin); overrides --arg")
@@ -55,7 +53,7 @@ Examples:
 		mcpName := args[0]
 		fnName := args[1]
 
-		active, err := credentials.ResolveActive(mcpProfile)
+		active, err := credentials.ResolveActive("")
 		if err != nil {
 			return err
 		}

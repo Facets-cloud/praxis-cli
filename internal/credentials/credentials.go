@@ -14,10 +14,15 @@
 //
 // Active-profile resolution (highest priority first):
 //
-//  1. --profile flag passed to a command
-//  2. PRAXIS_PROFILE environment variable
-//  3. ~/.praxis/config "default profile" pointer (set by `praxis use`)
+//  1. --profile flag passed to a command (where it exists)
+//  2. ~/.praxis/config "default profile" pointer (set by `praxis use`)
+//  3. PRAXIS_PROFILE environment variable
 //  4. literal "default" section
+//
+// Rationale: `praxis use X` is an explicit, persistent choice the user
+// made; it should be sticky. PRAXIS_PROFILE is the fallback when no
+// `use` has been called (and the rare per-shell override) — it does
+// NOT silently override an explicit `use` decision in the next shell.
 //
 // Single-profile users never see steps 1–3 — everything resolves to
 // "default" automatically.
@@ -91,11 +96,11 @@ func resolveName(flagProfile string) (string, Source) {
 	if flagProfile != "" {
 		return flagProfile, SourceFlag
 	}
-	if env := os.Getenv("PRAXIS_PROFILE"); env != "" {
-		return env, SourceEnv
-	}
 	if cfg, _ := loadConfig(); cfg.Profile != "" {
 		return cfg.Profile, SourceConfig
+	}
+	if env := os.Getenv("PRAXIS_PROFILE"); env != "" {
+		return env, SourceEnv
 	}
 	return DefaultProfileName, SourceDefault
 }

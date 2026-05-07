@@ -9,7 +9,6 @@ import (
 )
 
 func resetStatusFlags() {
-	statusProfile = ""
 	statusJSON = false
 }
 
@@ -81,16 +80,18 @@ func TestStatusCmd_DoesNotCallNetwork(t *testing.T) {
 	}
 }
 
-func TestStatusCmd_RespectProfileFlag(t *testing.T) {
+func TestStatusCmd_HonorsActiveProfileFromUseConfig(t *testing.T) {
+	// `praxis use acme` is the documented way to switch profiles —
+	// status must reflect that without any flag.
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PRAXIS_PROFILE", "")
 	resetStatusFlags()
 
 	_ = credentials.Put("default", credentials.Profile{URL: "https://default.test", Token: "td"})
 	_ = credentials.Put("acme", credentials.Profile{URL: "https://acme.test", Token: "ta"})
-
-	statusProfile = "acme"
-	defer resetStatusFlags()
+	if err := credentials.SetActive("acme"); err != nil {
+		t.Fatal(err)
+	}
 
 	var buf bytes.Buffer
 	statusCmd.SetOut(&buf)
@@ -99,6 +100,6 @@ func TestStatusCmd_RespectProfileFlag(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), `"profile": "acme"`) ||
 		!strings.Contains(buf.String(), `"url": "https://acme.test"`) {
-		t.Errorf("--profile acme not honored, got %q", buf.String())
+		t.Errorf("`praxis use acme` not honored, got %q", buf.String())
 	}
 }

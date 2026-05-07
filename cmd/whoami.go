@@ -14,12 +14,10 @@ import (
 )
 
 var (
-	whoamiProfile string
-	whoamiJSON    bool
+	whoamiJSON bool
 )
 
 func init() {
-	whoamiCmd.Flags().StringVar(&whoamiProfile, "profile", "", "use this profile (default: active)")
 	whoamiCmd.Flags().BoolVar(&whoamiJSON, "json", false, "JSON output")
 	rootCmd.AddCommand(whoamiCmd)
 }
@@ -32,7 +30,9 @@ var whoamiCmd = &cobra.Command{
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(whoamiJSON, false, out)
 
-		active, err := credentials.ResolveActive(whoamiProfile)
+		// Active profile resolved via the standard chain:
+		//   ~/.praxis/config (set by `praxis use`) → PRAXIS_PROFILE env → "default"
+		active, err := credentials.ResolveActive("")
 		if err != nil {
 			return err
 		}

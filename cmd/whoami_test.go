@@ -10,7 +10,6 @@ import (
 )
 
 func resetWhoamiFlags() {
-	whoamiProfile = ""
 	whoamiJSON = false
 }
 
@@ -65,16 +64,18 @@ func TestWhoamiCmd_LoggedIn_LiveCheckOK(t *testing.T) {
 	}
 }
 
-func TestWhoamiCmd_RespectProfileFlag(t *testing.T) {
+func TestWhoamiCmd_HonorsActiveProfileFromUseConfig(t *testing.T) {
+	// `praxis use acme` is the documented way to switch profiles —
+	// whoami must reflect that without any flag.
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PRAXIS_PROFILE", "")
 	resetWhoamiFlags()
 
 	_ = credentials.Put("default", credentials.Profile{URL: "https://default.test", Token: "td"})
 	_ = credentials.Put("acme", credentials.Profile{URL: "https://acme.test", Token: "ta", Username: "support@acme.com"})
-
-	whoamiProfile = "acme"
-	defer resetWhoamiFlags()
+	if err := credentials.SetActive("acme"); err != nil {
+		t.Fatal(err)
+	}
 
 	var capturedURL string
 	orig := fetchAuthMe
@@ -89,6 +90,6 @@ func TestWhoamiCmd_RespectProfileFlag(t *testing.T) {
 		t.Fatalf("RunE err = %v", err)
 	}
 	if capturedURL != "https://acme.test" {
-		t.Errorf("--profile acme should hit acme URL, got %q", capturedURL)
+		t.Errorf("`praxis use acme` should hit acme URL, got %q", capturedURL)
 	}
 }

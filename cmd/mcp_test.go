@@ -12,7 +12,6 @@ import (
 )
 
 func resetMcpFlags() {
-	mcpProfile = ""
 	mcpJSON = false
 	mcpArgs = nil
 	mcpBody = ""

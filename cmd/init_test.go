@@ -12,7 +12,6 @@ import (
 )
 
 func resetInitFlags() {
-	initProfile = ""
 	initJSON = false
 }
 

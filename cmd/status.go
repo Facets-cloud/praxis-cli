@@ -10,12 +10,10 @@ import (
 )
 
 var (
-	statusProfile string
-	statusJSON    bool
+	statusJSON bool
 )
 
 func init() {
-	statusCmd.Flags().StringVar(&statusProfile, "profile", "", "use this profile (default: active)")
 	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "JSON output")
 	rootCmd.AddCommand(statusCmd)
 }
@@ -31,7 +29,7 @@ which AI hosts. Does NOT call the server.`,
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(statusJSON, false, out)
 
-		active, _ := credentials.ResolveActive(statusProfile)
+		active, _ := credentials.ResolveActive("")
 		skills, _ := skillinstall.List()
 
 		state := map[string]any{

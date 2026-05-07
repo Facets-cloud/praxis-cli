@@ -10,12 +10,10 @@ import (
 )
 
 var (
-	initProfile string
-	initJSON    bool
+	initJSON bool
 )
 
 func init() {
-	initCmd.Flags().StringVar(&initProfile, "profile", "", "use this profile (default: active)")
 	initCmd.Flags().BoolVar(&initJSON, "json", false, "JSON output")
 	rootCmd.AddCommand(initCmd)
 }
@@ -55,7 +53,7 @@ you to run praxis login (which the AI can also do directly).`,
 
 		// Step 2 — report state (URL + auth) so the caller can decide
 		// whether to run `praxis login` next.
-		active, _ := credentials.ResolveActive(initProfile)
+		active, _ := credentials.ResolveActive("")
 
 		var nextSteps []string
 		if !active.Loaded || active.Profile.Token == "" {
