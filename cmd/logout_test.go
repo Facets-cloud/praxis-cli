@@ -11,7 +11,6 @@ import (
 // resetLogoutFlags clears flag state between tests since cobra commands
 // are package globals.
 func resetLogoutFlags() {
-	logoutProfile = ""
 	logoutAll = false
 	logoutJSON = false
 }
@@ -66,16 +65,21 @@ func TestLogoutCmd_RemovesActive(t *testing.T) {
 	}
 }
 
-func TestLogoutCmd_RemovesNamedProfile_LeavesOthers(t *testing.T) {
+// TestLogoutCmd_LeavesOtherProfilesAlone pins the v0.7 logout contract:
+// only the active profile's credentials are removed; sibling profiles
+// in the credentials file are untouched. v0.7 dropped --profile from
+// logout, so this test sets active to "acme" first via SetActive, then
+// runs logout and verifies "default" survives.
+func TestLogoutCmd_LeavesOtherProfilesAlone(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PRAXIS_PROFILE", "")
 	resetLogoutFlags()
+	defer resetLogoutFlags()
 
 	_ = credentials.Put("default", credentials.Profile{URL: "x", Token: "t1"})
 	_ = credentials.Put("acme", credentials.Profile{URL: "y", Token: "t2"})
+	_ = credentials.SetActive("acme")
 
-	logoutProfile = "acme"
-	defer resetLogoutFlags()
 	var buf bytes.Buffer
 	logoutCmd.SetOut(&buf)
 	if err := logoutCmd.RunE(logoutCmd, nil); err != nil {

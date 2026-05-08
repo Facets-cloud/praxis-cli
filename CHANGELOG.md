@@ -43,6 +43,13 @@ commands** (down from 16) and a single design invariant:
   (praxis-* prefix) and deletes `~/.praxis/mcp-tools.json`. The
   praxis meta-skill stays. `--all` wipes every profile's credentials
   AND every org skill across every host.
+- `praxis logout` no longer accepts `--profile X` — it always
+  targets the active profile. With v0.7's invariant that at most one
+  profile's org skills are on disk at a time, targeting a non-active
+  profile was either redundant (creds-only — same as bare logout if
+  X is active) or misleading (X's skills weren't on disk anyway). To
+  remove a non-active profile's credentials, login to it first
+  (`praxis login --profile X`) then run `praxis logout`.
 - Profile switching is now `praxis login --profile X` — login wipes
   the previous profile's org skills and installs X's catalog. There
   is no concurrent multi-profile installed state on disk anymore.

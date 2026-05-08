@@ -12,13 +12,11 @@ import (
 )
 
 var (
-	logoutProfile string
-	logoutAll     bool
-	logoutJSON    bool
+	logoutAll  bool
+	logoutJSON bool
 )
 
 func init() {
-	logoutCmd.Flags().StringVar(&logoutProfile, "profile", "", "remove only this profile (default: active)")
 	logoutCmd.Flags().BoolVar(&logoutAll, "all", false, "remove ALL profiles + active-profile pointer")
 	logoutCmd.Flags().BoolVar(&logoutJSON, "json", false, "JSON output")
 	rootCmd.AddCommand(logoutCmd)
@@ -26,15 +24,18 @@ func init() {
 
 var logoutCmd = &cobra.Command{
 	Use:   "logout",
-	Short: "Remove credentials and org skills for a profile (or --all)",
-	Long: `Remove credentials AND uninstall this profile's org skills
-(praxis-* prefix) from every AI host. The praxis meta-skill stays
-installed so the AI host still knows how to log back in.
+	Short: "Remove credentials and org skills for the active profile (or --all)",
+	Long: `Remove credentials AND uninstall org skills (praxis-* prefix) from
+every AI host. The praxis meta-skill stays installed so the AI host
+still knows how to log back in.
 
-Default: target the active profile.
-  --profile X    target a specific profile
-  --all          wipe every profile's credentials + every praxis-* org
-                 skill from every host (meta-skill stays).`,
+  praxis logout         active profile: creds + org skills + manifest
+  praxis logout --all   every profile's creds + every host's org skills
+
+To remove a non-active profile's credentials specifically, switch to it
+first with ` + "`praxis login --profile X`" + ` and then run logout. With v0.7's
+invariant that at most one profile's org skills are on disk at a time,
+there's no way (and no need) to target a non-active profile directly.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
@@ -69,8 +70,10 @@ Default: target the active profile.
 			return nil
 		}
 
-		// Target either --profile X or the active profile.
-		active, _ := credentials.ResolveActive(logoutProfile)
+		// Target the active profile only — v0.7 dropped --profile from
+		// logout (see Long). To remove a non-active profile, login to
+		// it first.
+		active, _ := credentials.ResolveActive("")
 		store, _ := credentials.Load()
 		credsPresent := false
 		if _, ok := store[active.Name]; ok {
@@ -83,11 +86,9 @@ Default: target the active profile.
 			}
 		}
 
-		// Wipe org skills for whichever profile was active. Note: with the
-		// v0.7 single-active-profile model, org skills always belong to the
-		// currently-active profile, so wiping them here is correct whether
-		// the user targeted active or --profile X (X may not be active,
-		// but at most ONE profile's org skills are on disk at a time).
+		// Wipe org skills. With the v0.7 single-active-profile model, org
+		// skills always belong to the currently-active profile, so this
+		// is unambiguous.
 		removed, err := skillinstall.UninstallByPrefix("praxis-")
 		if err != nil {
 			if !asJSON {
