@@ -40,12 +40,19 @@ func TestUpdateCmd_AlreadyOnLatest(t *testing.T) {
 
 	var buf bytes.Buffer
 	updateCmd.SetOut(&buf)
+	updateJSON = false
 
 	if err := updateCmd.RunE(updateCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
-	if !strings.Contains(buf.String(), "Already on the latest version") {
-		t.Errorf("output = %q, want substring 'Already on the latest version'", buf.String())
+	// bytes.Buffer is non-TTY → render auto-emits JSON. Check the
+	// structured shape rather than the human string.
+	out := buf.String()
+	if !strings.Contains(out, `"reason": "already_latest"`) {
+		t.Errorf("output = %q, want JSON with reason=already_latest", out)
+	}
+	if !strings.Contains(out, `"updated": false`) {
+		t.Errorf("output = %q, want updated=false", out)
 	}
 }
 

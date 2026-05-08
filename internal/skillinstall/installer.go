@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
@@ -101,6 +102,44 @@ func Uninstall(skillName string) ([]Installation, error) {
 			return removed, fmt.Errorf("remove %s: %w", entry.Path, err)
 		}
 		// Best-effort: drop the parent skill dir if it's empty.
+		_ = os.Remove(filepath.Dir(entry.Path))
+		removed = append(removed, entry)
+	}
+	receipt.Skills = kept
+	if err := saveReceipt(receipt); err != nil {
+		return removed, fmt.Errorf("save receipt: %w", err)
+	}
+	return removed, nil
+}
+
+// UninstallByPrefix removes every installation whose skill name starts
+// with `prefix`, deleting files (and empty parent dirs) and updating
+// the receipt. Returns the entries that were actually removed.
+//
+// Used by `praxis login` (to wipe the previous profile's org skills
+// before installing the new profile's catalog) and `praxis logout`
+// (to remove org skills alongside credentials). The meta-skill is
+// named "praxis" with no suffix, while every catalog skill is named
+// "praxis-<n>"; passing prefix="praxis-" therefore wipes only org
+// skills and leaves the meta-skill intact.
+func UninstallByPrefix(prefix string) ([]Installation, error) {
+	if prefix == "" {
+		return nil, fmt.Errorf("UninstallByPrefix: prefix must be non-empty")
+	}
+	receipt, err := loadReceipt()
+	if err != nil {
+		return nil, err
+	}
+	var removed []Installation
+	var kept []Installation
+	for _, entry := range receipt.Skills {
+		if !strings.HasPrefix(entry.SkillName, prefix) {
+			kept = append(kept, entry)
+			continue
+		}
+		if err := os.Remove(entry.Path); err != nil && !os.IsNotExist(err) {
+			return removed, fmt.Errorf("remove %s: %w", entry.Path, err)
+		}
 		_ = os.Remove(filepath.Dir(entry.Path))
 		removed = append(removed, entry)
 	}

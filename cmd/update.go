@@ -6,11 +6,15 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/selfupdate"
 	"github.com/spf13/cobra"
 )
 
-var updateYes bool
+var (
+	updateYes  bool
+	updateJSON bool
+)
 
 // Package-level seams so unit tests can stub network + filesystem deps
 // without spawning a subprocess. Tests assign and restore via defer.
@@ -25,6 +29,7 @@ var (
 
 func init() {
 	updateCmd.Flags().BoolVarP(&updateYes, "yes", "y", false, "skip confirmation prompt")
+	updateCmd.Flags().BoolVar(&updateJSON, "json", false, "JSON output (implies --yes)")
 	rootCmd.AddCommand(updateCmd)
 }
 
@@ -38,6 +43,11 @@ checksums.txt, and atomically replace the running binary.
 Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
+		asJSON := render.UseJSON(updateJSON, false, out)
+		// JSON callers (AI hosts) can't answer an interactive prompt;
+		// --json implies --yes for the same reason `praxis mcp` doesn't
+		// ask for confirmation when --json is set.
+		autoYes := updateYes || asJSON
 
 		rel, err := fetchLatestRelease()
 		if err != nil {
@@ -47,6 +57,13 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 		latest := strings.TrimPrefix(rel.TagName, "v")
 		current := strings.TrimPrefix(version, "v")
 		if latest == current {
+			if asJSON {
+				return render.JSON(out, map[string]any{
+					"updated": false,
+					"reason":  "already_latest",
+					"version": current,
+				})
+			}
 			fmt.Fprintf(out, "Already on the latest version (%s).\n", current)
 			return nil
 		}
@@ -61,12 +78,14 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 			return fmt.Errorf("locate self: %w", err)
 		}
 
-		fmt.Fprintf(out, "Update available: %s → %s\n", current, latest)
-		fmt.Fprintf(out, "  release: %s\n", rel.HTMLURL)
-		fmt.Fprintf(out, "  asset:   %s\n", binAsset.Name)
-		fmt.Fprintf(out, "  target:  %s\n", myPath)
+		if !asJSON {
+			fmt.Fprintf(out, "Update available: %s → %s\n", current, latest)
+			fmt.Fprintf(out, "  release: %s\n", rel.HTMLURL)
+			fmt.Fprintf(out, "  asset:   %s\n", binAsset.Name)
+			fmt.Fprintf(out, "  target:  %s\n", myPath)
+		}
 
-		if !updateYes {
+		if !autoYes {
 			fmt.Fprint(out, "\nProceed? [y/N] ")
 			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
@@ -87,7 +106,9 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 			}
 		}
 
-		fmt.Fprintln(out, "Downloading…")
+		if !asJSON {
+			fmt.Fprintln(out, "Downloading…")
+		}
 		tmpPath, err := downloadAsset(binAsset.BrowserDownloadURL)
 		if err != nil {
 			return fmt.Errorf("download: %w", err)
@@ -95,33 +116,51 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 		defer os.Remove(tmpPath)
 
 		if expected != "" {
-			fmt.Fprintln(out, "Verifying checksum…")
+			if !asJSON {
+				fmt.Fprintln(out, "Verifying checksum…")
+			}
 			if err := verifyChecksum(tmpPath, expected); err != nil {
 				return err
 			}
-		} else {
+		} else if !asJSON {
 			fmt.Fprintln(out, "(release has no checksums.txt — skipping verification)")
 		}
 
-		fmt.Fprintln(out, "Installing…")
+		if !asJSON {
+			fmt.Fprintln(out, "Installing…")
+		}
 		if err := atomicReplace(myPath, tmpPath); err != nil {
 			return fmt.Errorf("install: %w", err)
 		}
 
-		fmt.Fprintf(out, "✓ Updated to %s.\n", latest)
-
-		// Refresh installed skills with the new binary's content. This is
-		// best-effort — a refresh failure shouldn't roll back the binary
-		// update. Note that the refresh is performed by the still-running
-		// OLD process, so in v0.2 (where skill content is hardcoded in
-		// the binary) the rewritten content matches what's already on
-		// disk. When Phase 3 lands and skill content comes from the
-		// server, this same code fetches fresh content correctly.
+		// Refresh installed skill files with the (still-running) old
+		// binary's embedded content. The new binary won't take effect
+		// for the meta-skill until the user re-runs login/refresh from
+		// the new binary, but this catches simple in-binary content
+		// changes and is also where v0.6's `refresh-skills` behavior
+		// folds in. Best-effort: a refresh failure does not roll back
+		// the binary update.
 		refreshed, refreshErr := refreshSkills()
+
+		if asJSON {
+			payload := map[string]any{
+				"updated":         true,
+				"from_version":    current,
+				"to_version":      latest,
+				"refreshed_count": len(refreshed),
+			}
+			if refreshErr != nil {
+				payload["refresh_error"] = refreshErr.Error()
+			}
+			return render.JSON(out, payload)
+		}
+
+		fmt.Fprintf(out, "✓ Updated to %s.\n", latest)
 		if refreshErr != nil {
 			fmt.Fprintf(out, "  ⚠ skill refresh skipped: %v\n", refreshErr)
 		} else if len(refreshed) > 0 {
 			fmt.Fprintf(out, "  ✓ refreshed %d installed skill(s)\n", len(refreshed))
+			fmt.Fprintln(out, "\nFor catalog changes, run `praxis login` to re-fetch.")
 		}
 		return nil
 	},

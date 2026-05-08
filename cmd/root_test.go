@@ -19,20 +19,26 @@ func TestRoot_HelpListsAllShippedCommands(t *testing.T) {
 		t.Fatalf("Execute --help err = %v", err)
 	}
 	out := buf.String()
+	// User-facing surface: 9 commands.
 	for _, want := range []string{
-		"completion", "logout", "update", "version",
-		"install-skill", "uninstall-skill", "list-skills", "refresh-skills",
-		"login", "whoami", "status", "init", "use", "mcp",
+		"login", "logout", "status", "mcp", "refresh-skills",
+		"update", "version", "completion",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("--help output missing %q\nfull output:\n%s", want, out)
 		}
 	}
-	// Stubs removed in earlier releases that have NOT yet been
-	// reimplemented. Re-add to the positive list above when they ship.
-	for _, mustNot := range []string{"doctor", "configure"} {
+	// Hidden commands must NOT appear in --help — they still work when
+	// invoked directly (with a deprecation warning) but the visible
+	// surface must stay small.
+	for _, mustNot := range []string{
+		"init", "install-skill", "uninstall-skill",
+		"list-skills", "whoami", "use",
+		// Stubs from earlier releases that haven't been reimplemented
+		"doctor", "configure",
+	} {
 		if strings.Contains(out, mustNot) {
-			t.Errorf("--help still advertises removed command %q", mustNot)
+			t.Errorf("--help still advertises hidden/removed command %q", mustNot)
 		}
 	}
 }

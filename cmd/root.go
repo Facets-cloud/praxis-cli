@@ -19,18 +19,29 @@ var rootCmd = &cobra.Command{
 	Use:   "praxis",
 	Short: "Bring Praxis cloud capabilities to any local AI host",
 	Long: `Praxis CLI exposes your organization's Praxis cloud to your local AI
-tool (Claude Code, Cursor, Gemini CLI). Skills will be sourced and run
-inside your AI; MCP tools will execute server-side using org-managed
+tool (Claude Code, Cursor, Gemini CLI). Skills are sourced and run
+inside your AI; MCP tools execute server-side using org-managed
 credentials. No AWS/kube/terraform credentials on your laptop.
 
-This is an early release. Today the CLI only ships installation,
-versioning, and self-update plumbing. Skill sourcing and MCP invocation
-land in subsequent releases.
-
 Run 'praxis <command> --help' for details on any command.`,
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	Version:       version,
+	SilenceUsage:     true,
+	SilenceErrors:    true,
+	Version:          version,
+	PersistentPreRun: warnDeprecatedEnvVars,
+}
+
+// warnDeprecatedEnvVars prints stderr warnings for legacy environment
+// variables that are deprecated in v0.7. The variables continue to work
+// for one minor version so existing scripts have time to migrate; they
+// will be removed in v0.8.
+func warnDeprecatedEnvVars(cmd *cobra.Command, args []string) {
+	if v := os.Getenv("PRAXIS_PROFILE"); v != "" {
+		fmt.Fprintf(os.Stderr,
+			"warning: PRAXIS_PROFILE env var is deprecated and will be ignored in v0.8.\n"+
+				"         Use `praxis login --profile %s` instead — login is the only way\n"+
+				"         to switch the active profile in v0.7+ (it also refreshes skills).\n",
+			v)
+	}
 }
 
 // Execute runs the root command. Called from main.

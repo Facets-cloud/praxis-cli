@@ -40,25 +40,28 @@ func init() {
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
-	Short: "Authenticate with Praxis (browser-callback flow)",
-	Long: `Open a browser to create a Praxis API key, then capture the new
-key via a one-shot localhost listener. The user clicks "Create Key" once;
-this command handles the rest.
+	Short: "Authenticate, install meta-skill, and sync this profile's org catalog",
+	Long: `Single entry point for setup. Login does, in order:
 
-For non-interactive use (e.g. CI, or AI hosts that already have a token),
-pass --token sk_live_…
+  1. Install the praxis meta-skill into every detected AI host
+     (~/.claude/skills/praxis, ~/.agents/skills/praxis,
+      ~/.gemini/skills/praxis) — idempotent.
+  2. Open a browser to create a Praxis API key (or use --token to skip).
+  3. Save credentials and flip the active profile pointer.
+  4. Wipe any praxis-* org skills from the previous profile.
+  5. Fetch this profile's skill catalog from the server and install
+     each entry as praxis-<name> across all detected AI hosts.
+  6. Refresh ~/.praxis/mcp-tools.json from the server's MCP manifest.
 
 Multiple deployments? Use --profile to keep them separate:
 
-  praxis login                                    → saves to "default"
-  praxis login --profile acme --url https://...   → saves to "acme"
-  praxis login --profile vymo --url https://...   → saves to "vymo"
+  praxis login                                    → "default"
+  praxis login --profile acme --url https://...   → "acme"
+  praxis login --profile bigcorp --url https://.. → "bigcorp"
 
-Then switch contexts with:
-
-  praxis use acme                  (sets active profile)
-  PRAXIS_PROFILE=acme praxis ...   (one-shell override)
-  praxis ... --profile acme        (one-command override)`,
+Re-running login (with the same profile or a different one) is the
+canonical way to refresh skills + manifest snapshot. There is no
+separate refresh command in v0.7.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
@@ -213,16 +216,28 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 	if err := credentials.Put(profileName, prof); err != nil {
 		return fmt.Errorf("save credentials: %w", err)
 	}
+	if err := credentials.SetActive(profileName); err != nil {
+		return fmt.Errorf("set active profile: %w", err)
+	}
+
+	// Post-auth: install meta-skill, wipe previous org skills, install
+	// this profile's catalog, refresh the MCP tools snapshot.
+	postAuthState := runPostAuthSetup(out, asJSON, baseURL, token)
 
 	if asJSON {
 		return render.JSON(out, map[string]any{
-			"ok":       true,
-			"profile":  profileName,
-			"username": user.Email,
-			"url":      baseURL,
+			"ok":               true,
+			"profile":          profileName,
+			"username":         user.Email,
+			"url":              baseURL,
+			"meta_skill":       postAuthState.metaSkill,
+			"catalog_skills":   postAuthState.catalogSkills,
+			"removed_skills":   postAuthState.removedSkills,
+			"snapshot_path":    postAuthState.snapshotPath,
+			"snapshot_warning": postAuthState.snapshotWarning,
 		})
 	}
-	fmt.Fprintf(out, "✓ Logged in as %s (profile: %s, url: %s)\n", user.Email, profileName, baseURL)
+	fmt.Fprintf(out, "\n✓ Logged in as %s (profile: %s, url: %s)\n", user.Email, profileName, baseURL)
 	return nil
 }
 
