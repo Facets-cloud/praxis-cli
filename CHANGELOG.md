@@ -37,8 +37,10 @@ commands** (down from 16) and a single design invariant:
 ### Changed (breaking — surface only; behaviors are aliased through v0.7)
 - The user-facing command surface shrinks to:
   `login`, `logout`, `status`, `mcp`, `update`, `version`,
-  `completion`, plus cobra's `help`. All of these except `login` and
-  `completion` accept `--json`.
+  `completion`, plus cobra's `help`. All except `completion` accept
+  `--json`. (`login --json` is not directly scriptable since the auth
+  step needs a human at a browser, but the JSON envelope is still
+  emitted at the end so AI hosts can inspect what got installed.)
 - `praxis logout` now also removes the active profile's org skills
   (praxis-* prefix) and deletes `~/.praxis/mcp-tools.json`. The
   praxis meta-skill stays. `--all` wipes every profile's credentials

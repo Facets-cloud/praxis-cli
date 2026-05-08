@@ -6,6 +6,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
+	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
 
@@ -25,10 +26,18 @@ type postAuthState struct {
 // credentials are saved + the active pointer is flipped:
 //
 //  1. Install the meta-skill into every detected AI host (idempotent).
-//  2. Wipe any praxis-* org skills from the previous profile.
-//  3. Fetch this profile's skill catalog and install each entry as
-//     praxis-<name> across all detected AI hosts.
+//     Skipped when no hosts are detected.
+//  2. Fetch this profile's skill catalog from the server. If the fetch
+//     fails, leave existing org skills in place — login stays
+//     non-destructive. (CodeRabbit PR #3 #2: don't wipe before fetch.)
+//  3. Once the catalog is in hand, wipe any praxis-* org skills from
+//     the previous profile and install the new ones. The wipe-and-
+//     install is one logical step so we never leave the user with no
+//     org skills due to a transient network failure.
 //  4. Refresh ~/.praxis/mcp-tools.json from the server's MCP manifest.
+//     Runs even when no AI hosts are detected — a sysadmin or CI
+//     pipeline may want the snapshot for tooling that doesn't go
+//     through Claude/Codex/Gemini.
 //
 // Each step is best-effort: a failure logs a warning to `out` but does
 // not roll back the credentials save. The user can re-run login any
@@ -36,75 +45,93 @@ type postAuthState struct {
 func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAuthState {
 	state := postAuthState{}
 	hosts := detectHarnesses()
-	if len(hosts) == 0 {
-		if !asJSON {
-			fmt.Fprintln(out, "No supported AI hosts detected on this machine.")
-			fmt.Fprintln(out, "Install Claude Code, Codex, or Gemini CLI first, then re-run.")
-		}
-		return state
+	noHosts := len(hosts) == 0
+	if noHosts && !asJSON {
+		fmt.Fprintln(out, "No supported AI hosts detected on this machine.")
+		fmt.Fprintln(out, "Install Claude Code, Codex, or Gemini CLI to install skills.")
+		fmt.Fprintln(out, "(Continuing — credentials and MCP manifest snapshot will still be written.)")
 	}
 
-	// Step 1: meta-skill (idempotent — Install upserts).
-	metaResults, err := installSkill(skillName, hosts)
-	if err != nil {
-		if !asJSON {
-			fmt.Fprintf(out, "Warning: meta-skill install failed: %v\n", err)
-		}
-	} else {
-		if !asJSON {
-			fmt.Fprintf(out, "Meta-skill installed into %d host(s):\n", len(metaResults))
-			for _, r := range metaResults {
-				fmt.Fprintf(out, "  ✓ %-12s @ %s\n", r.Harness, r.Path)
+	// Step 1: meta-skill (idempotent — Install upserts). Host-dependent.
+	if !noHosts {
+		metaResults, err := installSkill(skillName, hosts)
+		if err != nil {
+			if !asJSON {
+				fmt.Fprintf(out, "Warning: meta-skill install failed: %v\n", err)
 			}
-		}
-		state.metaSkill = liteResults(metaResults)
-	}
-
-	// Step 2: wipe any previous-profile org skills (praxis-* prefix).
-	removed, err := skillinstall.UninstallByPrefix("praxis-")
-	if err != nil {
-		if !asJSON {
-			fmt.Fprintf(out, "Warning: removing previous profile's skills failed: %v\n", err)
-		}
-	} else if len(removed) > 0 {
-		state.removedSkills = liteResults(removed)
-		if !asJSON {
-			fmt.Fprintf(out, "\nRemoved %d skill(s) from previous profile.\n", len(removed))
+		} else {
+			if !asJSON {
+				fmt.Fprintf(out, "Meta-skill installed into %d host(s):\n", len(metaResults))
+				for _, r := range metaResults {
+					fmt.Fprintf(out, "  ✓ %-12s @ %s\n", r.Harness, r.Path)
+				}
+			}
+			state.metaSkill = liteResults(metaResults)
 		}
 	}
 
-	// Step 3: fetch the new profile's catalog and install each as praxis-<n>.
-	catalogResults := installCatalogForHosts(out, asJSON, baseURL, token, hosts)
-	state.catalogSkills = catalogResults
+	// Step 2 + 3: fetch FIRST, then swap. If the fetch fails, leave the
+	// existing org-skill set on disk — `praxis login` must be safe to
+	// re-run on a flaky network without leaving the user empty-handed.
+	// Host-dependent (no point fetching if we can't install).
+	if !noHosts {
+		skills, fetchErr := fetchCatalog(baseURL, token)
+		switch {
+		case fetchErr != nil:
+			if !asJSON {
+				fmt.Fprintf(out, "\nWarning: catalog fetch failed: %v\n", fetchErr)
+				fmt.Fprintln(out, "Existing org skills left in place. Re-run `praxis login` once the gateway is reachable.")
+			}
+		case len(skills) == 0:
+			// Empty catalog is a definitive answer — wipe stale entries.
+			removed := wipePrevProfileSkills(out, asJSON)
+			state.removedSkills = liteResults(removed)
+			if !asJSON {
+				fmt.Fprintln(out, "\nCatalog is empty for this org — nothing to install.")
+			}
+		default:
+			// Catalog in hand. Now wipe and install.
+			removed := wipePrevProfileSkills(out, asJSON)
+			state.removedSkills = liteResults(removed)
+			state.catalogSkills = installFetchedCatalog(out, asJSON, skills, hosts)
+		}
+	}
 
-	// Step 4: refresh MCP tools snapshot.
+	// Step 4: refresh MCP tools snapshot. Host-independent — useful even
+	// without an AI host installed (manifest is consumed by other tools
+	// and by future `praxis mcp` calls).
 	state.snapshotPath, state.snapshotWarning = refreshMCPSnapshot(out, asJSON, baseURL, token)
 
 	return state
 }
 
-// installCatalogForHosts fetches the skill bundle and installs each
-// entry as a praxis-prefixed skill across the given hosts. Returns a
-// flat list of installations (one entry per host per skill).
-//
-// Empty catalog → empty list, no error. Fetch failure → empty list +
-// stderr warning. Per-skill install failure → logged, batch continues.
-func installCatalogForHosts(out io.Writer, asJSON bool, baseURL, token string, hosts []harness.Harness) []skillInstallationLite {
-	skills, err := fetchCatalog(baseURL, token)
+// wipePrevProfileSkills removes every praxis-* skill from disk and the
+// receipt, returning the entries actually removed. The meta-skill
+// ("praxis", no suffix) is preserved by UninstallByPrefix.
+func wipePrevProfileSkills(out io.Writer, asJSON bool) []skillinstall.Installation {
+	removed, err := skillinstall.UninstallByPrefix("praxis-")
 	if err != nil {
 		if !asJSON {
-			fmt.Fprintf(out, "\nWarning: catalog fetch failed: %v\n", err)
-			fmt.Fprintln(out, "Re-run `praxis login` once the gateway is reachable.")
+			fmt.Fprintf(out, "Warning: removing previous profile's skills failed: %v\n", err)
 		}
 		return nil
 	}
-	if len(skills) == 0 {
-		if !asJSON {
-			fmt.Fprintln(out, "\nCatalog is empty for this org — nothing to install.")
-		}
-		return nil
+	if len(removed) > 0 && !asJSON {
+		fmt.Fprintf(out, "\nRemoved %d skill(s) from previous profile.\n", len(removed))
 	}
+	return removed
+}
 
+// installFetchedCatalog installs an already-fetched skill catalog. It
+// does not fetch — the caller (runPostAuthSetup) does the fetch first
+// so we can fail-safe on transient network errors. Returns a flat list
+// of installations (one entry per host per skill).
+//
+// Per-skill install failure → logged, batch continues.
+func installFetchedCatalog(out io.Writer, asJSON bool, skills []skillcatalog.Skill, hosts []harness.Harness) []skillInstallationLite {
+	if len(skills) == 0 {
+		return nil
+	}
 	if !asJSON {
 		fmt.Fprintf(out, "\nInstalling %d catalog skill(s) as praxis-<n>:\n", len(skills))
 	}

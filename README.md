@@ -58,9 +58,12 @@ That's it. Open Claude Code (or Codex, or Gemini CLI) and try:
 
 ## Surface (v0.7)
 
-The CLI ships exactly **8 user-facing commands**. All except `login`
-and `completion` are AI-callable and emit `--json` output (auto-emit
-when stdout is non-TTY).
+The CLI ships exactly **8 user-facing commands**. All AI-callable
+commands accept `--json` (auto-emit when stdout is non-TTY) and have
+stable JSON schemas. `login` is the only command that requires a
+human at a browser; it still emits a JSON envelope at the end so
+your AI host can see what got installed. `completion` is shell-script
+output and has no JSON form.
 
 ```
 praxis login [--profile X] [--url Y] [--token Z]
