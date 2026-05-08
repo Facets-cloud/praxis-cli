@@ -4,6 +4,44 @@
 > Gemini CLI). Operated by your AI; you (the human) only install the
 > binary and click one button during login.
 
+## What you can do
+
+Once installed and logged in, your local AI host can:
+
+- **Run skills published by your org** — release-debugging,
+  k8s-operations, cloud-operations, terraform-import, blueprint
+  management, module authoring, and any custom skills your team
+  publishes. The catalog is fetched fresh on every login.
+- **Investigate Kubernetes** — list connected clusters and run
+  read-only kubectl against them through the `k8s_cli` MCP.
+  No kubeconfig on your laptop; the server resolves credentials.
+- **Query cloud infra** — run read-only `aws`, `gcloud`, and `az`
+  commands against your org's integrations through the `cloud_cli`
+  MCP. Mutating verbs blocked at the validator.
+- **Drive Facets via Raptor** — every read-only `raptor` verb
+  (projects, releases, environments, schemas, logs) through the
+  `raptor_cli` MCP, under your org's Facets PAT.
+- **Read & search the infrastructure catalog** — list registered
+  repos, search GitHub, register newly discovered repos via the
+  `catalog_ops` MCP.
+
+Each capability is one or more functions on a server-side MCP. Run
+`praxis mcp --json` for the live list of what's exposed for your org.
+
+### Coming soon
+
+- **Custom agents and agent management** — invoke org-specific
+  subagents (devil's advocate, terraform planner, etc.) and manage
+  their configuration from the CLI.
+- **Incident operations** — open / query / attach evidence to
+  incidents through the gateway.
+- **GitHub operations** — first-class `github` MCP for repo
+  hardening, PR queries, and dependency scans.
+- **Slack / Teams outbound** — post incident summaries or release
+  notes through gated, confirm-required outbound integrations.
+- **Terraform** — direct terraform plan / state inspection through
+  a dedicated MCP.
+
 ## Install
 
 ```bash
@@ -64,14 +102,13 @@ That's it. Open Claude Code (or Codex, or Gemini CLI) and try:
 > *(your AI loads the `praxis-release-debugging` skill that login
 > just installed and walks the diagnosis with you)*
 
-## Surface (v0.7)
+## Command surface
 
-The CLI ships exactly **8 user-facing commands**. All AI-callable
-commands accept `--json` (auto-emit when stdout is non-TTY) and have
-stable JSON schemas. `login` is the only command that requires a
-human at a browser; it still emits a JSON envelope at the end so
-your AI host can see what got installed. `completion` is shell-script
-output and has no JSON form.
+The CLI ships **9 user-facing commands**. All AI-callable commands
+accept `--json` (auto-emit when stdout is non-TTY) with stable JSON
+schemas. `login` requires a human at a browser; it still emits a
+JSON envelope so your AI host can see what got installed.
+`completion` is shell-script output and has no JSON form.
 
 ```text
 praxis login [--profile X] [--url Y] [--token Z]
@@ -81,8 +118,8 @@ praxis login [--profile X] [--url Y] [--token Z]
 
 praxis logout [--all]
    Active profile: removes credentials, all org skills (praxis-*),
-   and the MCP manifest snapshot. Meta-skill stays so the AI host
-   can still call praxis.
+   and the MCP manifest snapshot. The praxis meta-skill stays so the
+   AI host can still call praxis.
    --all wipes every profile's credentials and every host's org
    skills.
 
@@ -95,6 +132,13 @@ praxis mcp [<mcp> <fn>] [--json] [--arg k=v ...] [--body '<json>']
                  exposes (with arg shapes).
    <mcp> <fn>  → invoke that function under your org credentials.
 
+praxis refresh-skills [--json]
+   Re-fetch this profile's catalog and rewrite skill files + MCP
+   snapshot, without re-authenticating. Use when the org has
+   published new skills or after `brew upgrade praxis`. Equivalent
+   to `praxis login` minus the browser flow; requires existing
+   valid credentials.
+
 praxis update [--yes] [--json]
    Self-update binary. --json implies --yes.
 
@@ -103,14 +147,15 @@ praxis completion <shell> shell completion script (bash/zsh/fish/ps)
 praxis help               cobra help
 ```
 
-### v0.7 invariant
+### Core invariant
 
-> **Login is the only mutator of installed-skill state.**
+> **Login is the canonical mutator of installed-skill state.**
 > The CLI's on-disk state always matches the active profile.
 
 Profile switching is `praxis login --profile X` — login wipes the
 previous profile's org skills and installs X's. There's never a
-mixed-profile state on disk.
+mixed-profile state on disk. `refresh-skills` runs the same
+post-login flow without changing credentials.
 
 ## Working with multiple profiles
 
@@ -198,9 +243,6 @@ To wipe every profile and every host:
 ```bash
 praxis logout --all
 ```
-
-> NOTE: `PRAXIS_PROFILE` env var and `praxis use <name>` are
-> deprecated in v0.7 and removed in v0.8. Use `praxis login --profile X`.
 
 ## Files
 

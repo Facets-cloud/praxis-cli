@@ -15,7 +15,6 @@ func TestDeprecatedCommands_Hidden(t *testing.T) {
 		"init":            "praxis login",
 		"install-skill":   "praxis login",
 		"uninstall-skill": "praxis logout",
-		"refresh-skills":  "praxis login",
 		"whoami":          "praxis status --refresh",
 		"use":             "praxis login --profile",
 		"list-skills":     "praxis status",
@@ -36,7 +35,7 @@ func TestDeprecatedCommands_Hidden(t *testing.T) {
 // surface must NOT be marked Hidden by accident.
 func TestVisibleCommands_NotHidden(t *testing.T) {
 	visible := []string{
-		"login", "logout", "status", "mcp",
+		"login", "logout", "status", "mcp", "refresh-skills",
 		"update", "version", "completion",
 	}
 	for _, name := range visible {

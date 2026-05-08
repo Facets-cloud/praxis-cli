@@ -19,20 +19,20 @@ func TestRoot_HelpListsAllShippedCommands(t *testing.T) {
 		t.Fatalf("Execute --help err = %v", err)
 	}
 	out := buf.String()
-	// v0.7 surface: 8 user-facing commands.
+	// User-facing surface: 9 commands.
 	for _, want := range []string{
-		"login", "logout", "status", "mcp",
+		"login", "logout", "status", "mcp", "refresh-skills",
 		"update", "version", "completion",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("--help output missing %q\nfull output:\n%s", want, out)
 		}
 	}
-	// Commands hidden (deprecated) in v0.7 must NOT appear in --help —
-	// they still work when invoked directly (with a deprecation warning)
-	// but the surface must visibly shrink.
+	// Hidden commands must NOT appear in --help — they still work when
+	// invoked directly (with a deprecation warning) but the visible
+	// surface must stay small.
 	for _, mustNot := range []string{
-		"init", "install-skill", "uninstall-skill", "refresh-skills",
+		"init", "install-skill", "uninstall-skill",
 		"list-skills", "whoami", "use",
 		// Stubs from earlier releases that haven't been reimplemented
 		"doctor", "configure",

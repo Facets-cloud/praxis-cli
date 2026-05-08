@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
@@ -209,47 +210,58 @@ var listSkillsCmd = &cobra.Command{
 	},
 }
 
+var refreshSkillsJSON bool
+
+func init() {
+	refreshSkillsCmd.Flags().BoolVar(&refreshSkillsJSON, "json", false, "JSON output")
+}
+
 var refreshSkillsCmd = &cobra.Command{
 	Use:   "refresh-skills",
-	Short: "Re-write installed SKILL.md files and refresh the MCP tool snapshot",
-	Long: `Re-write the SKILL.md file for every installed skill using the
-current binary's catalog content. Also re-fetches the MCP tool manifest
-from the active profile's gateway and rewrites ~/.praxis/mcp-tools.json
-so AI hosts can grep for available tool names without going to the
-network.
+	Short: "Re-fetch this profile's catalog and rewrite skill files + MCP snapshot",
+	Long: `Re-run the post-login setup against the active profile, without
+re-authenticating. Equivalent to ` + "`praxis login`" + ` minus the browser
+flow — useful when you're already logged in and just want to:
 
-If you're not logged in, the snapshot step is soft-skipped and only the
-local SKILL.md files are refreshed.
+  • pick up new skill content the org has published
+  • rebuild the MCP tool snapshot after the gateway exposed a new tool
+  • re-write the meta-skill body after ` + "`brew upgrade praxis`" + `
+    (so AI hosts see the new on-disk content immediately)
 
-praxis update calls this automatically after replacing the binary.`,
+Requires an existing valid login. Exits 3 if not logged in — run
+` + "`praxis login`" + ` first.
+
+For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
-		refreshed, err := refreshSkills()
-		if err != nil {
-			return err
-		}
-		if len(refreshed) == 0 {
-			fmt.Fprintln(out, "No skills installed — nothing to refresh.")
-		} else {
-			for _, in := range refreshed {
-				fmt.Fprintf(out, "  ✓ %-12s refreshed at %s\n", in.Harness, in.Path)
-			}
-			fmt.Fprintf(out, "\nRefreshed %d skill installation(s).\n", len(refreshed))
-		}
+		asJSON := render.UseJSON(refreshSkillsJSON, false, out)
 
-		// Refresh the MCP tool snapshot too. Soft-skip when not logged in.
 		active, err := credentials.ResolveActive("")
 		if err != nil {
 			return err
 		}
 		if !active.Loaded || active.Profile.Token == "" {
-			fmt.Fprintf(out,
-				"\nMCP tool snapshot not refreshed — not logged in for profile %q.\n",
-				active.Name)
-			return nil
+			render.PrintError(out, asJSON,
+				fmt.Sprintf("not logged in for profile %q", active.Name),
+				"run `praxis login` first",
+				exitcode.Auth)
+			os.Exit(exitcode.Auth)
 		}
-		snapshotMCPManifest(out, active.Profile.URL, active.Profile.Token)
+
+		state := runPostAuthSetup(out, asJSON, active.Profile.URL, active.Profile.Token)
+
+		if asJSON {
+			return render.JSON(out, map[string]any{
+				"profile":          active.Name,
+				"meta_skill":       state.metaSkill,
+				"removed_skills":   state.removedSkills,
+				"catalog_skills":   state.catalogSkills,
+				"snapshot_path":    state.snapshotPath,
+				"snapshot_warning": state.snapshotWarning,
+			})
+		}
+		fmt.Fprintf(out, "\n✓ Refreshed profile %q.\n", active.Name)
 		return nil
 	},
 }

@@ -43,8 +43,9 @@ func init() {
 	deprecate(initCmd, "praxis login")
 	deprecate(installSkillCmd, "praxis login")
 	deprecate(uninstallSkillCmd, "praxis logout")
-	deprecate(refreshSkillsCmd, "praxis login (idempotent — re-run to refresh)")
 	deprecate(whoamiCmd, "praxis status --refresh")
 	deprecate(useCmd, "praxis login --profile <name>")
 	deprecate(listSkillsCmd, "praxis status")
+	// refresh-skills is NOT deprecated in v0.7 — it stays as a
+	// first-class command (auth-skipping refresh path).
 }

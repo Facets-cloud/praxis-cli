@@ -20,18 +20,17 @@ intent ("debug my release", "show my AWS resources"); you shell out to
 ` + "`praxis`" + ` and bring the results back. The user is NOT going to type praxis
 commands themselves.
 
-## The two-step model
+## Setup is two steps
 
 ` + "```" + `
 brew install praxis    ← happens once, by the user
 praxis login           ← AI runs this on first contact (or when token expires)
 ` + "```" + `
 
-That's the entire setup. Login does everything: installs the meta-skill
-into your AI host's skill directory, opens the user's browser to create
-an API key, fetches this org's skill catalog, and writes the MCP tool
-manifest snapshot. There is no separate ` + "`init`" + ` or ` + "`install-skill`" + `
-command in v0.7+.
+That's the entire setup. Login does everything: installs this
+meta-skill into your AI host's skill directory, opens the user's
+browser to create an API key, fetches this org's skill catalog, and
+writes the MCP tool manifest snapshot to ~/.praxis/mcp-tools.json.
 
 ## First thing to do every conversation
 
@@ -51,8 +50,8 @@ Branch on ` + "`logged_in`" + `.
 ## When ` + "`logged_in: false`" + `
 
 **Run ` + "`praxis login`" + ` yourself.** The CLI opens the user's browser; the
-user clicks "Create Key" once; the CLI exits 0 with a fresh token saved
-AND this profile's skill catalog installed AND the MCP manifest snapshot
+user clicks "Create Key" once; the CLI exits 0 with a fresh token saved,
+this profile's skill catalog installed, and the MCP manifest snapshot
 refreshed. Then retry the original task.
 
 ` + "```bash" + `
@@ -76,11 +75,7 @@ praxis login --profile acme        # active profile becomes acme
 praxis login --profile bigcorp     # wipes acme skills, installs bigcorp
 ` + "```" + `
 
-The praxis meta-skill (this file) survives every switch. Only the
-catalog skills cycle.
-
-> NOTE: PRAXIS_PROFILE env var is deprecated in v0.7 and will be ignored
-> in v0.8. Use ` + "`praxis login --profile X`" + ` to switch.
+This meta-skill survives every switch. Only the catalog skills cycle.
 
 ## Output convention
 
@@ -97,7 +92,7 @@ the output is stable and machine-parseable.
   - ` + "`4`" + ` no config / no profile → run ` + "`praxis login --profile <name>`" + `
   - ` + "`5`" + ` network unreachable
 
-## The full command surface (v0.7)
+## The full command surface
 
 AI-callable (always pass --json):
 
@@ -106,8 +101,11 @@ AI-callable (always pass --json):
   - ` + "`praxis mcp`" + ` — list available MCP tools (no args) or invoke one
     (` + "`praxis mcp <mcp> <fn> --arg k=v ...`" + `). See "Discovering MCP tools"
     below.
+  - ` + "`praxis refresh-skills`" + ` — re-fetch this profile's catalog and
+    rewrite skill files + MCP snapshot, without re-authenticating. Use
+    when the org has published new skills or after ` + "`brew upgrade praxis`" + `.
   - ` + "`praxis logout`" + ` — drop creds + org skills for active profile.
-    ` + "`--all`" + ` wipes everything except the meta-skill.
+    ` + "`--all`" + ` wipes everything except this meta-skill.
   - ` + "`praxis update`" + ` — self-update binary. ` + "`--json`" + ` implies ` + "`--yes`" + `.
   - ` + "`praxis version`" + ` — build metadata.
 
@@ -127,8 +125,8 @@ holds AWS / kube secrets.
   - **List (live)**: ` + "`praxis mcp --json`" + ` → fresh fetch of every MCP +
     function + arg shape. Best when you need accuracy.
   - **Snapshot (cached)**: ` + "`~/.praxis/mcp-tools.json`" + ` is rewritten on
-    every ` + "`praxis login`" + `. Grep when you need tool names without going
-    to the network.
+    every ` + "`praxis login`" + ` and ` + "`praxis refresh-skills`" + `. Grep when you
+    need tool names without going to the network.
   - **Call**: ` + "`praxis mcp <mcp> <fn> --arg k=v ... --json`" + ` (or
     ` + "`--body '<json>'`" + ` for nested args). Output is the raw MCP envelope
     (` + "`{content: [...], isError?: bool}`" + `).
@@ -145,13 +143,9 @@ praxis mcp k8s_cli run_k8s_cli \
 ## Don'ts
 
   - **Don't** tell the user to "open a browser and paste a token" — that's
-    obsolete. ` + "`praxis login`" + ` handles the browser+callback.
+    not how it works. ` + "`praxis login`" + ` handles the browser+callback.
   - **Don't** ask the user to run praxis commands. Run them yourself.
   - **Don't** parse human-readable text output. Always use ` + "`--json`" + `.
-  - **Don't** look for ` + "`praxis init`" + `, ` + "`praxis install-skill`" + `,
-    ` + "`praxis refresh-skills`" + `, ` + "`praxis whoami`" + `, or ` + "`praxis use`" + ` — these
-    are deprecated in v0.7 and going away in v0.8. Use ` + "`praxis login`" + `
-    or ` + "`praxis status`" + ` as the v0.7 replacements.
 `,
 }
 
@@ -162,7 +156,7 @@ func ContentFor(name string) (string, error) {
 	body, ok := dummySkills[name]
 	if !ok {
 		return "", fmt.Errorf(
-			"unknown skill %q (v0.x only ships the meta-skill named \"praxis\"; org skills come from the server)",
+			"unknown skill %q (only the meta-skill named \"praxis\" is binary-embedded; org skills come from the server)",
 			name,
 		)
 	}
