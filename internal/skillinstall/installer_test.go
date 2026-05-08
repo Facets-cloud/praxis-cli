@@ -146,6 +146,62 @@ func TestUninstall_RemovesFilesAndReceiptEntries(t *testing.T) {
 	}
 }
 
+// TestUninstallByPrefix_KeepsMetaWipesPrefixed pins the v0.7 invariant:
+// `praxis logout` (and `praxis login` profile-switch) must wipe every
+// org skill (praxis-* prefix) while leaving the meta-skill ("praxis"
+// exactly, no suffix) intact.
+func TestUninstallByPrefix_KeepsMetaWipesPrefixed(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+
+	// Meta-skill via Install (uses ContentFor) + two org skills via
+	// InstallWithBody (mirrors how the catalog flow works).
+	if _, err := Install("praxis", hosts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallWithBody("praxis-k8s-operations", "k8s body", hosts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallWithBody("praxis-cloud-operations", "cloud body", hosts); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := UninstallByPrefix("praxis-")
+	if err != nil {
+		t.Fatalf("UninstallByPrefix err = %v", err)
+	}
+	// 2 skills × 3 hosts = 6 entries removed.
+	if len(removed) != 6 {
+		t.Errorf("removed %d entries, want 6", len(removed))
+	}
+	for _, e := range removed {
+		if _, err := os.Stat(e.Path); !os.IsNotExist(err) {
+			t.Errorf("org skill file %s should be gone", e.Path)
+		}
+	}
+
+	// Meta-skill must survive. Verify via List() and via the on-disk file.
+	recorded, _ := List()
+	if len(recorded) != 3 {
+		t.Errorf("List() = %d entries after wipe, want 3 (meta-skill x 3 hosts)", len(recorded))
+	}
+	for _, e := range recorded {
+		if e.SkillName != "praxis" {
+			t.Errorf("survivor entry has skill_name=%q, want 'praxis'", e.SkillName)
+		}
+		if _, err := os.Stat(e.Path); err != nil {
+			t.Errorf("meta-skill file %s should still exist: %v", e.Path, err)
+		}
+	}
+}
+
+func TestUninstallByPrefix_RejectsEmptyPrefix(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := UninstallByPrefix(""); err == nil {
+		t.Error("expected error for empty prefix")
+	}
+}
+
 func TestUninstall_UnknownSkill_NoOp(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	removed, err := Uninstall("never-installed")

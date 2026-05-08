@@ -6,7 +6,76 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(Empty — see 0.6.0 below.)
+(Empty — see 0.7.0 below.)
+
+## [0.7.0] — 2026-05-08
+
+Major surface simplification. The CLI now ships with **8 visible
+commands** (down from 16) and a single design invariant:
+
+> **Login is the only mutator of installed-skill state. The CLI's
+> on-disk state always matches the active profile's view of the world.**
+
+### Added
+- `praxis login` is now the one-shot setup command. In addition to
+  authenticating, it also: (a) installs the praxis meta-skill into
+  every detected AI host idempotently, (b) wipes any praxis-* org
+  skills from the previous profile, (c) fetches and installs this
+  profile's skill catalog, and (d) refreshes
+  `~/.praxis/mcp-tools.json`. Re-run login any time to refresh.
+- `praxis status --refresh` adds a live `/ai-api/auth/me` check,
+  absorbing the value the deprecated `whoami` provided. The local
+  snapshot remains the default (no network calls).
+- `--json` output on `logout`, `update`, and `version` (with stable
+  schemas). `update --json` implies `--yes` since AI hosts can't
+  answer the interactive confirmation prompt.
+- `internal/skillinstall.UninstallByPrefix(prefix)` — primitive used
+  by login (to wipe previous-profile org skills) and logout (to
+  remove org skills alongside credentials). Always preserves the
+  meta-skill ("praxis", no suffix).
+
+### Changed (breaking — surface only; behaviors are aliased through v0.7)
+- The user-facing command surface shrinks to:
+  `login`, `logout`, `status`, `mcp`, `update`, `version`,
+  `completion`, plus cobra's `help`. All of these except `login` and
+  `completion` accept `--json`.
+- `praxis logout` now also removes the active profile's org skills
+  (praxis-* prefix) and deletes `~/.praxis/mcp-tools.json`. The
+  praxis meta-skill stays. `--all` wipes every profile's credentials
+  AND every org skill across every host.
+- Profile switching is now `praxis login --profile X` — login wipes
+  the previous profile's org skills and installs X's catalog. There
+  is no concurrent multi-profile installed state on disk anymore.
+
+### Deprecated (still functional in v0.7, removed in v0.8)
+- `praxis init` → use `praxis login` (idempotent meta-skill install)
+- `praxis install-skill` → use `praxis login`
+- `praxis uninstall-skill` → use `praxis logout`
+- `praxis refresh-skills` → use `praxis login` (it refreshes everything)
+- `praxis whoami` → use `praxis status --refresh`
+- `praxis use` → use `praxis login --profile X`
+- `praxis list-skills` → use `praxis status`
+- `PRAXIS_PROFILE` env var — login is now the only way to switch
+  profiles. The env var still works in v0.7 (with a stderr warning)
+  but is ignored from v0.8.
+
+All deprecated commands continue to function in v0.7 with a stderr
+warning pointing at the v0.7 replacement. They are hidden from
+`praxis --help` so the visible surface is the v0.7 surface only.
+
+### Meta-skill body rewrite
+The praxis meta-skill (the SKILL.md installed into every AI host)
+has been rewritten to teach AI hosts the v0.7 surface. The old body's
+references to install-skill / refresh-skills / whoami / use / init
+are gone; the body now teaches: "brew install + praxis login is the
+whole setup; re-run login to refresh; logout to revoke."
+
+### Tests
+- New `internal/skillinstall.UninstallByPrefix` test pinning the
+  meta-skill survival contract.
+- New `cmd/deprecated_test.go` pinning that every deprecated command
+  is Hidden and every v0.7 surface command is visible.
+- `--help` test expectations updated to match the new visible surface.
 
 ## [0.6.0] — 2026-05-07
 

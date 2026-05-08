@@ -30,11 +30,11 @@ func TestLogoutCmd_NoCredentials_Default(t *testing.T) {
 	if err := logoutCmd.RunE(logoutCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
-	out := buf.String()
-	for _, want := range []string{`"note": "profile not present"`, `"removed": null`} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output missing %q\nfull: %s", want, out)
-		}
+	// v0.7: no-creds path → removed=null. The "note: profile not present"
+	// field was dropped when the JSON shape was tightened to a fixed
+	// {removed, removed_skills} shape.
+	if !strings.Contains(buf.String(), `"removed": null`) {
+		t.Errorf("output missing 'removed: null'; full: %s", buf.String())
 	}
 }
 

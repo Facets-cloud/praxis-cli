@@ -2,11 +2,11 @@ package skillinstall
 
 import "fmt"
 
-// dummySkills is the v0.x placeholder catalog. Only one skill exists,
-// named "praxis", but its CONTENT teaches the host AI how to operate
-// the praxis CLI correctly. When the server-driven catalog ships, this
-// content gets replaced by a thin pointer that calls
-// `praxis skill show <name>` against the gateway.
+// dummySkills is the binary-embedded catalog. Currently only one skill,
+// the "praxis" meta-skill — its content teaches the host AI how to
+// drive the praxis CLI. Org skills come from the server's
+// /v1/skills/bundle endpoint and are installed alongside this one
+// during `praxis login`.
 var dummySkills = map[string]string{
 	"praxis": `---
 name: praxis
@@ -20,44 +20,73 @@ intent ("debug my release", "show my AWS resources"); you shell out to
 ` + "`praxis`" + ` and bring the results back. The user is NOT going to type praxis
 commands themselves.
 
-## First thing to do every time praxis comes up
+## The two-step model
+
+` + "```" + `
+brew install praxis    ← happens once, by the user
+praxis login           ← AI runs this on first contact (or when token expires)
+` + "```" + `
+
+That's the entire setup. Login does everything: installs the meta-skill
+into your AI host's skill directory, opens the user's browser to create
+an API key, fetches this org's skill catalog, and writes the MCP tool
+manifest snapshot. There is no separate ` + "`init`" + ` or ` + "`install-skill`" + `
+command in v0.7+.
+
+## First thing to do every conversation
 
 ` + "```bash" + `
 praxis status --json
 ` + "```" + `
 
-This returns a small JSON snapshot:
+Returns a small JSON snapshot:
 
-  - ` + "`profile`" + `, ` + "`profile_source`" + ` — which profile is active and where
-    that decision came from (` + "`flag`" + `, ` + "`env`" + `, ` + "`config`" + `, or ` + "`default`" + `).
-  - ` + "`url`" + ` — Praxis deployment the active profile points at.
-  - ` + "`logged_in`" + ` — whether there's a usable token for that profile.
-  - ` + "`username`" + `, ` + "`skills_installed`" + ` — context.
+  - ` + "`profile`" + `, ` + "`profile_source`" + ` — which profile is active and where it came from
+  - ` + "`url`" + ` — Praxis deployment the active profile points at
+  - ` + "`logged_in`" + ` — whether there's a usable token for that profile
+  - ` + "`username`" + `, ` + "`skills_installed`" + ` — context
 
-Read it. Branch on ` + "`logged_in`" + `.
+Branch on ` + "`logged_in`" + `.
 
 ## When ` + "`logged_in: false`" + `
 
 **Run ` + "`praxis login`" + ` yourself.** The CLI opens the user's browser; the
-user clicks "Create" once; the CLI exits 0 with a fresh token saved.
-You don't need to ask permission, paste anything, or instruct the user.
-After ` + "`praxis login`" + ` returns, retry the original task.
+user clicks "Create Key" once; the CLI exits 0 with a fresh token saved
+AND this profile's skill catalog installed AND the MCP manifest snapshot
+refreshed. Then retry the original task.
 
 ` + "```bash" + `
-praxis login                   # default profile, default URL (askpraxis.ai)
-praxis login --url https://acme.console.facets.cloud   # different deployment
-praxis login --profile acme --url https://acme.console.facets.cloud
-                              # multi-customer support engineers
+praxis login                                          # default profile
+praxis login --url https://acme.console.facets.cloud  # different deployment
+praxis login --profile bigcorp --url https://...      # named profile
 ` + "```" + `
 
-If the user has multiple Praxis deployments (e.g. internal-support
-engineers), use ` + "`--profile <name>`" + `. Otherwise just ` + "`praxis login`" + `.
+Re-running login is also how you refresh stale skills or pick up new
+ones the org has published. Login is idempotent.
+
+## Switching between Praxis deployments
+
+If the user has multiple deployments (e.g. internal support engineers),
+each one is its own profile. Switch by re-running login with --profile X.
+Login wipes the previous profile's org skills (praxis-* prefix) before
+installing the new one's, so there's never a mixed state on disk.
+
+` + "```bash" + `
+praxis login --profile acme        # active profile becomes acme
+praxis login --profile bigcorp     # wipes acme skills, installs bigcorp
+` + "```" + `
+
+The praxis meta-skill (this file) survives every switch. Only the
+catalog skills cycle.
+
+> NOTE: PRAXIS_PROFILE env var is deprecated in v0.7 and will be ignored
+> in v0.8. Use ` + "`praxis login --profile X`" + ` to switch.
 
 ## Output convention
 
-Every praxis command supports ` + "`--json`" + ` and auto-emits JSON when stdout is
-not a terminal. **Always pass ` + "`--json`" + `** when you call praxis from a tool
-loop — the output is stable and machine-parseable.
+Every AI-callable command supports ` + "`--json`" + ` and auto-emits JSON when
+stdout is not a terminal. **Always pass ` + "`--json`" + `** from a tool loop —
+the output is stable and machine-parseable.
 
 ## Exit codes (act on these)
 
@@ -67,37 +96,39 @@ loop — the output is stable and machine-parseable.
   - ` + "`3`" + ` auth missing/expired → run ` + "`praxis login`" + ` and retry
   - ` + "`4`" + ` no config / no profile → run ` + "`praxis login --profile <name>`" + `
   - ` + "`5`" + ` network unreachable
-  - ` + "`6`" + ` no AI host detected (only relevant for skill commands)
 
-## What you can call anytime (no auth needed)
+## The full command surface (v0.7)
 
-These are local-only and safe to call freely:
+AI-callable (always pass --json):
 
-  - ` + "`praxis status --json`" + ` — current state
-  - ` + "`praxis list-skills`" + ` — what's installed locally
-  - ` + "`praxis install-skill`" + ` / ` + "`praxis refresh-skills`" + `
-  - ` + "`praxis update`" + ` — self-update CLI binary
-  - ` + "`praxis version`" + ` / ` + "`praxis --help`" + ` / ` + "`praxis <cmd> --help`" + `
+  - ` + "`praxis status [--refresh]`" + ` — local snapshot. ` + "`--refresh`" + ` adds a live
+    /auth/me call to verify the token isn't revoked.
+  - ` + "`praxis mcp`" + ` — list available MCP tools (no args) or invoke one
+    (` + "`praxis mcp <mcp> <fn> --arg k=v ...`" + `). See "Discovering MCP tools"
+    below.
+  - ` + "`praxis logout`" + ` — drop creds + org skills for active profile.
+    ` + "`--all`" + ` wipes everything except the meta-skill.
+  - ` + "`praxis update`" + ` — self-update binary. ` + "`--json`" + ` implies ` + "`--yes`" + `.
+  - ` + "`praxis version`" + ` — build metadata.
 
-## What needs auth
+Human-only (don't try to script these):
 
-  - ` + "`praxis whoami`" + ` — calls /ai-api/auth/me with the saved token
-  - ` + "`praxis mcp`" + ` — list / call server-side MCP tools (cloud, k8s, catalog)
-  - (more commands land in subsequent CLI releases — when you see a
-    server-side capability in --help, expect it to require login)
+  - ` + "`praxis login`" + ` — opens the user's browser; you (the AI) RUN this on
+    the user's behalf when status shows logged_out, but the user has to
+    click "Create Key" once. Wait for exit 0 before retrying the task.
 
-## Discovering and calling MCP tools
+## Discovering MCP tools
 
 The server gateway exposes tools grouped by MCP namespace
-(` + "`cloud_cli`" + `, ` + "`k8s_cli`" + `, ` + "`catalog_ops`" + `, …). Each tool runs server-side
-under the org's managed credentials — your laptop never holds AWS / kube
-secrets.
+(` + "`cloud_cli`" + `, ` + "`k8s_cli`" + `, ` + "`catalog_ops`" + `, ` + "`raptor_cli`" + `, …). Each tool runs
+server-side under the org's managed credentials — your laptop never
+holds AWS / kube secrets.
 
-  - **List**: ` + "`praxis mcp --json`" + ` → live fetch of every MCP + function
-    plus arg shapes. Use this to discover what's available.
-  - **Snapshot**: ` + "`~/.praxis/mcp-tools.json`" + ` is rewritten on every
-    ` + "`praxis install-skill`" + ` and ` + "`praxis refresh-skills`" + `. Grep this
-    file when you need tool names without going to the network.
+  - **List (live)**: ` + "`praxis mcp --json`" + ` → fresh fetch of every MCP +
+    function + arg shape. Best when you need accuracy.
+  - **Snapshot (cached)**: ` + "`~/.praxis/mcp-tools.json`" + ` is rewritten on
+    every ` + "`praxis login`" + `. Grep when you need tool names without going
+    to the network.
   - **Call**: ` + "`praxis mcp <mcp> <fn> --arg k=v ... --json`" + ` (or
     ` + "`--body '<json>'`" + ` for nested args). Output is the raw MCP envelope
     (` + "`{content: [...], isError?: bool}`" + `).
@@ -111,35 +142,27 @@ praxis mcp k8s_cli run_k8s_cli \
   --arg command='get pods -n default' --json
 ` + "```" + `
 
-## Multi-deployment users
-
-` + "`praxis use <profile>`" + ` sets the active profile (kubectl-style). All
-subsequent praxis commands use it without ` + "`--profile`" + `. Override one shot
-with ` + "`--profile <name>`" + ` or ` + "`PRAXIS_PROFILE=<name>`" + ` env.
-
 ## Don'ts
 
   - **Don't** tell the user to "open a browser and paste a token" — that's
     obsolete. ` + "`praxis login`" + ` handles the browser+callback.
   - **Don't** ask the user to run praxis commands. Run them yourself.
   - **Don't** parse human-readable text output. Always use ` + "`--json`" + `.
-
-## Today's state of this skill
-
-This is the v0.x placeholder. The real catalog (release-debugging,
-k8s-investigation, terraform-plan-explain, …) ships once the server
-gateway lands. Until then, this skill mostly teaches you how to drive
-the CLI itself.
+  - **Don't** look for ` + "`praxis init`" + `, ` + "`praxis install-skill`" + `,
+    ` + "`praxis refresh-skills`" + `, ` + "`praxis whoami`" + `, or ` + "`praxis use`" + ` — these
+    are deprecated in v0.7 and going away in v0.8. Use ` + "`praxis login`" + `
+    or ` + "`praxis status`" + ` as the v0.7 replacements.
 `,
 }
 
 // ContentFor returns the SKILL.md content for the given skill name.
-// v0.x only knows "praxis" — every other name is an error.
+// Currently only the "praxis" meta-skill is binary-embedded; org
+// catalog skills come from the server.
 func ContentFor(name string) (string, error) {
 	body, ok := dummySkills[name]
 	if !ok {
 		return "", fmt.Errorf(
-			"unknown skill %q (v0.x only ships the placeholder skill named \"praxis\"; the server-driven catalog lands in a later release)",
+			"unknown skill %q (v0.x only ships the meta-skill named \"praxis\"; org skills come from the server)",
 			name,
 		)
 	}
