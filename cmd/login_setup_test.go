@@ -5,11 +5,26 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
+	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
+
+// stubMCPManifestFetch swaps mcpmanifest.Fetch with a no-network stub for
+// the duration of the test. Returns a tiny but valid manifest body so
+// runPostAuthSetup's snapshot step still exercises WriteSnapshot. Used
+// by every test in this file so we never hit the real network.
+func stubMCPManifestFetch(t *testing.T) {
+	t.Helper()
+	orig := mcpmanifest.Fetch
+	mcpmanifest.Fetch = func(_ string, _ string, _ time.Duration) ([]byte, error) {
+		return []byte(`{"mcps":{}}`), nil
+	}
+	t.Cleanup(func() { mcpmanifest.Fetch = orig })
+}
 
 // TestRunPostAuthSetup_CatalogFetchFailure_PreservesExisting pins the
 // CodeRabbit-reviewed contract for v0.7: when the catalog fetch fails
@@ -19,6 +34,7 @@ import (
 func TestRunPostAuthSetup_CatalogFetchFailure_PreservesExisting(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PRAXIS_PROFILE", "")
+	stubMCPManifestFetch(t)
 
 	// Pre-seed: install a praxis-* skill on disk to represent a working
 	// previous-profile setup. If the failure path wipes them, this test
@@ -49,7 +65,10 @@ func TestRunPostAuthSetup_CatalogFetchFailure_PreservesExisting(t *testing.T) {
 
 	// Existing praxis-* installs must still be in the receipt — the
 	// fetch failure must not have triggered UninstallByPrefix.
-	got, _ := skillinstall.List()
+	got, err := skillinstall.List()
+	if err != nil {
+		t.Fatalf("skillinstall.List() unexpected error: %v", err)
+	}
 	found := false
 	for _, e := range got {
 		if e.SkillName == "praxis-existing-skill" {
@@ -86,6 +105,7 @@ func TestRunPostAuthSetup_CatalogFetchFailure_PreservesExisting(t *testing.T) {
 func TestRunPostAuthSetup_NoHosts_StillRefreshesSnapshot(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PRAXIS_PROFILE", "")
+	stubMCPManifestFetch(t)
 
 	origDetect := detectHarnesses
 	detectHarnesses = func() []harness.Harness { return nil }

@@ -51,7 +51,7 @@ That's it. Open Claude Code (or Codex, or Gemini CLI) and try:
 
 > "Show me what's deployed in prod."
 > *(your AI runs `praxis mcp ...` against your org's gateway)*
-
+>
 > "Debug my failed release."
 > *(your AI loads the `praxis-release-debugging` skill that login
 > just installed and walks the diagnosis with you)*
@@ -65,7 +65,7 @@ human at a browser; it still emits a JSON envelope at the end so
 your AI host can see what got installed. `completion` is shell-script
 output and has no JSON form.
 
-```
+```text
 praxis login [--profile X] [--url Y] [--token Z]
    The one-stop setup command. Idempotent. Re-run to refresh skills
    or switch profiles. The only command that's human-only — opens a
@@ -125,7 +125,7 @@ Re-login with the same profile is the canonical "refresh" path.
 
 ## Files
 
-```
+```text
 ~/.praxis/credentials      INI, one [section] per profile (chmod 0600)
 ~/.praxis/config.json      active-profile pointer, set by login
 ~/.praxis/mcp-tools.json   manifest snapshot of gateway tools
