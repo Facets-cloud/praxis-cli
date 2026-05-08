@@ -10,103 +10,135 @@
 brew install Facets-cloud/tap/praxis
 ```
 
-Or direct binary:
+Or grab a release binary directly:
+<https://github.com/Facets-cloud/praxis-cli/releases/latest>
+
+## Set up — one command
 
 ```bash
-curl -fsSL https://install.askpraxis.ai | sh   # planned
-# or grab a release directly:
-# https://github.com/Facets-cloud/praxis-cli/releases/latest
+praxis login
 ```
 
-## Set up — paste this prompt into your AI
+That's literally it. `praxis login` is a single, idempotent command
+that does everything you need:
 
-Open Claude Code, Codex, Gemini CLI, or any AI host that can run
-shell commands. Paste:
+1. Installs the **praxis meta-skill** into every detected AI host
+   (`~/.claude/skills/praxis/`, `~/.agents/skills/praxis/`,
+   `~/.gemini/skills/praxis/`). The meta-skill teaches your AI how to
+   drive the rest of the CLI.
+2. Opens your browser to **create an API key** (you click "Create"
+   once; the CLI captures the new key over a one-shot localhost
+   listener).
+3. **Wipes any leftover org skills** from a previous profile.
+4. **Fetches your org's catalog of skills** from the Praxis server
+   and installs each one as `praxis-<name>` across every AI host.
+5. Writes a snapshot of available **MCP tools** to
+   `~/.praxis/mcp-tools.json` so your AI can discover the gateway's
+   functions without a network call.
 
-> I just installed the `praxis` CLI on my machine. Please set it up
-> end-to-end:
->
-> 1. Run `praxis init` to install the praxis skill into every AI host
->    on this machine. The skill teaches you how to use praxis.
-> 2. Run `praxis login`. A browser will open; I'll click "Create Key"
->    once. You handle the rest.
-> 3. Run `praxis status --json` and tell me what you see.
->
-> If I have a custom Praxis deployment, use `praxis login --url <url>`.
-> Otherwise the default `https://askpraxis.ai` is fine.
->
-> Always pass `--json` to praxis from now on. Read exit codes — they
-> tell you what to do next.
+For a custom deployment URL or a non-default profile:
 
-That's it. Your AI now operates praxis on your behalf. Daily use:
+```bash
+praxis login --url https://acme.console.facets.cloud
+praxis login --profile bigcorp --url https://bigcorp.console.facets.cloud
+```
+
+Re-running `praxis login` is also how you **refresh** your skills and
+the MCP manifest. There's no separate `init`, `install-skill`, or
+`refresh-skills` command — login is the one mutator.
+
+That's it. Open Claude Code (or Codex, or Gemini CLI) and try:
 
 > "Show me what's deployed in prod."
-> *(your AI runs `praxis mcp …` once those commands land)*
+> *(your AI runs `praxis mcp ...` against your org's gateway)*
 
 > "Debug my failed release."
-> *(your AI sources the release-debugging skill from praxis cloud
-> and walks the diagnosis with you)*
+> *(your AI loads the `praxis-release-debugging` skill that login
+> just installed and walks the diagnosis with you)*
 
-## Surface today (v0.4.x)
+## Surface (v0.7)
+
+The CLI ships exactly **8 user-facing commands**. All except `login`
+and `completion` are AI-callable and emit `--json` output (auto-emit
+when stdout is non-TTY).
 
 ```
-praxis init                       install skill into AI hosts +
-                                   report state JSON
-praxis login                      browser-callback authentication
-                                   --profile X | --url Y | --token Z
-praxis whoami                     live identity check via /auth/me
-praxis status                     local snapshot (no network call)
-praxis logout                     remove credentials
-                                   --profile X | --all
-praxis use <profile>              kubectl-style: set active profile
-praxis install-skill              write the praxis skill into all
-                                   detected AI hosts (Claude Code,
-                                   Codex, Gemini CLI; user-scope only)
-praxis uninstall-skill            remove from every host
-praxis list-skills                what's installed and where
-praxis refresh-skills             rewrite SKILL.md files (auto-called
-                                   by `praxis update`)
-praxis version | update | completion | logout | --help
+praxis login [--profile X] [--url Y] [--token Z]
+   The one-stop setup command. Idempotent. Re-run to refresh skills
+   or switch profiles. The only command that's human-only — opens a
+   browser.
+
+praxis logout [--all]
+   Active profile: removes credentials, all org skills (praxis-*),
+   and the MCP manifest snapshot. Meta-skill stays so the AI host
+   can still call praxis.
+   --all wipes every profile's credentials and every host's org
+   skills.
+
+praxis status [--refresh] [--json]
+   Local-only snapshot of profile, auth, installed skills.
+   --refresh adds a live /auth/me check (catches expired tokens).
+
+praxis mcp [<mcp> <fn>] [--json] [--arg k=v ...] [--body '<json>']
+   No args     → list every MCP namespace + function the gateway
+                 exposes (with arg shapes).
+   <mcp> <fn>  → invoke that function under your org credentials.
+
+praxis update [--yes] [--json]
+   Self-update binary. --json implies --yes.
+
+praxis version [--json]   build metadata
+praxis completion <shell> shell completion script (bash/zsh/fish/ps)
+praxis help               cobra help
 ```
 
-## Multiple deployments (internal-support engineers)
+### v0.7 invariant
+
+> **Login is the only mutator of installed-skill state.**
+> The CLI's on-disk state always matches the active profile.
+
+Profile switching is `praxis login --profile X` — login wipes the
+previous profile's org skills and installs X's. There's never a
+mixed-profile state on disk.
+
+## Multiple deployments
+
+Each Praxis deployment is its own profile. Switch by re-running
+login.
 
 ```bash
-praxis login                                            # → "default"
-praxis login --profile acme --url https://acme.console.facets.cloud
-praxis login --profile vymo --url https://vymo.console.facets.cloud
+praxis login                                     # → "default"
+praxis login --profile acme  --url https://acme.console.facets.cloud
+praxis login --profile bigcorp --url https://bigcorp.console.facets.cloud
 
-praxis use acme                # all subsequent commands use acme
-praxis whoami                  # → reports acme's identity
-praxis status                  # → reports acme's URL + auth state
-
-# One-shot overrides (no `use` needed):
-praxis whoami --profile vymo
-PRAXIS_PROFILE=vymo praxis status
+# Active profile is now bigcorp. To switch back to acme:
+praxis login --profile acme
 ```
 
-Single-profile users never see this — `praxis login` writes "default"
-and everything resolves there silently.
+Re-login with the same profile is the canonical "refresh" path.
 
-### Files
+> NOTE: `PRAXIS_PROFILE` env var and `praxis use <name>` are
+> deprecated in v0.7 and removed in v0.8. Use `praxis login --profile X`.
+
+## Files
 
 ```
-~/.praxis/credentials   INI format, matches ~/.facets/credentials
-                         [default]  url, username, token
-                         [acme]     url, username, token
-                         …
-                         (chmod 0600)
+~/.praxis/credentials      INI, one [section] per profile (chmod 0600)
+~/.praxis/config.json      active-profile pointer, set by login
+~/.praxis/mcp-tools.json   manifest snapshot of gateway tools
+~/.praxis/installed.json   receipt of skill files written across hosts
 
-~/.praxis/config.json   Active-profile pointer, set by `praxis use`.
-                         Doesn't exist until first `use` call.
-                         (chmod 0600)
+~/.claude/skills/praxis/SKILL.md      meta-skill (always present)
+~/.claude/skills/praxis-<name>/...    org skills (cycle on profile switch)
+~/.agents/skills/...                  same shape for Codex
+~/.gemini/skills/...                  same shape for Gemini CLI
 ```
 
 ## Why a CLI
 
-CLIs run anywhere: any AI host, CI, cron, shell pipelines. MCP support
-varies by tool; `bash -c "praxis …"` doesn't. The CLI also makes auth
-and audit per-invocation, so every call is attributable.
+CLIs run anywhere: any AI host, CI, cron, shell pipelines. MCP
+support varies by tool; `bash -c "praxis …"` doesn't. The CLI also
+makes auth and audit per-invocation, so every call is attributable.
 
 ## Develop
 
@@ -121,9 +153,9 @@ make lint            # gofmt + vet + test
 go test -cover ./... # coverage
 ```
 
-Releases are cut by tagging `v*.*.*` and pushing — GitHub Actions runs
-goreleaser, publishes the GitHub Release, and updates the Brew tap
-formula automatically.
+Releases are cut by tagging `v*.*.*` and pushing — GitHub Actions
+runs goreleaser, publishes the GitHub Release, and updates the Brew
+tap formula automatically.
 
 ## License
 
