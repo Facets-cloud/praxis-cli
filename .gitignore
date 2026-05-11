@@ -22,3 +22,9 @@ coverage.txt
 # Local config
 .env
 .env.local
+
+# Claude Code state — agent transcripts, plans, worktrees
+/.claude/
+
+# codegraph index
+/.codegraph/
