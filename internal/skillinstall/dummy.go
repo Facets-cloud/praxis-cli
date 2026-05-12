@@ -5,11 +5,14 @@ import (
 	"sort"
 )
 
-// dummySkills is the binary-embedded catalog. Currently only one skill,
-// the "praxis" meta-skill — its content teaches the host AI how to
-// drive the praxis CLI. Org skills come from the server's
-// /v1/skills/bundle endpoint and are installed alongside this one
-// during `praxis login`.
+// dummySkills is the binary-embedded catalog of meta-skills. Two
+// entries today — "praxis" (drives the CLI surface) and
+// "praxis-memory" (drives the org-memory recall/list/add flow).
+// Both are installed by `praxis login`. Org skills come from the
+// server's /v1/skills/bundle endpoint and live alongside these,
+// prefixed `praxis-<name>`; the IsMetaSkill exclusion on
+// UninstallByPrefix keeps the prefix-shaped "praxis-memory" from
+// being wiped during profile switches.
 var dummySkills = map[string]string{
 	"praxis": `---
 name: praxis
