@@ -14,6 +14,7 @@ package memory
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -159,19 +160,21 @@ var Create = func(baseURL, token string, req CreateRequest) (*Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	m, err := doJSONOptional[Memory](baseURL, token, http.MethodPost, basePath, bytes.NewReader(body))
+	m, err := doJSON[Memory](baseURL, token, http.MethodPost, basePath, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	if m == nil {
-		return nil, fmt.Errorf("server returned no memory body")
-	}
-	return m, nil
+	return &m, nil
 }
 
 // doJSON is the shared transport. Returns a typed payload or an error
 // shaped as `HTTP <status> from <url>: <body-prefix>` so callers can
 // branch on status without re-parsing the URL.
+//
+// Uses http.NewRequestWithContext with a bounded timeout so cancellation
+// propagates (noctx lint expectation). The http.Client{Timeout} on top
+// is belt-and-braces — it also bounds connection + handshake time
+// before the context deadline kicks in.
 func doJSON[T any](baseURL, token, method, path string, body io.Reader) (T, error) {
 	var zero T
 	if baseURL == "" {
@@ -181,8 +184,11 @@ func doJSON[T any](baseURL, token, method, path string, body io.Reader) (T, erro
 		return zero, fmt.Errorf("token is required")
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
 	full := strings.TrimRight(baseURL, "/") + path
-	req, err := http.NewRequest(method, full, body)
+	req, err := http.NewRequestWithContext(ctx, method, full, body)
 	if err != nil {
 		return zero, err
 	}
@@ -214,57 +220,6 @@ func doJSON[T any](baseURL, token, method, path string, body io.Reader) (T, erro
 		return zero, fmt.Errorf("parse response: %w", err)
 	}
 	return out, nil
-}
-
-// doJSONOptional is like doJSON but returns a pointer (so callers can
-// distinguish "no body" from a zero value) and treats 404 as a
-// non-error nil result. Used by Create — which posts and expects a
-// body back — to surface a clean error when the server replies with
-// an unexpected 404.
-func doJSONOptional[T any](baseURL, token, method, path string, body io.Reader) (*T, error) {
-	if baseURL == "" {
-		return nil, fmt.Errorf("baseURL is required")
-	}
-	if token == "" {
-		return nil, fmt.Errorf("token is required")
-	}
-
-	full := strings.TrimRight(baseURL, "/") + path
-	req, err := http.NewRequest(method, full, body)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	client := &http.Client{Timeout: defaultTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
-	}
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf(
-			"HTTP %d from %s: %s",
-			resp.StatusCode, full, truncate(string(raw), 200),
-		)
-	}
-
-	var out T
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-	return &out, nil
 }
 
 func truncate(s string, max int) string {

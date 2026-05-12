@@ -181,7 +181,10 @@ func TestUninstallByPrefix_KeepsMetaWipesPrefixed(t *testing.T) {
 	}
 
 	// Meta-skill must survive. Verify via List() and via the on-disk file.
-	recorded, _ := List()
+	recorded, err := List()
+	if err != nil {
+		t.Fatalf("List() err = %v", err)
+	}
 	if len(recorded) != 3 {
 		t.Errorf("List() = %d entries after wipe, want 3 (meta-skill x 3 hosts)", len(recorded))
 	}
@@ -230,7 +233,10 @@ func TestUninstallByPrefix_KeepsPrefixShapedMetaSkill(t *testing.T) {
 	}
 
 	// Both meta-skills must survive — 2 meta × 3 hosts = 6 entries.
-	recorded, _ := List()
+	recorded, err := List()
+	if err != nil {
+		t.Fatalf("List() err = %v", err)
+	}
 	if len(recorded) != 6 {
 		t.Errorf("List() = %d entries after wipe; want 6 (2 meta-skills x 3 hosts)", len(recorded))
 	}

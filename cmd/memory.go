@@ -88,6 +88,41 @@ Output is always JSON — this CLI is consumed by AI hosts, not humans.
 Human inspection lives in the agent-factory UI.`,
 }
 
+// validKinds / validAudiences / validImportances guard the user-supplied
+// strings on `memory add` so typos fail fast with exitcode.Usage instead
+// of round-tripping to a server 422. Keys are the lowercase form the
+// CLI accepts; values map to the wire-shape constants exported by the
+// memory package.
+var (
+	validKinds = map[string]memory.Kind{
+		"user":      memory.Kind("user"),
+		"feedback":  memory.Kind("feedback"),
+		"project":   memory.Kind("project"),
+		"reference": memory.Kind("reference"),
+	}
+	validAudiences = map[string]memory.Audience{
+		"user": memory.AudienceUser,
+		"org":  memory.AudienceOrg,
+		// AGENT is intentionally not accepted from the CLI — agent-scoped
+		// writes are owned by agent-factory's in-process consolidator,
+		// not human/AI callers via praxis.
+	}
+	validImportances = map[string]memory.Importance{
+		"low":      memory.Importance("low"),
+		"medium":   memory.Importance("medium"),
+		"high":     memory.Importance("high"),
+		"critical": memory.Importance("critical"),
+	}
+)
+
+// usageExit prints a Usage-code error envelope and terminates. Used for
+// client-side flag validation failures where the user (or AI host)
+// passed nonsense before we ever touched the network.
+func usageExit(out io.Writer, msg, hint string) {
+	render.PrintError(out, true, msg, hint, exitcode.Usage)
+	os.Exit(exitcode.Usage)
+}
+
 // activeOrAuthExit resolves the current credentials profile or exits
 // with the auth code. Mirrors cmd/mcp.go.
 func activeOrAuthExit(out io.Writer) credentials.Active {
@@ -114,6 +149,9 @@ var memoryRecallCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
+		if memoryRecallLimit < 1 || memoryRecallLimit > 20 {
+			usageExit(out, "--limit must be between 1 and 20", "")
+		}
 		active := activeOrAuthExit(out)
 
 		query := strings.Join(args, " ")
@@ -141,6 +179,12 @@ var memoryListCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
+		if memoryListLimit < 1 || memoryListLimit > 100 {
+			usageExit(out, "--limit must be between 1 and 100", "")
+		}
+		if memoryListOffset < 0 {
+			usageExit(out, "--offset must be >= 0", "")
+		}
 		active := activeOrAuthExit(out)
 
 		params := memory.ListParams{
@@ -189,6 +233,25 @@ var memoryAddCmd = &cobra.Command{
 			content = string(raw)
 		}
 
+		kind, ok := validKinds[memoryAddKind]
+		if !ok {
+			usageExit(out,
+				fmt.Sprintf("invalid --kind %q", memoryAddKind),
+				"allowed: user | feedback | project | reference")
+		}
+		audience, ok := validAudiences[memoryAddAudience]
+		if !ok {
+			usageExit(out,
+				fmt.Sprintf("invalid --audience %q", memoryAddAudience),
+				"allowed: user | org  (agent-scoped writes belong to agent-factory)")
+		}
+		importance, ok := validImportances[memoryAddImportance]
+		if !ok {
+			usageExit(out,
+				fmt.Sprintf("invalid --importance %q", memoryAddImportance),
+				"allowed: low | medium | high | critical")
+		}
+
 		active := activeOrAuthExit(out)
 
 		req := memory.CreateRequest{
@@ -196,9 +259,9 @@ var memoryAddCmd = &cobra.Command{
 			Slug:       memoryAddSlug,
 			Content:    content,
 			Summary:    memoryAddSummary,
-			Kind:       memory.Kind(memoryAddKind),
-			Audience:   memory.Audience(memoryAddAudience),
-			Importance: memory.Importance(memoryAddImportance),
+			Kind:       kind,
+			Audience:   audience,
+			Importance: importance,
 		}
 		if memoryAddTagsCSV != "" {
 			req.Tags = splitCSV(memoryAddTagsCSV)

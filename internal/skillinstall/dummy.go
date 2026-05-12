@@ -1,6 +1,9 @@
 package skillinstall
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // dummySkills is the binary-embedded catalog. Currently only one skill,
 // the "praxis" meta-skill — its content teaches the host AI how to
@@ -323,12 +326,16 @@ func IsMetaSkill(name string) bool {
 	return ok
 }
 
-// MetaSkillNames returns the names of every binary-embedded meta-skill.
-// Used by login to iterate the install step. Order is not guaranteed.
+// MetaSkillNames returns the names of every binary-embedded meta-skill
+// in deterministic (alphabetical) order. Used by login to iterate the
+// install step — deterministic order keeps the install-log output
+// stable across runs and prevents tests from being flaky on map
+// iteration randomness.
 func MetaSkillNames() []string {
 	names := make([]string, 0, len(dummySkills))
 	for k := range dummySkills {
 		names = append(names, k)
 	}
+	sort.Strings(names)
 	return names
 }
