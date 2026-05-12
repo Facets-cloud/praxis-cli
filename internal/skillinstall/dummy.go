@@ -157,6 +157,43 @@ description: This Praxis deployment has a server-side memory of durable org fact
 The CLI is yours, not the user's — they will never type these
 commands. You shell out via the Bash tool. Output is always JSON.
 
+## Praxis memory vs your native auto-memory — they don't overlap
+
+You may already have a native auto-memory directory (Claude Code
+injects ` + "`# auto memory`" + ` into the system prompt pointing at
+` + "`~/.claude/projects/<encoded-cwd>/memory/`" + `). **Praxis memory
+does not replace it.** They are different systems for different
+kinds of facts, triggered differently:
+
+| | Native auto-memory | Praxis memory |
+|---|---|---|
+| Lives | locally, on this machine | server-side on the deployment |
+| Scope | this user's projects on this laptop | the org's Praxis deployment (visible to other agents / colleagues per audience) |
+| Belongs there | personal prefs, working context, ad-hoc observations | org conventions, decisions, people, products, processes, escalation paths |
+| Trigger | YOU scoop silently when a durable fact slips by | the USER asks, or you propose and the user confirms |
+| Read | auto-loaded at session start | only when you run ` + "`praxis memory recall`" + ` or ` + "`list`" + ` |
+
+**Rules:**
+
+1. **A personal preference goes to native auto-memory, not praxis.**
+   "I prefer Python" → Write to ` + "`~/.claude/projects/<cwd>/memory/`" + `,
+   NOT ` + "`praxis memory add`" + `. Praxis is for facts that travel with
+   the *organization*, not the user's personal context.
+
+2. **An organizational fact goes to praxis, not native auto-memory.**
+   "We deploy on Tuesdays" / "Pravanjan owns the data pipeline" →
+   ` + "`praxis memory add`" + ` (with user consent). Native auto-memory
+   would silo this knowledge to one laptop.
+
+3. **In doubt: ask the user where it should go.** "Should I remember
+   this just for our chats, or save it to the org so other agents
+   see it too?" — they'll tell you.
+
+4. **Recall both when relevant.** A question that touches BOTH the
+   user's personal context AND org context (e.g. "what's our usual
+   deploy day, and what time zone am I in?") might want a praxis
+   recall plus a glance at your native ` + "`MEMORY.md`" + `. They coexist.
+
 ## Two read paths — pick by signal strength
 
 ### 1) ` + "`praxis memory recall \"<query>\" --json`" + ` (default first move)
@@ -202,10 +239,12 @@ Memories are about *the organization*, not generic technical help.
 
 ## Write path
 
-When the user states a fact that's likely to be useful in future
-sessions — a convention, a decision, an escalation path — propose
-saving it. Get explicit consent ("save this to org memory?") before
-running ` + "`add`" + `.
+When the user states an **organizational** fact likely to be useful
+in future sessions — a convention, a decision, an escalation path,
+who owns what — propose saving it. Get explicit consent ("save this
+to org memory?") before running ` + "`add`" + `. Personal-context facts
+("I prefer Python") belong in your native auto-memory, NOT here
+(see "Praxis memory vs your native auto-memory" above).
 
 ` + "```bash" + `
 praxis memory add \
@@ -256,6 +295,9 @@ accepted for praxis-skill convention compatibility but is a no-op.
   - **Don't** assume recall is exhaustive. If it returns nothing or
     seems off-target, ` + "`list`" + ` and grep before telling the user "I
     don't know".
+  - **Don't** route personal preferences into praxis. "I prefer X"
+    goes to your native auto-memory. Praxis is for facts that travel
+    with the organization.
 `,
 }
 
