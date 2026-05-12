@@ -6,7 +6,50 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(Empty — see 0.7.0 below.)
+(Empty — see 0.8.0 below.)
+
+## [0.8.0] — 2026-05-12
+
+Introduces `praxis memory` — a small, AI-host-only CLI surface that
+exposes the org memory store on a Praxis deployment without any
+filesystem sync against Claude's native auto-memory.
+
+### Added
+- `praxis memory recall "<query>"` — server-side keyword ranking
+  (Mongo `$text`). Returns ranked matches with `relevance_score`.
+- `praxis memory list` — full dump with content included; AI hosts
+  grep the JSON client-side when keywords are weak or recall misses.
+  Filters: `--category`, `--tag`, `--limit`, `--offset`.
+- `praxis memory add` — write path with explicit user consent.
+  Flags: `--title`, `--content` (or `-` for stdin), `--summary`,
+  `--slug`, `--kind`, `--audience`, `--importance`, `--tag`.
+- New `praxis-memory` meta-skill, binary-embedded and installed
+  alongside the existing `praxis` meta-skill on `praxis login`.
+  The skill body teaches the recall-vs-list-grep heuristic and
+  explicitly delineates praxis memory from Claude's native
+  auto-memory (personal prefs → native; org facts → praxis).
+- `internal/memory` REST client (84.2% test coverage) for the
+  `/ai-api/memories` API surface on the deployment.
+
+### Changed
+- `skillinstall.UninstallByPrefix` now preserves every binary-embedded
+  meta-skill via the new `IsMetaSkill` exclusion. Previously only
+  the literal name `"praxis"` survived; now prefix-shaped
+  meta-skills like `"praxis-memory"` also survive profile switches
+  and logout.
+- `skillinstall.MetaSkillNames` returns names in deterministic
+  (alphabetical) order so login output ordering is stable across runs.
+- `praxis login` step 1 now installs every binary-embedded meta-skill
+  (was: only `"praxis"`). New meta-skills only need a `dummySkills`
+  entry; login picks them up via `MetaSkillNames`.
+
+### Companion backend changes
+- `agent-factory` v(rolling): `POST /ai-api/memories` `?agent_id=`
+  becomes optional; new `POST /ai-api/memories/recall` route wired
+  to Mongo `$text` over the existing index. CLI degrades cleanly
+  against a deployment without these — `recall` returns HTTP 405,
+  `add` returns 422 — so the v0.8 binary is safe to ship before
+  deployment.
 
 ## [0.7.0] — 2026-05-08
 
