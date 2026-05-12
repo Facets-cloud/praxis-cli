@@ -118,10 +118,14 @@ func Uninstall(skillName string) ([]Installation, error) {
 //
 // Used by `praxis login` (to wipe the previous profile's org skills
 // before installing the new profile's catalog) and `praxis logout`
-// (to remove org skills alongside credentials). The meta-skill is
-// named "praxis" with no suffix, while every catalog skill is named
-// "praxis-<n>"; passing prefix="praxis-" therefore wipes only org
-// skills and leaves the meta-skill intact.
+// (to remove org skills alongside credentials).
+//
+// Meta-skills (anything in ContentFor) are PRESERVED even when their
+// name matches the prefix — e.g. "praxis-memory" starts with "praxis-"
+// but is a binary-embedded meta-skill and must survive profile
+// switches. The legacy meta-skill "praxis" (no suffix) survives the
+// `"praxis-"` prefix naturally; this exclusion handles new
+// prefix-shaped meta-skills as they're added.
 func UninstallByPrefix(prefix string) ([]Installation, error) {
 	if prefix == "" {
 		return nil, fmt.Errorf("UninstallByPrefix: prefix must be non-empty")
@@ -133,7 +137,7 @@ func UninstallByPrefix(prefix string) ([]Installation, error) {
 	var removed []Installation
 	var kept []Installation
 	for _, entry := range receipt.Skills {
-		if !strings.HasPrefix(entry.SkillName, prefix) {
+		if !strings.HasPrefix(entry.SkillName, prefix) || IsMetaSkill(entry.SkillName) {
 			kept = append(kept, entry)
 			continue
 		}

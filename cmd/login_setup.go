@@ -52,21 +52,28 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 		fmt.Fprintln(out, "(Continuing — credentials and MCP manifest snapshot will still be written.)")
 	}
 
-	// Step 1: meta-skill (idempotent — Install upserts). Host-dependent.
+	// Step 1: every binary-embedded meta-skill (idempotent — Install
+	// upserts). Host-dependent. As of v0.x there are two:
+	//   - "praxis"        the CLI driver
+	//   - "praxis-memory" the memory-recall guide
+	// Names come from MetaSkillNames() so adding another meta-skill
+	// only requires a dummySkills entry.
 	if !noHosts {
-		metaResults, err := installSkill(skillName, hosts)
-		if err != nil {
-			if !asJSON {
-				fmt.Fprintf(out, "Warning: meta-skill install failed: %v\n", err)
+		for _, name := range skillinstall.MetaSkillNames() {
+			metaResults, err := installSkill(name, hosts)
+			if err != nil {
+				if !asJSON {
+					fmt.Fprintf(out, "Warning: meta-skill %q install failed: %v\n", name, err)
+				}
+				continue
 			}
-		} else {
 			if !asJSON {
-				fmt.Fprintf(out, "Meta-skill installed into %d host(s):\n", len(metaResults))
+				fmt.Fprintf(out, "Meta-skill %q installed into %d host(s):\n", name, len(metaResults))
 				for _, r := range metaResults {
 					fmt.Fprintf(out, "  ✓ %-12s @ %s\n", r.Harness, r.Path)
 				}
 			}
-			state.metaSkill = liteResults(metaResults)
+			state.metaSkill = append(state.metaSkill, liteResults(metaResults)...)
 		}
 	}
 
