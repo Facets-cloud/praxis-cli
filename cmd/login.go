@@ -5,14 +5,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
@@ -20,6 +21,12 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
 )
+
+// pollInterval is how often the CLI hits GET /v1/cli-session/<nonce>/key
+// while waiting for the browser modal to deposit a key. 1.5s is fast
+// enough to feel responsive without spamming the server; well under the
+// 5-minute server-side TTL.
+const pollInterval = 1500 * time.Millisecond
 
 var (
 	loginProfile string
@@ -76,7 +83,7 @@ separate refresh command in v0.7.`,
 		if loginToken != "" {
 			return saveAndVerifyToken(out, asJSON, profileName, baseURL, loginToken)
 		}
-		return browserCallbackLogin(out, asJSON, profileName, baseURL, loginTimeout)
+		return browserSessionPollLogin(out, asJSON, profileName, baseURL, loginTimeout)
 	},
 }
 
@@ -93,69 +100,19 @@ func resolveLoginURL(profileName, flagURL string) string {
 	return credentials.DefaultURL
 }
 
-// browserCallbackLogin opens the browser, waits up to timeout for the
-// browser to POST the new key to the localhost listener, then saves +
-// verifies the captured token under profileName.
-func browserCallbackLogin(out io.Writer, asJSON bool, profileName, baseURL string, timeout time.Duration) error {
+// browserSessionPollLogin opens the browser to the api-keys page with a
+// cli_session nonce, then polls the server-side session endpoint until
+// the modal deposits the freshly-created key (or timeout elapses).
+//
+// This replaces the earlier http://127.0.0.1:<port>/key listener design,
+// which was increasingly blocked by browser security policies (Brave
+// Shields' localhost protection, Chromium Private Network Access). The
+// browser → server hop is now strictly same-origin, so neither CORS nor
+// PNA nor Shields are involved.
+func browserSessionPollLogin(out io.Writer, asJSON bool, profileName, baseURL string, timeout time.Duration) error {
 	sessionNonce := randomNonce()
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return fmt.Errorf("start localhost listener: %w", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-
-	type captured struct {
-		key string
-		err error
-	}
-	resultCh := make(chan captured, 1)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/key", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", baseURL)
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var body struct {
-			Session      string `json:"session"`
-			PlaintextKey string `json:"plaintext_key"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "bad json", http.StatusBadRequest)
-			resultCh <- captured{err: fmt.Errorf("bad callback body: %w", err)}
-			return
-		}
-		if body.Session != sessionNonce {
-			http.Error(w, "session mismatch", http.StatusForbidden)
-			resultCh <- captured{err: fmt.Errorf("session nonce mismatch")}
-			return
-		}
-		if body.PlaintextKey == "" {
-			http.Error(w, "missing key", http.StatusBadRequest)
-			resultCh <- captured{err: fmt.Errorf("missing plaintext_key")}
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-		resultCh <- captured{key: body.PlaintextKey}
-	})
-
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = srv.Serve(listener) }()
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(ctx)
-	}()
-
-	openURL, err := buildLoginURL(baseURL, port, sessionNonce)
+	openURL, err := buildLoginURL(baseURL, sessionNonce, suggestedKeyName())
 	if err != nil {
 		render.PrintError(out, asJSON, err.Error(),
 			"check the --url value (or PRAXIS_URL) — it must be a valid URL",
@@ -164,38 +121,133 @@ func browserCallbackLogin(out io.Writer, asJSON bool, profileName, baseURL strin
 	}
 	fmt.Fprintln(os.Stderr, "Opening browser to create a Praxis API key…")
 	fmt.Fprintln(os.Stderr, "  ", openURL)
-	fmt.Fprintf(os.Stderr, "Waiting for callback (timeout %s)…\n", timeout)
+	fmt.Fprintf(os.Stderr, "Waiting for the key (timeout %s)…\n", timeout)
 	if err := openBrowser(openURL); err != nil {
 		fmt.Fprintf(os.Stderr, "\nCouldn't auto-open browser (%v). Open the URL above manually.\n", err)
 	}
 
-	select {
-	case res := <-resultCh:
-		if res.err != nil {
-			render.PrintError(out, asJSON, res.err.Error(),
-				"the browser callback failed", exitcode.Auth)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	key, err := pollSessionKey(ctx, baseURL, sessionNonce, pollInterval)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			render.PrintError(out, asJSON, "login timed out",
+				"finish the API key creation in the browser within the timeout", exitcode.Auth)
 			os.Exit(exitcode.Auth)
 		}
-		return saveAndVerifyToken(out, asJSON, profileName, baseURL, res.key)
-	case <-time.After(timeout):
-		render.PrintError(out, asJSON, "login timed out",
-			"finish the API key creation in the browser within the timeout", exitcode.Auth)
+		render.PrintError(out, asJSON, err.Error(),
+			"the login handshake failed", exitcode.Auth)
 		os.Exit(exitcode.Auth)
 	}
-	return nil
+	return saveAndVerifyToken(out, asJSON, profileName, baseURL, key)
 }
 
-func buildLoginURL(baseURL string, callbackPort int, sessionNonce string) (string, error) {
+// pollSessionKey polls GET {baseURL}/ai-api/v1/cli-session/{nonce}/key
+// at the given interval until one of:
+//
+//   - 200 OK with {plaintext_key: "..."} — returns the key.
+//   - The context deadline fires — returns context.DeadlineExceeded.
+//   - The server returns 400 or 404 — returns a fatal error (the nonce
+//     was malformed or never created; retry would never succeed).
+//
+// 204 (pending), 5xx, and transient network errors all keep polling
+// silently. The CLI side is the source of truth for the polling loop;
+// the server is intentionally simple and stateless-ish.
+//
+// `interval` is the gap between attempts. Splitting it out as a
+// parameter keeps the function trivially testable without sub-second
+// fakery — tests pass 10–50ms intervals.
+func pollSessionKey(ctx context.Context, baseURL, nonce string, interval time.Duration) (string, error) {
+	endpoint := fmt.Sprintf("%s/ai-api/v1/cli-session/%s/key",
+		strings.TrimRight(baseURL, "/"), nonce)
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	for {
+		key, status, err := pollSessionOnce(ctx, client, endpoint)
+		if err != nil {
+			return "", err
+		}
+		if status == pollReady {
+			return key, nil
+		}
+		// pending or transient — wait then retry.
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+}
+
+type pollStatus int
+
+const (
+	pollPending pollStatus = iota
+	pollReady
+	pollTransient
+)
+
+// pollSessionOnce does a single GET and classifies the result. It
+// returns a fatal err only when retrying would never help (malformed
+// nonce, corrupt response). 5xx and network errors are folded into
+// pollTransient so the caller's loop just keeps going.
+func pollSessionOnce(ctx context.Context, client *http.Client, endpoint string) (string, pollStatus, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", pollPending, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return "", pollPending, err
+		}
+		return "", pollTransient, nil
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return "", pollPending, nil
+	case http.StatusOK:
+		var body struct {
+			PlaintextKey string `json:"plaintext_key"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			return "", pollPending, fmt.Errorf("decode session response: %w", err)
+		}
+		if body.PlaintextKey == "" {
+			return "", pollPending, fmt.Errorf("server returned empty plaintext_key")
+		}
+		return body.PlaintextKey, pollReady, nil
+	case http.StatusBadRequest, http.StatusNotFound:
+		return "", pollPending, fmt.Errorf("server rejected nonce: HTTP %d", resp.StatusCode)
+	default:
+		// 5xx or unexpected 2xx — keep trying.
+		return "", pollTransient, nil
+	}
+}
+
+func buildLoginURL(baseURL, sessionNonce, suggestedName string) (string, error) {
 	u, err := url.Parse(baseURL + "/ui/ai/settings/api-keys")
 	if err != nil {
 		return "", fmt.Errorf("invalid login URL %q: %w", baseURL, err)
 	}
 	q := u.Query()
-	q.Set("cli_callback", fmt.Sprintf("http://127.0.0.1:%d/key", callbackPort))
 	q.Set("cli_session", sessionNonce)
-	q.Set("suggested_name", "praxis-cli")
+	q.Set("suggested_name", suggestedName)
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// suggestedKeyName produces a unique-per-invocation key name so a
+// developer re-running `praxis login` doesn't hit the modal's
+// "name already exists" validation. 5 hex chars = 20 bits of
+// randomness, plenty to avoid collisions across a single user's keys.
+// The output matches the modal's name pattern ^[a-z0-9_-]+$.
+func suggestedKeyName() string {
+	b := make([]byte, 3)
+	_, _ = rand.Read(b)
+	return "praxis-cli-" + hex.EncodeToString(b)[:5]
 }
 
 func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token string) error {
