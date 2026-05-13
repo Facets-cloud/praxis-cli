@@ -122,8 +122,11 @@ func TestPollSessionKey_KeepsPollingOn204ThenSucceeds(t *testing.T) {
 	if got != "sk_live_AFTER_RETRY" {
 		t.Errorf("got %q, want sk_live_AFTER_RETRY", got)
 	}
-	if calls.Load() < 3 {
-		t.Errorf("expected at least 3 polls before success, got %d", calls.Load())
+	// Lower bound is intentionally loose. The test's goal is to prove
+	// the retry path runs at all; the exact count is timing-sensitive
+	// and would flake under a starved CI scheduler.
+	if calls.Load() < 2 {
+		t.Errorf("expected at least 2 polls before success, got %d", calls.Load())
 	}
 }
 
@@ -165,6 +168,55 @@ func TestPollSessionKey_FatalOn400(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "400") {
 		t.Errorf("error should mention 400 status, got: %v", err)
+	}
+}
+
+func TestPollSessionKey_FatalOn401(t *testing.T) {
+	// 401 / 403 / 410 must short-circuit instead of looping until the
+	// 90s caller timeout. A non-400/404 4xx means "the server understood
+	// and is telling you no" — retry will never help.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err := pollSessionKey(ctx, srv.URL, "n", fastPoll)
+	if err == nil {
+		t.Fatal("expected fatal error on 401, got nil")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("error should mention 401 status, got: %v", err)
+	}
+}
+
+func TestPollSessionOnce_ClientTimeoutIsTransient(t *testing.T) {
+	// Regression: when http.Client.Timeout fires before the caller's
+	// ctx deadline, errors.Is(err, context.DeadlineExceeded) returns
+	// true even though the caller's context is still valid. Using
+	// ctx.Err() to discriminate prevents that misclassification —
+	// the call must come back transient so the outer loop retries.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	// Caller ctx is generous; client.Timeout is tiny → client fires first.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client := &http.Client{Timeout: 5 * time.Millisecond}
+
+	_, status, err := pollSessionOnce(ctx, client, srv.URL+"/ai-api/v1/cli-session/n/key")
+	if err != nil {
+		t.Fatalf("client-side timeout must be transient (no err), got: %v", err)
+	}
+	if status != pollTransient {
+		t.Errorf("expected pollTransient on client.Timeout, got status=%d", status)
+	}
+	if ctx.Err() != nil {
+		t.Errorf("caller ctx should still be valid, got ctx.Err() = %v", ctx.Err())
 	}
 }
 

@@ -189,9 +189,18 @@ const (
 )
 
 // pollSessionOnce does a single GET and classifies the result. It
-// returns a fatal err only when retrying would never help (malformed
-// nonce, corrupt response). 5xx and network errors are folded into
-// pollTransient so the caller's loop just keeps going.
+// returns an err in two cases:
+//
+//   - A fatal server response where retrying would never help
+//     (malformed nonce, 4xx other than 429, corrupt response body).
+//   - The caller's context is done (timeout or cancel). Not "fatal"
+//     in the strict sense — it's the caller's own decision — but
+//     the outer loop bubbles it up so the user sees their own
+//     cancellation.
+//
+// 5xx, 429, transport errors, and the http.Client's own request
+// timeout are all folded into pollTransient so the caller's loop
+// just keeps going.
 func pollSessionOnce(ctx context.Context, client *http.Client, endpoint string) (string, pollStatus, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -199,8 +208,12 @@ func pollSessionOnce(ctx context.Context, client *http.Client, endpoint string) 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return "", pollPending, err
+		// Discriminate caller-cancellation from client-internal timeout.
+		// errors.Is(err, context.DeadlineExceeded) matches BOTH the
+		// caller's ctx firing AND http.Client.Timeout firing internally,
+		// so we have to ask ctx directly.
+		if ctx.Err() != nil {
+			return "", pollPending, ctx.Err()
 		}
 		return "", pollTransient, nil
 	}
@@ -222,7 +235,12 @@ func pollSessionOnce(ctx context.Context, client *http.Client, endpoint string) 
 	case http.StatusBadRequest, http.StatusNotFound:
 		return "", pollPending, fmt.Errorf("server rejected nonce: HTTP %d", resp.StatusCode)
 	default:
-		// 5xx or unexpected 2xx — keep trying.
+		// All other 4xx (except 429) is "the server understood and
+		// said no" — retrying won't help. 5xx, 429, and unexpected
+		// 2xx/3xx stay in the retry loop.
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			return "", pollPending, fmt.Errorf("server rejected nonce: HTTP %d", resp.StatusCode)
+		}
 		return "", pollTransient, nil
 	}
 }
