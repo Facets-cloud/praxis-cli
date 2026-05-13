@@ -88,22 +88,23 @@ const executionPreamble = "" +
 	"> tool list without making a network call.\n"
 
 // RenderedContent is the SKILL.md body actually written to disk on a
-// local AI host: original content with executionPreamble inserted just
-// after the YAML frontmatter (or at the top, if the skill has none).
-// The original body is preserved byte-for-byte.
+// local AI host: content with a valid frontmatter block at the top and
+// executionPreamble inserted just after that frontmatter. If the server
+// sends body-only markdown, Praxis synthesizes minimum Agent Skills
+// frontmatter so Codex and other loaders can still load the file.
 func (s Skill) RenderedContent() string {
-	return insertAfterFrontmatter(s.Content, executionPreamble)
+	return insertAfterFrontmatter(s.Content, executionPreamble, s.defaultFrontmatter(), s.PrefixedName())
 }
 
 // insertAfterFrontmatter splits a markdown document at the closing
 // `---` of its YAML frontmatter and inserts `extra` (plus a blank line)
-// between frontmatter and body. Documents without frontmatter get the
-// extra block prepended at the top.
-func insertAfterFrontmatter(body, extra string) string {
+// between frontmatter and body. Documents without valid frontmatter get
+// `fallbackFrontmatter` prepended first.
+func insertAfterFrontmatter(body, extra, fallbackFrontmatter, expectedName string) string {
 	body = strings.TrimLeft(body, "\n")
 	const open = "---\n"
 	if !strings.HasPrefix(body, open) {
-		return extra + "\n" + body
+		return fallbackFrontmatter + "\n" + extra + "\n" + body
 	}
 	rest := body[len(open):]
 	// Closing fence is a `---` line — match either "\n---\n" or
@@ -114,13 +115,69 @@ func insertAfterFrontmatter(body, extra string) string {
 		// Tolerate trailing fence at very end of file (no final newline).
 		idx = strings.Index(rest, "\n---")
 		if idx < 0 || idx+4 != len(rest) {
-			// Malformed frontmatter — bail gracefully and prepend.
-			return extra + "\n" + body
+			// Malformed frontmatter — make the file loadable and leave the
+			// original bytes in the markdown body for human inspection.
+			return fallbackFrontmatter + "\n" + extra + "\n" + body
 		}
 		endLen = len("\n---")
 	}
 	frontmatterEnd := len(open) + idx + endLen
-	return body[:frontmatterEnd] + "\n" + extra + "\n" + strings.TrimLeft(body[frontmatterEnd:], "\n")
+	frontmatter := ensureFrontmatterName(body[:frontmatterEnd], expectedName)
+	return frontmatter + "\n" + extra + "\n" + strings.TrimLeft(body[frontmatterEnd:], "\n")
+}
+
+func ensureFrontmatterName(frontmatter, expectedName string) string {
+	hasFinalNewline := strings.HasSuffix(frontmatter, "\n")
+	trimmed := strings.TrimSuffix(frontmatter, "\n")
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) < 2 {
+		return frontmatter
+	}
+
+	nameLine := "name: " + yamlString(expectedName)
+	for i := 1; i < len(lines)-1; i++ {
+		if strings.TrimLeft(lines[i], " \t") != lines[i] {
+			continue
+		}
+		if strings.HasPrefix(lines[i], "name:") {
+			lines[i] = nameLine
+			out := strings.Join(lines, "\n")
+			if hasFinalNewline {
+				out += "\n"
+			}
+			return out
+		}
+	}
+
+	lines = append(lines[:1], append([]string{nameLine}, lines[1:]...)...)
+	out := strings.Join(lines, "\n")
+	if hasFinalNewline {
+		out += "\n"
+	}
+	return out
+}
+
+func (s Skill) defaultFrontmatter() string {
+	description := strings.TrimSpace(s.Description)
+	if description == "" {
+		description = strings.TrimSpace(s.DisplayName)
+	}
+	if description == "" {
+		description = "Praxis catalog skill " + s.PrefixedName()
+	}
+	return fmt.Sprintf(
+		"---\nname: %s\ndescription: %s\n---\n",
+		yamlString(s.PrefixedName()),
+		yamlString(description),
+	)
+}
+
+func yamlString(s string) string {
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		return `""`
+	}
+	return string(encoded)
 }
 
 // Fetch is the HTTP seam — tests swap it to avoid hitting the network.

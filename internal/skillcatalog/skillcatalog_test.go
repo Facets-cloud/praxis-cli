@@ -111,8 +111,8 @@ Use ` + "`run_k8s_cli`" + ` to investigate.
 	}
 	rendered := s.RenderedContent()
 
-	// Frontmatter still at top, intact
-	if !strings.HasPrefix(rendered, "---\nname: k8s-operations") {
+	// Frontmatter still at top with the CLI install directory name.
+	if !strings.HasPrefix(rendered, "---\nname: \"praxis-k8s-operations\"") {
 		t.Errorf("frontmatter should still be at top, got prefix: %q", rendered[:80])
 	}
 	// Closing --- still present
@@ -136,15 +136,68 @@ Use ` + "`run_k8s_cli`" + ` to investigate.
 
 func TestRenderedContent_NoFrontmatter_PrependsPreamble(t *testing.T) {
 	s := Skill{
-		Name:    "plain",
-		Content: "# Just a heading\n\nNo frontmatter here.\n",
+		Name:        "plain",
+		Description: "Plain skill description",
+		Content:     "# Just a heading\n\nNo frontmatter here.\n",
 	}
 	rendered := s.RenderedContent()
-	if !strings.HasPrefix(rendered, "> **Execution context**") {
-		t.Errorf("preamble should be at top when no frontmatter, got: %q", rendered[:60])
+	if !strings.HasPrefix(rendered, "---\nname: \"praxis-plain\"\ndescription: \"Plain skill description\"\n---\n") {
+		t.Errorf("frontmatter should be synthesized at top, got: %q", rendered[:90])
+	}
+	preambleIdx := strings.Index(rendered, "Execution context")
+	bodyHeading := strings.Index(rendered, "# Just a heading")
+	if !(0 < preambleIdx && preambleIdx < bodyHeading) {
+		t.Errorf("order should be frontmatter, preamble, body; got preamble=%d body=%d", preambleIdx, bodyHeading)
 	}
 	if !strings.Contains(rendered, "# Just a heading") {
 		t.Errorf("original body missing")
+	}
+}
+
+func TestRenderedContent_NoFrontmatter_FallsBackDescription(t *testing.T) {
+	s := Skill{
+		Name:        "plain",
+		DisplayName: "Plain Display Name",
+		Content:     "# Just a heading\n",
+	}
+	rendered := s.RenderedContent()
+	if !strings.HasPrefix(rendered, "---\nname: \"praxis-plain\"\ndescription: \"Plain Display Name\"\n---\n") {
+		t.Errorf("frontmatter should use display name fallback, got: %q", rendered[:90])
+	}
+}
+
+func TestRenderedContent_ExistingFrontmatterNameMatchesInstallDirectory(t *testing.T) {
+	s := Skill{
+		Name: "x",
+		Content: `---
+name: x
+description: d
+---
+
+# Body
+`,
+	}
+	rendered := s.RenderedContent()
+	if !strings.HasPrefix(rendered, "---\nname: \"praxis-x\"\ndescription: d\n---\n") {
+		t.Errorf("frontmatter name should match install directory, got: %q", rendered[:80])
+	}
+	if !strings.Contains(rendered, "# Body") {
+		t.Errorf("original body missing")
+	}
+}
+
+func TestRenderedContent_MalformedFrontmatter_SynthesizesLoadableFrontmatter(t *testing.T) {
+	s := Skill{
+		Name:        "broken",
+		Description: "Broken skill description",
+		Content:     "---\nname: broken\n# missing closing fence\n",
+	}
+	rendered := s.RenderedContent()
+	if !strings.HasPrefix(rendered, "---\nname: \"praxis-broken\"\ndescription: \"Broken skill description\"\n---\n") {
+		t.Errorf("frontmatter should be synthesized at top, got: %q", rendered[:100])
+	}
+	if !strings.Contains(rendered, "---\nname: broken\n# missing closing fence") {
+		t.Errorf("original malformed content should remain in body")
 	}
 }
 

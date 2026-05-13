@@ -93,6 +93,8 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 			// Empty catalog is a definitive answer — wipe stale entries.
 			removed := wipePrevProfileSkills(out, asJSON)
 			state.removedSkills = liteResults(removed)
+			orphaned := removeOrphanedProfileSkills(out, asJSON, nil, hosts)
+			state.removedSkills = append(state.removedSkills, liteResults(orphaned)...)
 			if !asJSON {
 				fmt.Fprintln(out, "\nCatalog is empty for this org — nothing to install.")
 			}
@@ -100,6 +102,8 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 			// Catalog in hand. Now wipe and install.
 			removed := wipePrevProfileSkills(out, asJSON)
 			state.removedSkills = liteResults(removed)
+			orphaned := removeOrphanedProfileSkills(out, asJSON, skills, hosts)
+			state.removedSkills = append(state.removedSkills, liteResults(orphaned)...)
 			state.catalogSkills = installFetchedCatalog(out, asJSON, skills, hosts)
 		}
 	}
@@ -125,6 +129,31 @@ func wipePrevProfileSkills(out io.Writer, asJSON bool) []skillinstall.Installati
 	}
 	if len(removed) > 0 && !asJSON {
 		fmt.Fprintf(out, "\nRemoved %d skill(s) from previous profile.\n", len(removed))
+	}
+	return removed
+}
+
+// removeOrphanedProfileSkills removes stale on-disk praxis-* folders that
+// are not in installed.json. These can be left behind by older Praxis
+// builds or interrupted refreshes, and Codex will still try to load them.
+func removeOrphanedProfileSkills(out io.Writer, asJSON bool, skills []skillcatalog.Skill, hosts []harness.Harness) []skillinstall.Installation {
+	keep := make(map[string]bool, len(skills)+len(skillinstall.MetaSkillNames()))
+	for _, name := range skillinstall.MetaSkillNames() {
+		keep[name] = true
+	}
+	for _, sk := range skills {
+		keep[sk.PrefixedName()] = true
+	}
+
+	removed, err := skillinstall.RemoveOrphanedByPrefix("praxis-", hosts, keep)
+	if err != nil {
+		if !asJSON {
+			fmt.Fprintf(out, "Warning: removing stale skill folders failed: %v\n", err)
+		}
+		return nil
+	}
+	if len(removed) > 0 && !asJSON {
+		fmt.Fprintf(out, "Removed %d stale skill folder(s).\n", len(removed))
 	}
 	return removed
 }

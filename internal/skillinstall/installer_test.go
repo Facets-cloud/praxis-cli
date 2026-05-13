@@ -272,6 +272,58 @@ func TestIsMetaSkill_CoversAllEmbedded(t *testing.T) {
 	}
 }
 
+func TestRemoveOrphanedByPrefix_RemovesOnlyUntrackedUnkeptSkillDirs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+	host := hosts[0]
+
+	if _, err := Install("praxis-memory", hosts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallWithBody("praxis-recorded", "recorded body", hosts); err != nil {
+		t.Fatal(err)
+	}
+
+	staleDir := filepath.Join(host.SkillDir, "praxis-stale")
+	keptDir := filepath.Join(host.SkillDir, "praxis-kept")
+	thirdPartyDir := filepath.Join(host.SkillDir, "other-skill")
+	for _, dir := range []string{staleDir, keptDir, thirdPartyDir} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("body"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, err := RemoveOrphanedByPrefix("praxis-", hosts, map[string]bool{
+		"praxis-kept": true,
+	})
+	if err != nil {
+		t.Fatalf("RemoveOrphanedByPrefix err = %v", err)
+	}
+	if len(removed) != 1 {
+		t.Fatalf("removed %d entries, want 1: %+v", len(removed), removed)
+	}
+	if removed[0].SkillName != "praxis-stale" || removed[0].Harness != host.Name {
+		t.Errorf("removed unexpected entry: %+v", removed[0])
+	}
+
+	if _, err := os.Stat(staleDir); !os.IsNotExist(err) {
+		t.Errorf("stale dir should be removed, stat err = %v", err)
+	}
+	for _, dir := range []string{
+		keptDir,
+		thirdPartyDir,
+		filepath.Join(host.SkillDir, "praxis-memory"),
+		filepath.Join(host.SkillDir, "praxis-recorded"),
+	} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("dir should remain %s: %v", dir, err)
+		}
+	}
+}
+
 func TestMetaSkillNames_ReturnsAllEmbedded(t *testing.T) {
 	names := MetaSkillNames()
 	have := map[string]bool{}
