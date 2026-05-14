@@ -116,7 +116,13 @@ func insertAfterFrontmatter(body, extra, fallbackFrontmatter, expectedName strin
 		idx = strings.Index(rest, "\n---")
 		if idx < 0 || idx+4 != len(rest) {
 			// Malformed frontmatter — make the file loadable and leave the
-			// original bytes in the markdown body for human inspection.
+			// original bytes in the markdown body for human inspection. The
+			// resulting file has two leading `---` blocks: the synth one we
+			// prepend (parsed as frontmatter) and the broken original (now
+			// inside the body). Frontmatter loaders only consume the leading
+			// fence-delimited block, and a bare `---` line in markdown body
+			// is a CommonMark thematic break — so this remains loadable by
+			// Codex / Claude / Gemini skill scanners.
 			return fallbackFrontmatter + "\n" + extra + "\n" + body
 		}
 		endLen = len("\n---")
@@ -140,6 +146,12 @@ func ensureFrontmatterName(frontmatter, expectedName string) string {
 			continue
 		}
 		if strings.HasPrefix(lines[i], "name:") {
+			if lines[i] == nameLine {
+				// Already in the exact form we'd emit — skip the rewrite so
+				// we don't churn quoting (e.g. `name: praxis-x` → `name: "praxis-x"`)
+				// on every render of an already-correct file.
+				return frontmatter
+			}
 			lines[i] = nameLine
 			out := strings.Join(lines, "\n")
 			if hasFinalNewline {

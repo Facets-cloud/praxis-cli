@@ -186,6 +186,26 @@ description: d
 	}
 }
 
+func TestRenderedContent_ExistingFrontmatterNameAlreadyQuoted_NoChurn(t *testing.T) {
+	// When the catalog already ships `name: "praxis-x"` in the exact form
+	// the CLI would emit, ensureFrontmatterName should leave the frontmatter
+	// untouched — no re-quoting, no whitespace shuffling.
+	s := Skill{
+		Name: "x",
+		Content: `---
+name: "praxis-x"
+description: d
+---
+
+# Body
+`,
+	}
+	rendered := s.RenderedContent()
+	if !strings.HasPrefix(rendered, "---\nname: \"praxis-x\"\ndescription: d\n---\n") {
+		t.Errorf("frontmatter should be preserved verbatim, got: %q", rendered[:80])
+	}
+}
+
 func TestRenderedContent_MalformedFrontmatter_SynthesizesLoadableFrontmatter(t *testing.T) {
 	s := Skill{
 		Name:        "broken",
