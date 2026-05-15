@@ -154,6 +154,74 @@ func UninstallByPrefix(prefix string) ([]Installation, error) {
 	return removed, nil
 }
 
+// RemoveOrphanedByPrefix removes on-disk skill directories matching
+// `prefix` that are not tracked in the receipt and not present in `keep`.
+// It is used after a successful catalog fetch to clean stale Praxis org
+// skills that older installs may have left behind outside installed.json.
+//
+// RESERVED NAMESPACE CONTRACT: the `praxis-` prefix is owned by this CLI.
+// Any directory under a harness skill dir whose name starts with `praxis-`
+// is treated as CLI-managed: if it isn't in `installed.json`, not in the
+// `keep` set, and not a meta-skill, it is removed via os.RemoveAll. That
+// includes user-authored or third-party `praxis-foo` folders — callers
+// should not pass `prefix="praxis-"` if user-authored namespacing is in
+// play. In practice the only caller is `praxis login` post-auth setup,
+// which seeds `keep` from the freshly-fetched catalog so any unrelated
+// `praxis-*` folder on disk is, by definition, an orphan from an older
+// install or a different profile.
+//
+// Meta-skills (anything in ContentFor) are PRESERVED — see UninstallByPrefix
+// for the same exclusion logic.
+func RemoveOrphanedByPrefix(prefix string, hosts []harness.Harness, keep map[string]bool) ([]Installation, error) {
+	if prefix == "" {
+		return nil, fmt.Errorf("RemoveOrphanedByPrefix: prefix must be non-empty")
+	}
+	receipt, err := loadReceipt()
+	if err != nil {
+		return nil, err
+	}
+	recordedPaths := make(map[string]bool, len(receipt.Skills))
+	for _, entry := range receipt.Skills {
+		recordedPaths[filepath.Clean(entry.Path)] = true
+	}
+
+	now := time.Now().UTC()
+	var removed []Installation
+	for _, h := range hosts {
+		entries, err := os.ReadDir(h.SkillDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return removed, fmt.Errorf("read %s: %w", h.SkillDir, err)
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !strings.HasPrefix(name, prefix) || IsMetaSkill(name) || keep[name] {
+				continue
+			}
+			path := filepath.Join(h.SkillDir, name, "SKILL.md")
+			if recordedPaths[filepath.Clean(path)] {
+				continue
+			}
+			dir := filepath.Join(h.SkillDir, name)
+			if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
+				return removed, fmt.Errorf("remove %s: %w", dir, err)
+			}
+			removed = append(removed, Installation{
+				SkillName:   name,
+				Harness:     h.Name,
+				Path:        path,
+				InstalledAt: now,
+			})
+		}
+	}
+	return removed, nil
+}
+
 // List returns every installation currently recorded in the receipt.
 func List() ([]Installation, error) {
 	receipt, err := loadReceipt()
