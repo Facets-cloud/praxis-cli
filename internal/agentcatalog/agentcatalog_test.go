@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/Facets-cloud/praxis-cli/internal/render"
 )
 
 func TestAgentPrefixedName(t *testing.T) {
@@ -119,5 +122,93 @@ func TestFetchRequiresBaseURLAndToken(t *testing.T) {
 	}
 	if _, err := Fetch("http://x", ""); err == nil {
 		t.Error("empty token: expected error")
+	}
+}
+
+func TestRenderYAMLForClaudeCode(t *testing.T) {
+	a := Agent{
+		Name:         "tf-planner",
+		Description:  "Reviews terraform plans",
+		SystemPrompt: "You are a terraform reviewer.\nLook for risks.",
+		IsActive:     true,
+		Kind:         KindAgent,
+	}
+	out, err := a.Render("claude-code")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	wantPrefix := "---\nname: \"praxis-tf-planner\"\ndescription: \"Reviews terraform plans\"\n---\n"
+	if !strings.HasPrefix(out, wantPrefix) {
+		t.Errorf("frontmatter wrong:\n%s", out[:200])
+	}
+	if !strings.Contains(out, render.ExecutionPreamble) {
+		t.Error("rendered body must include the execution preamble")
+	}
+	if !strings.Contains(out, "You are a terraform reviewer.\nLook for risks.") {
+		t.Error("rendered body must include the system_prompt verbatim")
+	}
+}
+
+func TestRenderYAMLForGeminiCLI(t *testing.T) {
+	a := Agent{Name: "x", Description: "y", SystemPrompt: "z", IsActive: true, Kind: KindAgent}
+	out, err := a.Render("gemini-cli")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.HasPrefix(out, "---\nname: \"praxis-x\"") {
+		t.Errorf("gemini render should use same YAML format as claude:\n%s", out)
+	}
+}
+
+func TestRenderTOMLForCodex(t *testing.T) {
+	a := Agent{
+		Name:         "tf-planner",
+		Description:  "Reviews \"terraform\" plans",
+		SystemPrompt: "body content",
+		IsActive:     true,
+		Kind:         KindAgent,
+	}
+	out, err := a.Render("codex")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	wantHeader := "name = \"praxis-tf-planner\"\ndescription = \"Reviews \\\"terraform\\\" plans\"\ndeveloper_instructions = \"\"\"\n"
+	if !strings.HasPrefix(out, wantHeader) {
+		t.Errorf("TOML header wrong:\n%s", out[:200])
+	}
+	if !strings.HasSuffix(out, "\"\"\"\n") {
+		t.Errorf("TOML body must close on triple-quote sentinel:\n...%s", out[len(out)-50:])
+	}
+	if !strings.Contains(out, render.ExecutionPreamble) {
+		t.Error("TOML body must include the execution preamble")
+	}
+}
+
+func TestRenderTOMLRejectsTripleQuoteInPrompt(t *testing.T) {
+	a := Agent{
+		Name:         "x",
+		Description:  "y",
+		SystemPrompt: `here is """ inside`,
+		IsActive:     true,
+		Kind:         KindAgent,
+	}
+	_, err := a.Render("codex")
+	if err == nil {
+		t.Fatal("Render should reject system_prompt containing triple-quote — Codex TOML sentinel collision")
+	}
+}
+
+func TestRenderSubagentUsesSubPrefix(t *testing.T) {
+	a := Agent{Name: "log-analyzer", Description: "d", SystemPrompt: "p", IsActive: true, Kind: KindSubagent}
+	out, _ := a.Render("claude-code")
+	if !strings.Contains(out, "name: \"praxis-sub-log-analyzer\"") {
+		t.Errorf("subagent should render with praxis-sub- prefix in frontmatter:\n%s", out[:200])
+	}
+}
+
+func TestRenderUnknownHarness(t *testing.T) {
+	a := Agent{Name: "x", Description: "y", SystemPrompt: "z", IsActive: true, Kind: KindAgent}
+	if _, err := a.Render("nonsense"); err == nil {
+		t.Fatal("unknown harness should error")
 	}
 }

@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Facets-cloud/praxis-cli/internal/render"
 )
 
 const (
@@ -176,4 +178,92 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// Render produces the on-disk file body for the given harness.
+//
+//   - claude-code / gemini-cli: YAML frontmatter + executionPreamble + system_prompt.
+//   - codex: TOML with `developer_instructions` holding the same content
+//     (preamble + system_prompt), wrapped in triple-quoted string literals.
+//
+// Returns an error for unknown harness names, and for Codex if the
+// system_prompt contains the `"""` triple-quote sentinel (rare; the
+// installer logs and skips that single agent).
+func (a Agent) Render(harnessName string) (string, error) {
+	descriptionForRender := a.Description
+	if descriptionForRender == "" {
+		descriptionForRender = a.DisplayName
+	}
+	if descriptionForRender == "" {
+		descriptionForRender = "Praxis catalog " + a.PrefixedName()
+	}
+
+	body := render.ExecutionPreamble + "\n" + a.SystemPrompt
+
+	switch harnessName {
+	case "claude-code", "gemini-cli":
+		return renderYAML(a.PrefixedName(), descriptionForRender, body), nil
+	case "codex":
+		return renderTOML(a.PrefixedName(), descriptionForRender, body)
+	default:
+		return "", fmt.Errorf("agentcatalog: unsupported harness %q", harnessName)
+	}
+}
+
+func renderYAML(name, description, body string) string {
+	return "---\n" +
+		"name: " + yamlString(name) + "\n" +
+		"description: " + yamlString(description) + "\n" +
+		"---\n\n" +
+		body + "\n"
+}
+
+func renderTOML(name, description, body string) (string, error) {
+	if strings.Contains(body, `"""`) {
+		return "", fmt.Errorf("agentcatalog: system_prompt for %q contains triple-quote sentinel; cannot render as Codex TOML", name)
+	}
+	return "name = " + tomlString(name) + "\n" +
+		"description = " + tomlString(description) + "\n" +
+		"developer_instructions = \"\"\"\n" +
+		body + "\n" +
+		"\"\"\"\n", nil
+}
+
+// yamlString encodes via json.Marshal for safe quoting in a YAML scalar
+// context (JSON strings are a strict subset of YAML's double-quoted form).
+func yamlString(s string) string {
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		return `""`
+	}
+	return string(encoded)
+}
+
+// tomlString applies TOML basic-string escaping — same rules as JSON for
+// the characters we care about (quote, backslash, control chars).
+func tomlString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(&b, `\u%04X`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
