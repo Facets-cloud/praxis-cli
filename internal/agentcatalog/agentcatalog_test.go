@@ -116,6 +116,30 @@ func TestFetchTolerates404(t *testing.T) {
 	}
 }
 
+// 404 on one endpoint is not a partial failure — it's "this Praxis
+// deployment doesn't expose this resource type." Fetch should return
+// whatever the OTHER endpoint provided rather than aborting the
+// install. Real-world trigger: deployments that ship custom-agents
+// but not yet subagents.
+func TestFetchTolerates404FromOneEndpoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ai-api/custom-agents":
+			_, _ = w.Write([]byte(`[{"name":"alpha","system_prompt":"a","is_active":true}]`))
+		case "/ai-api/subagents":
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	got, err := Fetch(srv.URL, "tok")
+	if err != nil {
+		t.Fatalf("Fetch should tolerate 404 on one endpoint, got: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "alpha" {
+		t.Fatalf("want 1 alpha agent (subagents 404'd, custom-agents returned 1), got %#v", got)
+	}
+}
+
 func TestFetchRequiresBaseURLAndToken(t *testing.T) {
 	if _, err := Fetch("", "tok"); err == nil {
 		t.Error("empty baseURL: expected error")
