@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
@@ -38,6 +39,7 @@ verification result.`,
 
 		active, _ := credentials.ResolveActive("")
 		skills, _ := skillinstall.List()
+		agents, _ := agentinstall.List()
 		loggedIn := active.Loaded && active.Profile.Token != ""
 
 		state := map[string]any{
@@ -47,6 +49,7 @@ verification result.`,
 			"logged_in":        loggedIn,
 			"username":         active.Profile.Username,
 			"skills_installed": skills,
+			"agents_installed": agents,
 		}
 
 		// --refresh: live token check via /auth/me. Folds in the
@@ -93,6 +96,10 @@ verification result.`,
 		fmt.Fprintf(out, "skills:     %d installed\n", len(skills))
 		for _, s := range skills {
 			fmt.Fprintf(out, "  - %-30s %-12s @ %s\n", s.SkillName, s.Harness, s.Path)
+		}
+		fmt.Fprintf(out, "agents:     %d installed\n", len(agents))
+		for _, a := range agents {
+			fmt.Fprintf(out, "  - %-30s %-9s %-12s @ %s\n", a.AgentName, a.Kind, a.Harness, a.Path)
 		}
 		return nil
 	},

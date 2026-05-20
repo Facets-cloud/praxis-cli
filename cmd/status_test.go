@@ -80,6 +80,21 @@ func TestStatusCmd_DoesNotCallNetwork(t *testing.T) {
 	}
 }
 
+func TestStatusCmd_IncludesAgentsInstalled(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PRAXIS_PROFILE", "")
+	resetStatusFlags()
+
+	var buf bytes.Buffer
+	statusCmd.SetOut(&buf)
+	if err := statusCmd.RunE(statusCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	if !strings.Contains(buf.String(), `"agents_installed"`) {
+		t.Errorf("status JSON should include agents_installed key, got:\n%s", buf.String())
+	}
+}
+
 func TestStatusCmd_HonorsActiveProfileFromUseConfig(t *testing.T) {
 	// `praxis use acme` is the documented way to switch profiles —
 	// status must reflect that without any flag.
