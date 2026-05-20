@@ -25,9 +25,21 @@ type Installation struct {
 	InstalledAt time.Time `json:"installed_at"`
 }
 
-// Receipt is the on-disk format of installed.json.
+// AgentInstallation is one (agent, harness, file) tuple — the unit
+// recorded in the receipt for later list/uninstall of subagent files.
+type AgentInstallation struct {
+	AgentName   string    `json:"agent_name"`
+	Kind        string    `json:"kind"`         // "agent" | "subagent"
+	Harness     string    `json:"harness"`
+	Path        string    `json:"path"`
+	InstalledAt time.Time `json:"installed_at"`
+}
+
+// Receipt is the on-disk format of installed.json. Skills and agents
+// share the file; old skill-only receipts deserialize with Agents nil.
 type Receipt struct {
-	Skills []Installation `json:"skills"`
+	Skills []Installation      `json:"skills"`
+	Agents []AgentInstallation `json:"agents,omitempty"`
 }
 
 // Install writes the named skill into every detected harness's user-level
