@@ -159,6 +159,14 @@ func fetchOne(baseURL, token, path, kind string) ([]Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
+	// 404 means this Praxis deployment doesn't expose this endpoint
+	// (e.g. older server versions, or deployments that don't ship the
+	// subagents route). Treat as "empty list, no rows of this kind
+	// available" and let the caller continue with whatever the other
+	// endpoint returned. Auth and server-error failures still bubble.
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d from %s: %s", resp.StatusCode, url, truncate(string(body), 200))
 	}
