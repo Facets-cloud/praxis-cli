@@ -28,11 +28,14 @@ Once installed and logged in, your local AI host can:
 Each capability is one or more functions on a server-side MCP. Run
 `praxis mcp --json` for the live list of what's exposed for your org.
 
+- **Use org-curated subagents** — primary custom agents (devil's
+  advocate, terraform planner, release-debugger, etc.) and reusable
+  subagent helpers, sourced from your Praxis profile and installed
+  into your AI host's native subagent directory on every login.
+  List with `praxis agents`.
+
 ### Coming soon
 
-- **Custom agents and agent management** — invoke org-specific
-  subagents (devil's advocate, terraform planner, etc.) and manage
-  their configuration from the CLI.
 - **Incident operations** — open / query / attach evidence to
   incidents through the gateway.
 - **GitHub operations** — first-class `github` MCP for repo
@@ -104,7 +107,7 @@ That's it. Open Claude Code (or Codex, or Gemini CLI) and try:
 
 ## Command surface
 
-The CLI ships **9 user-facing commands**. All AI-callable commands
+The CLI ships **10 user-facing commands**. All AI-callable commands
 accept `--json` (auto-emit when stdout is non-TTY) with stable JSON
 schemas. `login` requires a human at a browser; it still emits a
 JSON envelope so your AI host can see what got installed.
@@ -131,6 +134,11 @@ praxis mcp [<mcp> <fn>] [--json] [--arg k=v ...] [--body '<json>']
    No args     → list every MCP namespace + function the gateway
                  exposes (with arg shapes).
    <mcp> <fn>  → invoke that function under your org credentials.
+
+praxis agents [--json]
+   List every subagent file praxis has installed on this host
+   (custom agents prefixed `praxis-`, standalone subagents prefixed
+   `praxis-sub-`). Read-only, no network call.
 
 praxis refresh-skills [--json]
    Re-fetch this profile's catalog and rewrite skill files + MCP

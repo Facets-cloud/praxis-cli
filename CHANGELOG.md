@@ -6,7 +6,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(Empty — see 0.8.0 below.)
+(Empty — see 0.9.0 below.)
+
+## [0.9.0] — 2026-05-20
+
+Introduces sourced agents — `praxis login` now installs custom agents
+and standalone subagents alongside skills, into each detected host's
+native subagent directory. No new credentials and no server changes
+(consumes existing `/ai-api/custom-agents` and `/ai-api/subagents`).
+
+### Added
+
+- `praxis login` now sources from `/ai-api/custom-agents` and
+  `/ai-api/subagents` after the skills catalog. Filters out inactive
+  rows and parent-bound subagents. Renders per-host:
+  - Claude Code: `~/.claude/agents/praxis-<name>.md`
+  - Gemini CLI: `~/.gemini/agents/praxis-<name>.md`
+  - Codex: `~/.codex/agents/praxis-<name>.toml`
+  Subagents take the additional `praxis-sub-` prefix.
+- `praxis agents [--json]` lists installed subagent files. Read-only,
+  no network call. AI hosts get `[]` on empty.
+- `praxis status` JSON gains an `agents_installed` field (slice of
+  installed agent records, mirroring `skills_installed`).
+- `praxis login` JSON envelope gains `agents` and `removed_agents`
+  keys describing what changed on disk.
+- `praxis refresh-skills` refreshes the agent catalog alongside skills
+  via the same `runPostAuthSetup` path — no separate `refresh-agents`.
+- Meta-skill body teaches AI hosts where agents live and the
+  `praxis-` / `praxis-sub-` distinction.
+
+### Changed
+
+- `internal/skillinstall.Receipt` adds an `Agents` slice. Old
+  skill-only `~/.praxis/installed.json` deserializes cleanly with
+  `Agents` nil.
+- `executionPreamble` constant lifted from `internal/skillcatalog`
+  to `internal/render` so both skills and agents share it.
+- `internal/harness.Harness` adds an `AgentDir` field per host.
+
+### Not changed
+
+- Credential model: agents hold zero secrets. All infrastructure
+  access still flows through `praxis mcp` to the gateway under org-
+  managed integration credentials. AWS / GCP / Azure / GitHub PAT /
+  kubeconfigs stay server-side.
+- Profile-switch invariant: `praxis login --profile X` wipes the
+  previous profile's `praxis-*` agents (covering both prefixes) and
+  installs the new profile's, same as skills.
 
 ## [0.8.0] — 2026-05-12
 
