@@ -263,6 +263,8 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 				"meta_skill":       state.metaSkill,
 				"removed_skills":   state.removedSkills,
 				"catalog_skills":   state.catalogSkills,
+				"agents":           state.agents,
+				"removed_agents":   state.removedAgents,
 				"snapshot_path":    state.snapshotPath,
 				"snapshot_warning": state.snapshotWarning,
 			})

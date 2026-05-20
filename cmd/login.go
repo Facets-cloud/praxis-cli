@@ -285,6 +285,8 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 			"meta_skill":       postAuthState.metaSkill,
 			"catalog_skills":   postAuthState.catalogSkills,
 			"removed_skills":   postAuthState.removedSkills,
+			"agents":           postAuthState.agents,
+			"removed_agents":   postAuthState.removedAgents,
 			"snapshot_path":    postAuthState.snapshotPath,
 			"snapshot_warning": postAuthState.snapshotWarning,
 		})
