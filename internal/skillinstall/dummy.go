@@ -107,6 +107,9 @@ AI-callable (always pass --json):
   - ` + "`praxis mcp`" + ` — list available MCP tools (no args) or invoke one
     (` + "`praxis mcp <mcp> <fn> --arg k=v ...`" + `). See "Discovering MCP tools"
     below.
+  - ` + "`praxis agents [--json]`" + ` — list every subagent file the CLI has installed
+    on this host (custom agents + standalone subagents, prefixed
+    ` + "`praxis-`" + ` and ` + "`praxis-sub-`" + ` respectively). Read-only, no network call.
   - ` + "`praxis refresh-skills`" + ` — re-fetch this profile's catalog and
     rewrite skill files + MCP snapshot, without re-authenticating. Use
     when the org has published new skills or after ` + "`brew upgrade praxis`" + `.
@@ -145,6 +148,27 @@ praxis mcp k8s_cli run_k8s_cli \
   --arg integration_name=prod-cluster \
   --arg command='get pods -n default' --json
 ` + "```" + `
+
+## Subagents
+
+` + "`praxis login`" + ` also installs subagent files into each detected host's
+agents directory:
+
+  - Claude Code:  ` + "`~/.claude/agents/praxis-<name>.md`" + `
+  - Gemini CLI:   ` + "`~/.gemini/agents/praxis-<name>.md`" + `
+  - Codex:        ` + "`~/.codex/agents/praxis-<name>.toml`" + `
+
+Files prefixed ` + "`praxis-sub-`" + ` are standalone subagents (helpers).
+Files prefixed ` + "`praxis-`" + ` (no ` + "`sub-`" + `) are primary custom agents
+the user may delegate work to via the host's native subagent tool
+(Claude Code: ` + "`Task`" + ` tool; Gemini: subagent invocation; Codex: agent
+override). Each file's frontmatter describes when to invoke it; pick
+based on the user's intent.
+
+Agents shell out to ` + "`praxis mcp`" + ` for any infrastructure access — same
+rewrite rule as skills. No new credentials live on the laptop.
+
+` + "`praxis agents [--json]`" + ` lists what's currently installed.
 
 ## Don'ts
 
