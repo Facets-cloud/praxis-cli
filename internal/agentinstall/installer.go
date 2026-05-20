@@ -28,7 +28,7 @@ import (
 //   - undetected harnesses (Detected == false)
 //   - harnesses whose AgentDir is empty
 //   - (agent, harness) pairs where Render returns an error (e.g. Codex
-//     + system_prompt containing triple-quotes). Batch continues.
+//   - system_prompt containing triple-quotes). Batch continues.
 func Install(agents []agentcatalog.Agent, hosts []harness.Harness) ([]skillinstall.AgentInstallation, error) {
 	receipt, err := loadReceipt()
 	if err != nil {
@@ -87,19 +87,29 @@ func UninstallByPrefix(prefix string) ([]skillinstall.AgentInstallation, error) 
 	}
 	var removed []skillinstall.AgentInstallation
 	var kept []skillinstall.AgentInstallation
+	var removeErrs []string
 	for _, entry := range receipt.Agents {
 		if !strings.HasPrefix(entry.AgentName, prefix) {
 			kept = append(kept, entry)
 			continue
 		}
 		if err := os.Remove(entry.Path); err != nil && !os.IsNotExist(err) {
-			return removed, fmt.Errorf("remove %s: %w", entry.Path, err)
+			// File couldn't be removed — keep the receipt entry so a
+			// retry can pick it up later. Continue the batch so other
+			// removals + the receipt save still happen.
+			removeErrs = append(removeErrs, fmt.Sprintf("%s: %v", entry.Path, err))
+			kept = append(kept, entry)
+			continue
 		}
 		removed = append(removed, entry)
 	}
 	receipt.Agents = kept
 	if err := saveReceipt(receipt); err != nil {
 		return removed, fmt.Errorf("save receipt: %w", err)
+	}
+	if len(removeErrs) > 0 {
+		return removed, fmt.Errorf("removed %d agent file(s); %d failed: %s",
+			len(removed), len(removeErrs), strings.Join(removeErrs, "; "))
 	}
 	return removed, nil
 }

@@ -40,6 +40,14 @@ verification result.`,
 		active, _ := credentials.ResolveActive("")
 		skills, _ := skillinstall.List()
 		agents, _ := agentinstall.List()
+		// Normalize nil to empty slice so JSON marshals as `[]` not
+		// `null` — AI host parsers don't have to handle two empty shapes.
+		if skills == nil {
+			skills = []skillinstall.Installation{}
+		}
+		if agents == nil {
+			agents = []skillinstall.AgentInstallation{}
+		}
 		loggedIn := active.Loaded && active.Profile.Token != ""
 
 		state := map[string]any{
