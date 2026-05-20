@@ -18,8 +18,19 @@ type postAuthState struct {
 	metaSkill       []skillInstallationLite
 	removedSkills   []skillInstallationLite
 	catalogSkills   []skillInstallationLite
+	agents          []agentInstallationLite
+	removedAgents   []agentInstallationLite
 	snapshotPath    string
 	snapshotWarning string
+}
+
+// agentInstallationLite is the JSON shape used in login output. Mirrors
+// skillInstallationLite for output consistency.
+type agentInstallationLite struct {
+	AgentName string `json:"agent_name"`
+	Kind      string `json:"kind"`
+	Harness   string `json:"harness"`
+	Path      string `json:"path"`
 }
 
 // runPostAuthSetup is the v0.7 invariant-keeper that runs after
@@ -105,6 +116,50 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 			orphaned := removeOrphanedProfileSkills(out, asJSON, skills, hosts)
 			state.removedSkills = append(state.removedSkills, liteResults(orphaned)...)
 			state.catalogSkills = installFetchedCatalog(out, asJSON, skills, hosts)
+		}
+	}
+
+	// Step 3.5: agent catalog. Fetch first, then swap — same fail-safe as
+	// skills. A transient network error leaves existing agents on disk.
+	if !noHosts {
+		agents, fetchErr := fetchAgents(baseURL, token)
+		switch {
+		case fetchErr != nil:
+			if !asJSON {
+				fmt.Fprintf(out, "\nWarning: agent catalog fetch failed: %v\n", fetchErr)
+				fmt.Fprintln(out, "Existing agents left in place. Re-run `praxis login` once the gateway is reachable.")
+			}
+		default:
+			removed, err := uninstallAgentsByPrefix("praxis-")
+			if err != nil {
+				if !asJSON {
+					fmt.Fprintf(out, "Warning: removing previous profile's agents failed: %v\n", err)
+				}
+			}
+			state.removedAgents = agentLiteResults(removed)
+			if !asJSON && len(removed) > 0 {
+				fmt.Fprintf(out, "\nRemoved %d agent file(s) from previous profile.\n", len(removed))
+			}
+
+			if len(agents) == 0 {
+				if !asJSON {
+					fmt.Fprintln(out, "\nAgent catalog is empty for this org — nothing to install.")
+				}
+			} else {
+				installed, err := installAgents(agents, hosts)
+				if err != nil {
+					if !asJSON {
+						fmt.Fprintf(out, "\nWarning: agent install failed: %v\n", err)
+					}
+				}
+				state.agents = agentLiteResults(installed)
+				if !asJSON {
+					fmt.Fprintf(out, "\nInstalled %d agent file(s):\n", len(installed))
+					for _, r := range installed {
+						fmt.Fprintf(out, "  ✓ %-20s %-10s %s\n", r.AgentName, r.Kind, r.Path)
+					}
+				}
+			}
 		}
 	}
 
@@ -231,6 +286,19 @@ func liteResults(in []skillinstall.Installation) []skillInstallationLite {
 	out := make([]skillInstallationLite, 0, len(in))
 	for _, r := range in {
 		out = append(out, skillInstallationLite{Harness: r.Harness, Path: r.Path})
+	}
+	return out
+}
+
+func agentLiteResults(in []skillinstall.AgentInstallation) []agentInstallationLite {
+	out := make([]agentInstallationLite, 0, len(in))
+	for _, r := range in {
+		out = append(out, agentInstallationLite{
+			AgentName: r.AgentName,
+			Kind:      r.Kind,
+			Harness:   r.Harness,
+			Path:      r.Path,
+		})
 	}
 	return out
 }

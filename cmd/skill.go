@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 
+	"github.com/Facets-cloud/praxis-cli/internal/agentcatalog"
+	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
@@ -18,13 +20,17 @@ import (
 // Package-level seams so tests can stub the harness/install layer
 // without touching the real filesystem.
 var (
-	detectHarnesses    = harness.Detected
-	installSkill       = skillinstall.Install
-	installSkillBody   = skillinstall.InstallWithBody
-	uninstallSkill     = skillinstall.Uninstall
-	listInstalledSkill = skillinstall.List
-	refreshSkills      = skillinstall.Refresh
-	fetchCatalog       = skillcatalog.Fetch
+	detectHarnesses         = harness.Detected
+	installSkill            = skillinstall.Install
+	installSkillBody        = skillinstall.InstallWithBody
+	uninstallSkill          = skillinstall.Uninstall
+	listInstalledSkill      = skillinstall.List
+	refreshSkills           = skillinstall.Refresh
+	fetchCatalog            = skillcatalog.Fetch
+	fetchAgents             = agentcatalog.Fetch
+	installAgents           = agentinstall.Install
+	uninstallAgentsByPrefix = agentinstall.UninstallByPrefix
+	listInstalledAgents     = agentinstall.List
 )
 
 // skillName is the only skill v0.1 ships. Once the server-driven catalog

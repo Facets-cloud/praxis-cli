@@ -3,10 +3,14 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Facets-cloud/praxis-cli/internal/agentcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
@@ -127,5 +131,72 @@ func TestRunPostAuthSetup_NoHosts_StillRefreshesSnapshot(t *testing.T) {
 	// attempting it).
 	if state.snapshotPath == "" && state.snapshotWarning == "" {
 		t.Error("manifest snapshot step should have run (path or warning expected)")
+	}
+}
+
+func TestRunPostAuthSetupFetchesAndInstallsAgents(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	stubMCPManifestFetch(t)
+
+	origDetect := detectHarnesses
+	defer func() { detectHarnesses = origDetect }()
+	detectHarnesses = func() []harness.Harness {
+		return []harness.Harness{{
+			Name:     "claude-code",
+			Detected: true,
+			SkillDir: filepath.Join(tmp, "claude", "skills"),
+			AgentDir: filepath.Join(tmp, "claude", "agents"),
+		}}
+	}
+
+	origFetchSk := fetchCatalog
+	defer func() { fetchCatalog = origFetchSk }()
+	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
+
+	origFetchAg := fetchAgents
+	defer func() { fetchAgents = origFetchAg }()
+	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) {
+		return []agentcatalog.Agent{
+			{Name: "alpha", Description: "a", SystemPrompt: "b", IsActive: true, Kind: agentcatalog.KindAgent},
+		}, nil
+	}
+
+	var buf bytes.Buffer
+	state := runPostAuthSetup(&buf, false, "http://x", "tok")
+	if len(state.agents) != 1 {
+		t.Fatalf("want 1 agent installed, got %d", len(state.agents))
+	}
+	want := filepath.Join(tmp, "claude", "agents", "praxis-alpha.md")
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("agent file should exist at %s: %v", want, err)
+	}
+}
+
+func TestRunPostAuthSetupAgentFetchFailureLeavesExistingInPlace(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	stubMCPManifestFetch(t)
+
+	origDetect := detectHarnesses
+	defer func() { detectHarnesses = origDetect }()
+	detectHarnesses = func() []harness.Harness {
+		return []harness.Harness{{Name: "claude-code", Detected: true, AgentDir: filepath.Join(tmp, "claude", "agents")}}
+	}
+
+	origFetchSk := fetchCatalog
+	defer func() { fetchCatalog = origFetchSk }()
+	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
+
+	origFetchAg := fetchAgents
+	defer func() { fetchAgents = origFetchAg }()
+	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) {
+		return nil, fmt.Errorf("simulated network failure")
+	}
+
+	var buf bytes.Buffer
+	state := runPostAuthSetup(&buf, false, "http://x", "tok")
+	if len(state.agents) != 0 {
+		t.Errorf("want empty agents on fetch failure, got %d", len(state.agents))
 	}
 }
