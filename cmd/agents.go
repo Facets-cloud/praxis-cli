@@ -41,16 +41,18 @@ profile.`,
 		}
 		shaped := toAgentOutputShape(entries)
 
-		if len(shaped) == 0 {
-			// When there are no agents, always print the human-readable hint
-			// regardless of output mode — an empty list is more useful as a
-			// call-to-action than a bare JSON `[]`.
-			fmt.Fprintln(out, "No agents installed. Try `praxis login`.")
-			return nil
+		if asJSON {
+			// Always emit `[]` (never `null`) so AI host JSON parsers
+			// don't have to handle two empty shapes.
+			if shaped == nil {
+				shaped = []agentEntryForOutput{}
+			}
+			return render.JSON(out, shaped)
 		}
 
-		if asJSON {
-			return render.JSON(out, shaped)
+		if len(shaped) == 0 {
+			fmt.Fprintln(out, "No agents installed. Try `praxis login`.")
+			return nil
 		}
 		return printAgentsPretty(out, shaped)
 	},

@@ -9,7 +9,11 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
 
-func TestAgentsCommandEmpty(t *testing.T) {
+// TestAgentsCommandEmptyJSON covers the AI-host path: stdout is non-TTY
+// (bytes.Buffer) so UseJSON auto-resolves to true, and an empty receipt
+// produces `[]` not English text — preserving the parseable-JSON
+// contract every AI-callable command holds.
+func TestAgentsCommandEmptyJSON(t *testing.T) {
 	orig := listInstalledAgents
 	defer func() { listInstalledAgents = orig }()
 	listInstalledAgents = func() ([]skillinstall.AgentInstallation, error) { return nil, nil }
@@ -18,11 +22,16 @@ func TestAgentsCommandEmpty(t *testing.T) {
 	agentsCmd.SetOut(&buf)
 	agentsCmd.SetErr(&buf)
 	agentsJSON = false
+	defer func() { agentsJSON = false }()
 	if err := agentsCmd.RunE(agentsCmd, nil); err != nil {
 		t.Fatalf("RunE: %v", err)
 	}
-	if !strings.Contains(buf.String(), "No agents installed") {
-		t.Errorf("empty pretty output should hint at login:\n%s", buf.String())
+	var got []map[string]string
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("empty result should be parseable JSON `[]`, got %q: %v", buf.String(), err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty array, got %d entries: %v", len(got), got)
 	}
 }
 
