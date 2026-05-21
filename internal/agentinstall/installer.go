@@ -51,9 +51,9 @@ func Install(agents []agentcatalog.Agent, hosts []harness.Harness) ([]skillinsta
 			if err := os.MkdirAll(h.AgentDir, 0700); err != nil {
 				return results, fmt.Errorf("create %s: %w", h.AgentDir, err)
 			}
-			fullPath := filepath.Join(h.AgentDir, fileName)
-			if err := os.WriteFile(fullPath, []byte(body), 0600); err != nil {
-				return results, fmt.Errorf("write %s: %w", fullPath, err)
+			fullPath, err := atomicWriteFile(h.AgentDir, fileName, []byte(body), 0600)
+			if err != nil {
+				return results, fmt.Errorf("write %s: %w", filepath.Join(h.AgentDir, fileName), err)
 			}
 			install := skillinstall.AgentInstallation{
 				AgentName:   a.PrefixedName(),
@@ -128,6 +128,47 @@ func List() ([]skillinstall.AgentInstallation, error) {
 		}
 	}
 	return receipt.Agents, nil
+}
+
+// atomicWriteFile writes `data` to `dir/name` via a same-dir temp file +
+// fsync + rename, so a concurrent reader / crash mid-write cannot
+// observe a partial file. The temp file is removed on any failure
+// before the rename. On success the final file has mode `perm`.
+//
+// Same pattern as saveReceipt below, lifted to a helper so the Install
+// loop and the receipt save share one source of truth on atomicity.
+func atomicWriteFile(dir, name string, data []byte, perm os.FileMode) (string, error) {
+	fullPath := filepath.Join(dir, name)
+	tmp, err := os.CreateTemp(dir, "."+name+"-*")
+	if err != nil {
+		return "", err
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmpName, fullPath); err != nil {
+		return "", err
+	}
+	cleanup = false
+	return fullPath, nil
 }
 
 // extensionFor returns the per-harness file extension. Claude Code
