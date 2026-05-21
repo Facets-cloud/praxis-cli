@@ -42,6 +42,9 @@ func Install(agents []agentcatalog.Agent, hosts []harness.Harness) ([]skillinsta
 			if !h.Detected || h.AgentDir == "" {
 				continue
 			}
+			if !supportsAgentInstall(h.Name) {
+				continue
+			}
 			body, err := a.Render(h.Name)
 			if err != nil {
 				continue
@@ -168,6 +171,25 @@ func atomicWriteFile(dir, name string, data []byte, perm os.FileMode) (string, e
 	}
 	cleanup = false
 	return fullPath, nil
+}
+
+// supportsAgentInstall reports whether a detected host has been
+// runtime-verified to load praxis-* agent files from its AgentDir.
+//
+// Claude Code's Task tool dispatch against ~/.claude/agents/*.md is
+// verified end-to-end. Gemini CLI and Codex have *documented*
+// loader contracts that match what our renderer writes
+// (~/.gemini/agents/*.md and ~/.codex/agents/*.toml), but live
+// runtime smoke against those hosts showed they don't pick the
+// files up today (Codex didn't surface them at all; Gemini was
+// unverified). Until those host runtimes catch up — or we
+// runtime-verify they already work — gating on this prevents the
+// CLI from writing files that no loader picks up.
+//
+// To re-enable, return true for the runtime-verified harnesses.
+// The renderer and extensionFor logic already understand them.
+func supportsAgentInstall(harnessName string) bool {
+	return harnessName == "claude-code"
 }
 
 // extensionFor returns the per-harness file extension. Claude Code

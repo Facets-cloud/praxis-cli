@@ -11,19 +11,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.10.0] — 2026-05-21
 
 Introduces sourced agents — `praxis login` now installs custom agents
-alongside skills, into each detected host's native subagent directory.
-No new credentials and no server changes (consumes existing
+alongside skills into Claude Code's subagent directory. No new
+credentials and no server changes (consumes existing
 `/ai-api/custom-agents`).
 
 ### Added
 
 - `praxis login` now sources from `/ai-api/custom-agents` after the
-  skills catalog. Filters out inactive rows. Renders per-host:
-  - Claude Code: `~/.claude/agents/praxis-<name>.md`
-  - Gemini CLI: `~/.gemini/agents/praxis-<name>.md`
-  - Codex: `~/.codex/agents/praxis-<name>.toml`
+  skills catalog. Filters out inactive rows. Renders to Claude Code:
+  `~/.claude/agents/praxis-<name>.md`.
 - `praxis agents [--json]` lists installed agent files. Read-only,
   no network call. AI hosts get `[]` on empty.
+
+### Host scope — v1 ships Claude Code only
+
+Gemini CLI and Codex have documented loader paths that match what
+the renderer writes (`~/.gemini/agents/*.md` with YAML frontmatter,
+`~/.codex/agents/*.toml` with `developer_instructions`), but
+runtime smoke against both hosts showed they don't surface the
+files yet — Codex didn't load `~/.codex/agents/*.toml` at all;
+Gemini's `/agents` did not list installed praxis agents. Until
+those host runtimes catch up, `agentinstall.Install` gates on
+`harness.Name == "claude-code"` so we don't write files that no
+loader picks up. The renderer keeps the YAML / TOML render paths
+for those hosts — flipping `supportsAgentInstall` re-enables
+3-host fan-out once verified.
 - `praxis status` JSON gains an `agents_installed` field (slice of
   installed agent records, mirroring `skills_installed`).
 - `praxis login` JSON envelope gains `agents` and `removed_agents`

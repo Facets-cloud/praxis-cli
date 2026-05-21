@@ -30,8 +30,12 @@ Each capability is one or more functions on a server-side MCP. Run
 
 - **Use org-curated agents** — custom agents (devil's advocate,
   terraform planner, release-debugger, etc.) sourced from your
-  Praxis profile and installed into your AI host's native subagent
-  directory on every login. List with `praxis agents`.
+  Praxis profile and installed into Claude Code's subagent
+  directory on every login. List with `praxis agents`. Gemini CLI
+  and Codex have documented loader paths that match what we
+  render, but neither host runtime picked the files up when
+  smoke-tested — those targets are gated off until their loaders
+  consume the files.
 
 ### Coming soon
 
