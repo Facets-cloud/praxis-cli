@@ -26,10 +26,10 @@ type Installation struct {
 }
 
 // AgentInstallation is one (agent, harness, file) tuple — the unit
-// recorded in the receipt for later list/uninstall of subagent files.
+// recorded in the receipt for later list/uninstall of agent files.
 type AgentInstallation struct {
 	AgentName   string    `json:"agent_name"`
-	Kind        string    `json:"kind"` // "agent" | "subagent"
+	Kind        string    `json:"kind"` // always "agent" today; retained for forward-compat
 	Harness     string    `json:"harness"`
 	Path        string    `json:"path"`
 	InstalledAt time.Time `json:"installed_at"`

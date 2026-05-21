@@ -1,4 +1,4 @@
-// Package agentinstall manages the lifecycle of subagent files across
+// Package agentinstall manages the lifecycle of agent files across
 // the detected AI hosts on this machine. It writes per-harness files
 // (`.md` for Claude / Gemini, `.toml` for Codex) into each host's
 // user-scope `agents/` directory and records the installations in
@@ -74,9 +74,8 @@ func Install(agents []agentcatalog.Agent, hosts []harness.Harness) ([]skillinsta
 }
 
 // UninstallByPrefix removes every recorded agent whose AgentName starts
-// with `prefix`. Used by login (wipe previous profile) and logout. The
-// `praxis-` prefix wipes both custom agents AND subagents because
-// `praxis-sub-*` is a strict subset of `praxis-*`.
+// with `prefix`. Used by login (wipe previous profile's `praxis-*`
+// agents before installing the new profile's set) and logout.
 func UninstallByPrefix(prefix string) ([]skillinstall.AgentInstallation, error) {
 	if prefix == "" {
 		return nil, fmt.Errorf("UninstallByPrefix: prefix must be non-empty")

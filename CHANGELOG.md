@@ -11,20 +11,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.10.0] — 2026-05-21
 
 Introduces sourced agents — `praxis login` now installs custom agents
-and standalone subagents alongside skills, into each detected host's
-native subagent directory. No new credentials and no server changes
-(consumes existing `/ai-api/custom-agents` and `/ai-api/subagents`).
+alongside skills, into each detected host's native subagent directory.
+No new credentials and no server changes (consumes existing
+`/ai-api/custom-agents`).
 
 ### Added
 
-- `praxis login` now sources from `/ai-api/custom-agents` and
-  `/ai-api/subagents` after the skills catalog. Filters out inactive
-  rows and parent-bound subagents. Renders per-host:
+- `praxis login` now sources from `/ai-api/custom-agents` after the
+  skills catalog. Filters out inactive rows. Renders per-host:
   - Claude Code: `~/.claude/agents/praxis-<name>.md`
   - Gemini CLI: `~/.gemini/agents/praxis-<name>.md`
   - Codex: `~/.codex/agents/praxis-<name>.toml`
-  Subagents take the additional `praxis-sub-` prefix.
-- `praxis agents [--json]` lists installed subagent files. Read-only,
+- `praxis agents [--json]` lists installed agent files. Read-only,
   no network call. AI hosts get `[]` on empty.
 - `praxis status` JSON gains an `agents_installed` field (slice of
   installed agent records, mirroring `skills_installed`).
@@ -32,8 +30,8 @@ native subagent directory. No new credentials and no server changes
   keys describing what changed on disk.
 - `praxis refresh-skills` refreshes the agent catalog alongside skills
   via the same `runPostAuthSetup` path — no separate `refresh-agents`.
-- Meta-skill body teaches AI hosts where agents live and the
-  `praxis-` / `praxis-sub-` distinction.
+- Meta-skill body teaches AI hosts where agents live and how to
+  invoke them via each host's native subagent tool.
 
 ### Changed
 
@@ -43,6 +41,8 @@ native subagent directory. No new credentials and no server changes
 - `executionPreamble` constant lifted from `internal/skillcatalog`
   to `internal/render` so both skills and agents share it.
 - `internal/harness.Harness` adds an `AgentDir` field per host.
+- Agent files are written atomically (temp file + fsync + rename) so
+  a concurrent reader can never observe a partial file.
 
 ### Not changed
 
@@ -51,8 +51,8 @@ native subagent directory. No new credentials and no server changes
   managed integration credentials. AWS / GCP / Azure / GitHub PAT /
   kubeconfigs stay server-side.
 - Profile-switch invariant: `praxis login --profile X` wipes the
-  previous profile's `praxis-*` agents (covering both prefixes) and
-  installs the new profile's, same as skills.
+  previous profile's `praxis-*` agents and installs the new
+  profile's, same as skills.
 
 ## [0.9.0] — 2026-05-21
 

@@ -11,22 +11,9 @@ import (
 )
 
 func TestAgentPrefixedName(t *testing.T) {
-	tests := []struct {
-		name string
-		kind string
-		want string
-	}{
-		{"agent kind gets praxis- prefix", "agent", "praxis-foo"},
-		{"subagent kind gets praxis-sub- prefix", "subagent", "praxis-sub-foo"},
-		{"empty kind defaults to agent", "", "praxis-foo"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			a := Agent{Name: "foo", Kind: tc.kind}
-			if got := a.PrefixedName(); got != tc.want {
-				t.Errorf("PrefixedName() = %q, want %q", got, tc.want)
-			}
-		})
+	a := Agent{Name: "foo", Kind: KindAgent}
+	if got := a.PrefixedName(); got != "praxis-foo" {
+		t.Errorf("PrefixedName() = %q, want praxis-foo", got)
 	}
 }
 
@@ -58,25 +45,20 @@ func TestAgentUnmarshal(t *testing.T) {
 	}
 }
 
-func TestFetchMergesAndFilters(t *testing.T) {
+// TestFetchFiltersInactive: only active rows survive the client-side
+// filter; the rest are dropped before render+install.
+func TestFetchFiltersInactive(t *testing.T) {
 	customJSON := `[
 		{"name":"alpha","system_prompt":"a","is_active":true},
 		{"name":"beta","system_prompt":"b","is_active":false}
 	]`
-	subagentJSON := `[
-		{"name":"helper","system_prompt":"h","is_active":true,"parent_agent_name":""},
-		{"name":"bound","system_prompt":"bd","is_active":true,"parent_agent_name":"alpha"}
-	]`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/ai-api/custom-agents":
+		if r.URL.Path == "/ai-api/custom-agents" {
 			_, _ = w.Write([]byte(customJSON))
-		case "/ai-api/subagents":
-			_, _ = w.Write([]byte(subagentJSON))
-		default:
-			http.NotFound(w, r)
+			return
 		}
+		http.NotFound(w, r)
 	}))
 	defer srv.Close()
 
@@ -84,70 +66,53 @@ func TestFetchMergesAndFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("want 2 agents after filtering, got %d: %#v", len(got), got)
+	if len(got) != 1 {
+		t.Fatalf("want 1 agent after filtering inactive, got %d: %#v", len(got), got)
 	}
-	wantByName := map[string]string{"alpha": KindAgent, "helper": KindSubagent}
-	for _, a := range got {
-		want, ok := wantByName[a.Name]
-		if !ok {
-			t.Errorf("unexpected agent %q in result", a.Name)
-			continue
-		}
-		if a.Kind != want {
-			t.Errorf("agent %q: Kind = %q, want %q", a.Name, a.Kind, want)
-		}
+	if got[0].Name != "alpha" {
+		t.Errorf("want alpha, got %q", got[0].Name)
+	}
+	if got[0].Kind != KindAgent {
+		t.Errorf("Kind = %q, want %q", got[0].Kind, KindAgent)
 	}
 }
 
-func TestFetchPartialFailureFailsHard(t *testing.T) {
+// TestFetchServerErrorFails pins the routing + status-preservation
+// contract: a 500 on /custom-agents must surface as an error that
+// names the endpoint AND preserves the inner HTTP status. A regression
+// that swallowed either would silently degrade login.
+func TestFetchServerErrorFails(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/ai-api/custom-agents":
-			_, _ = w.Write([]byte(`[]`))
-		case "/ai-api/subagents":
-			http.Error(w, "boom", http.StatusInternalServerError)
-		}
+		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 	_, err := Fetch(srv.URL, "tok")
 	if err == nil {
-		t.Fatal("expected error on partial failure, got nil")
+		t.Fatal("expected error on 500, got nil")
 	}
-	// Pin the routing: the wrapped error should name the failing
-	// endpoint (so a regression that mis-routes a subagents-side
-	// failure into the custom-agents path would fail loudly) and
-	// the inner HTTP status (so a regression that swallows the
-	// status code in the wrap would fail).
-	if !strings.Contains(err.Error(), "fetch subagents") {
-		t.Errorf("error should name the failing endpoint (subagents), got: %v", err)
+	if !strings.Contains(err.Error(), "fetch custom-agents") {
+		t.Errorf("error should name the failing endpoint (custom-agents), got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "HTTP 500") {
 		t.Errorf("error should preserve the inner HTTP status, got: %v", err)
 	}
 }
 
-// 404 on one endpoint is not a partial failure — it's "this Praxis
-// deployment doesn't expose this resource type." Fetch should return
-// whatever the OTHER endpoint provided rather than aborting the
-// install. Real-world trigger: deployments that ship custom-agents
-// but not yet subagents.
-func TestFetchTolerates404FromOneEndpoint(t *testing.T) {
+// TestFetchTolerates404: deployments that don't expose /custom-agents
+// (older server versions) install nothing instead of failing login.
+// fetchOne returns (nil, nil) on 404; Fetch propagates that as an
+// empty result with no error.
+func TestFetchTolerates404(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/ai-api/custom-agents":
-			_, _ = w.Write([]byte(`[{"name":"alpha","system_prompt":"a","is_active":true}]`))
-		case "/ai-api/subagents":
-			http.NotFound(w, r)
-		}
+		http.NotFound(w, r)
 	}))
 	defer srv.Close()
 	got, err := Fetch(srv.URL, "tok")
 	if err != nil {
-		t.Fatalf("Fetch should tolerate 404 on one endpoint, got: %v", err)
+		t.Fatalf("Fetch should tolerate 404 on /custom-agents, got: %v", err)
 	}
-	if len(got) != 1 || got[0].Name != "alpha" {
-		t.Fatalf("want 1 alpha agent (subagents 404'd, custom-agents returned 1), got %#v", got)
+	if len(got) != 0 {
+		t.Fatalf("want empty result on 404, got %d: %#v", len(got), got)
 	}
 }
 
@@ -234,17 +199,6 @@ func TestRenderTOMLRejectsTripleQuoteInPrompt(t *testing.T) {
 	_, err := a.Render("codex")
 	if err == nil {
 		t.Fatal("Render should reject system_prompt containing triple-quote — Codex TOML sentinel collision")
-	}
-}
-
-func TestRenderSubagentUsesSubPrefix(t *testing.T) {
-	a := Agent{Name: "log-analyzer", Description: "d", SystemPrompt: "p", IsActive: true, Kind: KindSubagent}
-	out, err := a.Render("claude-code")
-	if err != nil {
-		t.Fatalf("Render(claude-code) for subagent should succeed, got: %v", err)
-	}
-	if !strings.Contains(out, "name: \"praxis-sub-log-analyzer\"") {
-		t.Errorf("subagent should render with praxis-sub- prefix in frontmatter:\n%s", out[:200])
 	}
 }
 

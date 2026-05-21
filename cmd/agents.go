@@ -19,14 +19,15 @@ func init() {
 
 var agentsCmd = &cobra.Command{
 	Use:   "agents",
-	Short: "List subagents installed by praxis across detected AI hosts",
-	Long: `List every Praxis-sourced subagent file currently installed on this
-machine. Reads ~/.praxis/installed.json — no network call. The two
-kinds:
+	Short: "List agents installed by praxis across detected AI hosts",
+	Long: `List every Praxis-sourced agent file currently installed on this
+machine. Reads ~/.praxis/installed.json — no network call. Agents are
+sourced from /ai-api/custom-agents by ` + "`praxis login`" + ` and installed
+into each detected AI host's native subagent directory:
 
-  agent     — sourced from /ai-api/custom-agents
-  subagent  — sourced from /ai-api/subagents (org-wide or global only;
-              agent-specific subagents are filtered out at fetch time)
+  Claude Code → ~/.claude/agents/praxis-<n>.md
+  Gemini CLI  → ~/.gemini/agents/praxis-<n>.md
+  Codex       → ~/.codex/agents/praxis-<n>.toml
 
 Re-run ` + "`praxis login`" + ` to refresh the on-disk set against the active
 profile.`,

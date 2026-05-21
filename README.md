@@ -28,11 +28,10 @@ Once installed and logged in, your local AI host can:
 Each capability is one or more functions on a server-side MCP. Run
 `praxis mcp --json` for the live list of what's exposed for your org.
 
-- **Use org-curated subagents** — primary custom agents (devil's
-  advocate, terraform planner, release-debugger, etc.) and reusable
-  subagent helpers, sourced from your Praxis profile and installed
-  into your AI host's native subagent directory on every login.
-  List with `praxis agents`.
+- **Use org-curated agents** — custom agents (devil's advocate,
+  terraform planner, release-debugger, etc.) sourced from your
+  Praxis profile and installed into your AI host's native subagent
+  directory on every login. List with `praxis agents`.
 
 ### Coming soon
 
@@ -136,9 +135,9 @@ praxis mcp [<mcp> <fn>] [--json] [--arg k=v ...] [--body '<json>']
    <mcp> <fn>  → invoke that function under your org credentials.
 
 praxis agents [--json]
-   List every subagent file praxis has installed on this host
-   (custom agents prefixed `praxis-`, standalone subagents prefixed
-   `praxis-sub-`). Read-only, no network call.
+   List every agent file praxis has installed on this host (custom
+   agents from /ai-api/custom-agents, prefixed `praxis-`). Read-only,
+   no network call.
 
 praxis refresh-skills [--json]
    Re-fetch this profile's catalog and rewrite skill files + MCP

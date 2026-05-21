@@ -41,7 +41,7 @@ func TestAgentsCommandPretty(t *testing.T) {
 	listInstalledAgents = func() ([]skillinstall.AgentInstallation, error) {
 		return []skillinstall.AgentInstallation{
 			{AgentName: "praxis-alpha", Kind: "agent", Harness: "claude-code", Path: "/a.md"},
-			{AgentName: "praxis-sub-helper", Kind: "subagent", Harness: "claude-code", Path: "/h.md"},
+			{AgentName: "praxis-beta", Kind: "agent", Harness: "gemini-cli", Path: "/b.md"},
 		}, nil
 	}
 
@@ -53,10 +53,10 @@ func TestAgentsCommandPretty(t *testing.T) {
 		t.Fatalf("RunE: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "praxis-alpha") || !strings.Contains(out, "praxis-sub-helper") {
+	if !strings.Contains(out, "praxis-alpha") || !strings.Contains(out, "praxis-beta") {
 		t.Errorf("missing rows:\n%s", out)
 	}
-	if !strings.Contains(out, "agent") || !strings.Contains(out, "subagent") {
+	if !strings.Contains(out, "agent") {
 		t.Errorf("missing kind column:\n%s", out)
 	}
 }

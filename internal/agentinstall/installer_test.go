@@ -3,7 +3,6 @@ package agentinstall
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/agentcatalog"
@@ -64,30 +63,12 @@ func TestInstallFansOutToAllHarnesses(t *testing.T) {
 	}
 }
 
-func TestInstallSubagentUsesSubPrefix(t *testing.T) {
-	home := setupHome(t)
-	hosts := fakeHarnesses(t, home)
-	sub := agentcatalog.Agent{
-		Name: "helper", Description: "h", SystemPrompt: "b",
-		IsActive: true, Kind: agentcatalog.KindSubagent,
-	}
-	results, err := Install([]agentcatalog.Agent{sub}, hosts)
-	if err != nil {
-		t.Fatalf("Install: %v", err)
-	}
-	for _, r := range results {
-		if !strings.Contains(r.Path, "praxis-sub-helper.") {
-			t.Errorf("subagent should use praxis-sub- prefix; got %s", r.Path)
-		}
-	}
-}
-
-func TestUninstallByPrefixRemovesBothAgentsAndSubagents(t *testing.T) {
+func TestUninstallByPrefixRemovesAllAgents(t *testing.T) {
 	home := setupHome(t)
 	hosts := fakeHarnesses(t, home)
 	_, err := Install([]agentcatalog.Agent{
 		{Name: "alpha", Description: "a", SystemPrompt: "b", IsActive: true, Kind: agentcatalog.KindAgent},
-		{Name: "helper", Description: "h", SystemPrompt: "b", IsActive: true, Kind: agentcatalog.KindSubagent},
+		{Name: "beta", Description: "b", SystemPrompt: "b", IsActive: true, Kind: agentcatalog.KindAgent},
 	}, hosts)
 	if err != nil {
 		t.Fatalf("Install: %v", err)

@@ -1,12 +1,12 @@
-// Package agentcatalog fetches custom agents and standalone subagents
-// from a Praxis deployment, then renders each one into the subagent
-// file format that the local AI host (Claude Code, Gemini CLI, Codex)
-// expects.
+// Package agentcatalog fetches custom agents from a Praxis deployment
+// and renders each one into the subagent file format that the local
+// AI host (Claude Code, Gemini CLI, Codex) expects.
 //
-// Both /ai-api/custom-agents and /ai-api/subagents are queried; the
-// CLI ignores admin-only fields (`is_active`, `can_edit`, etc.) and
-// filters out inactive rows + agent-specific subagents (those with a
-// non-empty parent_agent_name).
+// Only /ai-api/custom-agents is queried. (An earlier draft of this
+// package also consumed /ai-api/subagents, but subagents are being
+// removed server-side, so the CLI never shipped that consumption.)
+// The CLI ignores admin-only fields (`is_active`, `can_edit`, etc.)
+// and filters out inactive rows.
 package agentcatalog
 
 import (
@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/render"
@@ -26,20 +25,17 @@ const (
 	// PrefixAgent is prepended to custom-agent names on disk so they
 	// can't collide with user-authored or third-party agents.
 	PrefixAgent = "praxis-"
-	// PrefixSubagent is prepended to subagent names on disk; the
-	// extra `sub-` segment makes the resource kind visually obvious
-	// in `praxis agents` listings and prevents name collisions with
-	// custom agents that happen to share a slug.
-	PrefixSubagent = "praxis-sub-"
 
-	// KindAgent / KindSubagent are the Agent.Kind values.
-	KindAgent    = "agent"
-	KindSubagent = "subagent"
+	// KindAgent is the only Agent.Kind value today. The Kind field
+	// is kept on the Agent + receipt types for forward-compat in
+	// case more resource types are introduced later — if so they'd
+	// get their own KindXxx constant alongside this one.
+	KindAgent = "agent"
 )
 
-// Agent is the slim CLI-side projection of either a CustomAgentResponse
-// or a CustomSubagentResponse. Both endpoints return more fields than
-// the CLI consumes — the rest are ignored at unmarshal time.
+// Agent is the slim CLI-side projection of a CustomAgentResponse.
+// The server endpoint returns more fields than the CLI consumes —
+// the rest are ignored at unmarshal time.
 type Agent struct {
 	Name         string `json:"name"`
 	DisplayName  string `json:"display_name"`
@@ -50,43 +46,29 @@ type Agent struct {
 	SystemPrompt string `json:"system_prompt"`
 	IsActive     bool   `json:"is_active"`
 
-	// ParentAgentName is set on subagents only. A non-empty value
-	// means the subagent is scoped to a specific parent agent's
-	// runtime — the CLI filters these out because there is no
-	// parent runtime on the user's laptop.
-	ParentAgentName string `json:"parent_agent_name,omitempty"`
-
-	// Kind is set by Fetch() to "agent" or "subagent" depending
-	// on which endpoint sourced the row. Not part of the wire
-	// shape — server endpoints don't return it.
+	// Kind is set by Fetch() — always "agent" today. Retained as
+	// a field for forward-compat with the receipt schema.
 	Kind string `json:"-"`
 }
 
-// PrefixedName is the on-disk file basename for this agent. Different
-// prefixes for the two kinds; subagent prefix is a strict subset of
-// the agent prefix so `praxis-*` glob matching wipes both at once.
+// PrefixedName is the on-disk file basename for this agent.
 func (a Agent) PrefixedName() string {
-	if a.Kind == KindSubagent {
-		return PrefixSubagent + a.Name
-	}
 	return PrefixAgent + a.Name
 }
 
 const (
 	customAgentsPath = "/ai-api/custom-agents"
-	subagentsPath    = "/ai-api/subagents"
 	defaultTimeout   = 30 * time.Second
 )
 
-// Fetch hits /ai-api/custom-agents and /ai-api/subagents in parallel,
-// returning a merged + filtered + sorted slice of Agent records.
-// Rows are filtered out client-side:
-//   - is_active == false
-//   - subagents with parent_agent_name != "" (agent-specific, not standalone)
+// Fetch hits /ai-api/custom-agents, filters inactive rows client-side,
+// and returns a deterministically-sorted slice. On fetch failure the
+// caller (login post-auth) leaves existing agents in place on disk —
+// login must stay non-destructive across a flaky network.
 //
-// If EITHER endpoint errors, Fetch returns the error without installing
-// any partial results — callers (login post-auth) leave existing agents
-// in place on the user's disk when the catalog can't be loaded cleanly.
+// A 404 on /custom-agents is treated as "empty catalog" (the helper
+// returns nil, nil) rather than an error, so deployments that don't
+// expose the endpoint install nothing rather than failing login.
 var Fetch = func(baseURL, token string) ([]Agent, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("baseURL is required")
@@ -95,46 +77,19 @@ var Fetch = func(baseURL, token string) ([]Agent, error) {
 		return nil, fmt.Errorf("token is required")
 	}
 
-	var (
-		wg           sync.WaitGroup
-		agentsOut    []Agent
-		subAgentsOut []Agent
-		agentsErr    error
-		subErr       error
-	)
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		agentsOut, agentsErr = fetchOne(baseURL, token, customAgentsPath, KindAgent)
-	}()
-	go func() {
-		defer wg.Done()
-		subAgentsOut, subErr = fetchOne(baseURL, token, subagentsPath, KindSubagent)
-	}()
-	wg.Wait()
-
-	if agentsErr != nil {
-		return nil, fmt.Errorf("fetch custom-agents: %w", agentsErr)
-	}
-	if subErr != nil {
-		return nil, fmt.Errorf("fetch subagents: %w", subErr)
+	agents, err := fetchOne(baseURL, token, customAgentsPath, KindAgent)
+	if err != nil {
+		return nil, fmt.Errorf("fetch custom-agents: %w", err)
 	}
 
-	merged := append(agentsOut, subAgentsOut...)
-	out := merged[:0]
-	for _, a := range merged {
+	out := agents[:0]
+	for _, a := range agents {
 		if !a.IsActive {
-			continue
-		}
-		if a.Kind == KindSubagent && a.ParentAgentName != "" {
 			continue
 		}
 		out = append(out, a)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Kind != out[j].Kind {
-			return out[i].Kind < out[j].Kind
-		}
 		return out[i].Name < out[j].Name
 	})
 	return out, nil
@@ -159,11 +114,10 @@ func fetchOne(baseURL, token, path, kind string) ([]Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
-	// 404 means this Praxis deployment doesn't expose this endpoint
-	// (e.g. older server versions, or deployments that don't ship the
-	// subagents route). Treat as "empty list, no rows of this kind
-	// available" and let the caller continue with whatever the other
-	// endpoint returned. Auth and server-error failures still bubble.
+	// 404 means this Praxis deployment doesn't expose the endpoint
+	// (older server versions). Treat as "empty catalog" so login
+	// installs nothing rather than failing. Auth and server-error
+	// failures still bubble through to the caller.
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
 	}
