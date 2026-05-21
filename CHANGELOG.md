@@ -6,9 +6,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(Empty — see 0.9.0 below.)
+(Empty — see 0.10.0 below.)
 
-## [0.9.0] — 2026-05-20
+## [0.10.0] — 2026-05-21
 
 Introduces sourced agents — `praxis login` now installs custom agents
 and standalone subagents alongside skills, into each detected host's
@@ -53,6 +53,44 @@ native subagent directory. No new credentials and no server changes
 - Profile-switch invariant: `praxis login --profile X` wipes the
   previous profile's `praxis-*` agents (covering both prefixes) and
   installs the new profile's, same as skills.
+
+## [0.9.0] — 2026-05-21
+
+Replaces the `praxis login` localhost callback with a server-mediated
+poll handshake. Removes the CLI's local HTTP listener entirely,
+sidestepping browser security policies (Brave Shields, Chromium
+Private Network Access) that increasingly block cross-network
+fetches to `http://127.0.0.1:<port>`.
+
+### Changed (breaking)
+- `praxis login` no longer opens a local HTTP server. Instead it
+  generates a session nonce, opens the browser to
+  `/ui/ai/settings/api-keys?cli_session=<nonce>&suggested_name=...`,
+  and polls `GET /ai-api/v1/cli-session/<nonce>/key` every 1.5s for
+  the freshly-created key. No `net.Listen`, no CORS handler, no PNA
+  preflight dance. `browserCallbackLogin` → `browserSessionPollLogin`;
+  ~50 lines shorter overall.
+- Suggested key name now carries a 5-hex-char random suffix
+  (`praxis-cli-a1b2c`) so repeated login attempts during development
+  don't trip the modal's "name already exists" validation.
+
+### Fixed
+- `skillcatalog` now writes valid frontmatter for local catalog skills:
+  `name:` lines are only rewritten when the existing value differs (no
+  more cosmetic quoting churn on every render), and malformed-frontmatter
+  recovery is documented for future readers. Adds a regression test for
+  the no-op guard.
+- `RemoveOrphanedByPrefix` is annotated with the `praxis-` reserved
+  namespace contract so its deletion scope is obvious from the function
+  alone.
+
+### Companion backend changes
+- **Requires `agent-factory` PR #1114** (commit `012292a7`, merged
+  2026-05-13) to be deployed. Provides the
+  `/ai-api/v1/cli-session/<nonce>/key` POST + GET endpoints used by the
+  new login flow. A v0.9 CLI against an older deployment will time out
+  waiting for the key — there is no graceful fallback to the old
+  localhost path.
 
 ## [0.8.0] — 2026-05-12
 
