@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -90,9 +91,23 @@ func TestStatusCmd_IncludesAgentsInstalled(t *testing.T) {
 	if err := statusCmd.RunE(statusCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
-	if !strings.Contains(buf.String(), `"agents_installed"`) {
-		t.Errorf("status JSON should include agents_installed key, got:\n%s", buf.String())
+	var out map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("status output should be valid JSON: %v\noutput:\n%s", err, buf.String())
 	}
+	if _, ok := out["agents_installed"]; !ok {
+		t.Errorf("status JSON should include agents_installed key, got keys: %v", mapKeys(out))
+	}
+}
+
+// mapKeys returns the keys of a map for diagnostic output. Tiny helper
+// kept local to this test file rather than pulled in as a dep.
+func mapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func TestStatusCmd_HonorsActiveProfileFromUseConfig(t *testing.T) {
