@@ -161,7 +161,7 @@ func TestStringRendering(t *testing.T) {
 }
 
 func TestAllHarnessesHaveAgentDir(t *testing.T) {
-	home, _ := os.UserHomeDir()
+	home := withIsolatedHome(t)
 	want := map[string]string{
 		"claude-code": filepath.Join(home, ".claude", "agents"),
 		"codex":       filepath.Join(home, ".codex", "agents"),
