@@ -318,7 +318,10 @@ func TestRenderTOMLRejectsTripleQuoteInPrompt(t *testing.T) {
 
 func TestRenderSubagentUsesSubPrefix(t *testing.T) {
 	a := Agent{Name: "log-analyzer", Description: "d", SystemPrompt: "p", IsActive: true, Kind: KindSubagent}
-	out, _ := a.Render("claude-code")
+	out, err := a.Render("claude-code")
+	if err != nil {
+		t.Fatalf("Render(claude-code) for subagent should succeed, got: %v", err)
+	}
 	if !strings.Contains(out, "name: \"praxis-sub-log-analyzer\"") {
 		t.Errorf("subagent should render with praxis-sub- prefix in frontmatter:\n%s", out[:200])
 	}
