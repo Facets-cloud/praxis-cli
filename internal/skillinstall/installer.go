@@ -29,7 +29,7 @@ type Installation struct {
 // recorded in the receipt for later list/uninstall of subagent files.
 type AgentInstallation struct {
 	AgentName   string    `json:"agent_name"`
-	Kind        string    `json:"kind"`         // "agent" | "subagent"
+	Kind        string    `json:"kind"` // "agent" | "subagent"
 	Harness     string    `json:"harness"`
 	Path        string    `json:"path"`
 	InstalledAt time.Time `json:"installed_at"`
