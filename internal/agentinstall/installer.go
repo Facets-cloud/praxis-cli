@@ -176,20 +176,27 @@ func atomicWriteFile(dir, name string, data []byte, perm os.FileMode) (string, e
 // supportsAgentInstall reports whether a detected host has been
 // runtime-verified to load praxis-* agent files from its AgentDir.
 //
-// Claude Code's Task tool dispatch against ~/.claude/agents/*.md is
-// verified end-to-end. Gemini CLI and Codex have *documented*
-// loader contracts that match what our renderer writes
-// (~/.gemini/agents/*.md and ~/.codex/agents/*.toml), but live
-// runtime smoke against those hosts showed they don't pick the
-// files up today (Codex didn't surface them at all; Gemini was
-// unverified). Until those host runtimes catch up — or we
-// runtime-verify they already work — gating on this prevents the
-// CLI from writing files that no loader picks up.
+// Verified: Claude Code (`Task` tool dispatch against
+// ~/.claude/agents/*.md), and Gemini CLI (loaded agents surface via
+// `@<name>` invocation and auto-routing from ~/.gemini/agents/*.md).
 //
-// To re-enable, return true for the runtime-verified harnesses.
-// The renderer and extensionFor logic already understand them.
+// Not verified: Codex. The TOML format the renderer produces
+// (`name`, `description`, `developer_instructions = """..."""`)
+// matches what the Codex subagents docs prescribe exactly, but a
+// runtime smoke against Codex did not surface the installed agents.
+// The docs themselves note "the format may evolve as authoring and
+// sharing mature." Skip Codex until its loader consumes the
+// documented format — flipping this function re-enables it.
+//
+// The renderer and extensionFor logic already understand Codex;
+// only this gate decides whether the file gets written.
 func supportsAgentInstall(harnessName string) bool {
-	return harnessName == "claude-code"
+	switch harnessName {
+	case "claude-code", "gemini-cli":
+		return true
+	default:
+		return false
+	}
 }
 
 // extensionFor returns the per-harness file extension. Claude Code

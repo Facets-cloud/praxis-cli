@@ -25,13 +25,12 @@ func setupHome(t *testing.T) string {
 	return tmp
 }
 
-// TestInstallOnlyClaudeCodeV1 — agents install to Claude Code only
-// for v1 (see supportsAgentInstall doc-comment in installer.go).
-// Gemini CLI's and Codex's loaders did not pick up the files when
-// runtime-tested, despite documented contracts that match our
-// renderer. Until those host runtimes catch up we skip them rather
-// than writing files no loader consumes.
-func TestInstallOnlyClaudeCodeV1(t *testing.T) {
+// TestInstallSupportedHostsOnly — v1 installs agents to Claude Code
+// and Gemini CLI (both runtime-verified). Codex is gated off (its
+// loader did not surface installed files in smoke testing despite
+// matching the documented TOML format). See supportsAgentInstall
+// in installer.go for the gating rationale.
+func TestInstallSupportedHostsOnly(t *testing.T) {
 	home := setupHome(t)
 	hosts := fakeHarnesses(t, home)
 	a := agentcatalog.Agent{
@@ -46,28 +45,30 @@ func TestInstallOnlyClaudeCodeV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	if len(results) != 1 {
-		t.Fatalf("want 1 installation (claude-code only in v1), got %d: %#v", len(results), results)
+	if len(results) != 2 {
+		t.Fatalf("want 2 installations (claude-code + gemini-cli; codex gated), got %d: %#v", len(results), results)
 	}
-	got := results[0]
-	if got.Harness != "claude-code" {
-		t.Errorf("only claude-code should receive agent installs in v1, got %q", got.Harness)
+	wantPaths := map[string]string{
+		"claude-code": filepath.Join(home, "claude", "praxis-alpha.md"),
+		"gemini-cli":  filepath.Join(home, "gemini", "praxis-alpha.md"),
 	}
-	wantPath := filepath.Join(home, "claude", "praxis-alpha.md")
-	if got.Path != wantPath {
-		t.Errorf("path = %q, want %q", got.Path, wantPath)
-	}
-	if _, err := os.Stat(got.Path); err != nil {
-		t.Errorf("file should exist at %s: %v", got.Path, err)
-	}
-	// Negative assertions: gemini and codex agent dirs must be untouched.
-	for _, denied := range []string{
-		filepath.Join(home, "gemini", "praxis-alpha.md"),
-		filepath.Join(home, "codex", "praxis-alpha.toml"),
-	} {
-		if _, err := os.Stat(denied); !os.IsNotExist(err) {
-			t.Errorf("v1 should NOT have written to %s, but it exists", denied)
+	for _, r := range results {
+		want, ok := wantPaths[r.Harness]
+		if !ok {
+			t.Errorf("unexpected harness %q in results (codex should be gated)", r.Harness)
+			continue
 		}
+		if r.Path != want {
+			t.Errorf("%s path = %q, want %q", r.Harness, r.Path, want)
+		}
+		if _, err := os.Stat(r.Path); err != nil {
+			t.Errorf("file should exist at %s: %v", r.Path, err)
+		}
+	}
+	// Negative assertion: Codex agent dir must be untouched.
+	codexPath := filepath.Join(home, "codex", "praxis-alpha.toml")
+	if _, err := os.Stat(codexPath); !os.IsNotExist(err) {
+		t.Errorf("v1 should NOT have written to %s, but it exists", codexPath)
 	}
 }
 
@@ -86,8 +87,8 @@ func TestUninstallByPrefixRemovesAllAgents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UninstallByPrefix: %v", err)
 	}
-	if len(removed) != 2 {
-		t.Fatalf("want 2 removed (2 agents × 1 claude-code host in v1), got %d", len(removed))
+	if len(removed) != 4 {
+		t.Fatalf("want 4 removed (2 agents × 2 supported hosts in v1), got %d", len(removed))
 	}
 	for _, r := range removed {
 		if _, err := os.Stat(r.Path); !os.IsNotExist(err) {
@@ -110,8 +111,8 @@ func TestListReturnsReceiptEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("want 1 entry (1 agent × 1 claude-code host in v1), got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("want 2 entries (1 agent × 2 supported hosts in v1), got %d", len(entries))
 	}
 	for _, e := range entries {
 		if e.Kind != "agent" {
@@ -144,9 +145,9 @@ func TestInstallUpsertsExistingEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	// 1 claude-code host × 1 agent = 1 entry; second install upserts, never duplicates.
-	if len(entries) != 1 {
-		t.Errorf("upsert should replace, got %d entries (want 1)", len(entries))
+	// 2 supported hosts × 1 agent = 2 entries; second install upserts, never duplicates.
+	if len(entries) != 2 {
+		t.Errorf("upsert should replace, got %d entries (want 2)", len(entries))
 	}
 }
 

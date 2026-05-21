@@ -23,12 +23,14 @@ var agentsCmd = &cobra.Command{
 	Long: `List every Praxis-sourced agent file currently installed on this
 machine. Reads ~/.praxis/installed.json — no network call. Agents are
 sourced from /ai-api/custom-agents by ` + "`praxis login`" + ` and installed
-into Claude Code's subagent directory: ~/.claude/agents/praxis-<n>.md.
+into the supported hosts' subagent directories:
 
-Gemini CLI and Codex are gated off for agents in v1 — their loader
-paths match what we render but the hosts didn't surface the files
-in runtime smoke; the renderer keeps those code paths so a future
-release can re-enable them.
+  Claude Code → ~/.claude/agents/praxis-<n>.md
+  Gemini CLI  → ~/.gemini/agents/praxis-<n>.md
+
+Codex is gated off for agents in v1 — the TOML render path is
+implemented but its runtime didn't surface the files in smoke
+testing; flipping ` + "`supportsAgentInstall`" + ` re-enables it.
 
 Re-run ` + "`praxis login`" + ` to refresh the on-disk set against the active
 profile.`,

@@ -151,18 +151,21 @@ praxis mcp k8s_cli run_k8s_cli \
 
 ## Agents
 
-` + "`praxis login`" + ` also installs custom agent files into Claude Code's
-subagent directory:
+` + "`praxis login`" + ` also installs custom agent files into the supported
+hosts' subagent directories:
 
   - Claude Code:  ` + "`~/.claude/agents/praxis-<name>.md`" + ` (via the ` + "`Task`" + ` tool)
+  - Gemini CLI:   ` + "`~/.gemini/agents/praxis-<name>.md`" + ` (via ` + "`@<name>`" + ` invocation or ` + "`/agents`" + `)
 
 Each file's frontmatter describes when to invoke it; pick based on
 the user's intent.
 
-Gemini CLI and Codex are intentionally not targeted in v1: their
-documented loader paths (` + "`~/.gemini/agents/*.md`" + `, ` + "`~/.codex/agents/*.toml`" + `)
-match what this CLI's renderer produces, but runtime smoke showed
-they don't surface the files yet. Skip those hosts for agents.
+Codex is intentionally not targeted in v1: its documented loader
+path (` + "`~/.codex/agents/*.toml`" + `) matches what the renderer produces,
+but its runtime did not surface the installed files in smoke
+testing. The renderer keeps the TOML path; Codex enable is a
+one-line flip in ` + "`supportsAgentInstall`" + ` once the loader consumes
+what's documented.
 
 Agents shell out to ` + "`praxis mcp`" + ` for any infrastructure access — same
 rewrite rule as skills. No new credentials live on the laptop.
