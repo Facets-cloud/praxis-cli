@@ -114,6 +114,17 @@ func TestFetchPartialFailureFailsHard(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error on partial failure, got nil")
 	}
+	// Pin the routing: the wrapped error should name the failing
+	// endpoint (so a regression that mis-routes a subagents-side
+	// failure into the custom-agents path would fail loudly) and
+	// the inner HTTP status (so a regression that swallows the
+	// status code in the wrap would fail).
+	if !strings.Contains(err.Error(), "fetch subagents") {
+		t.Errorf("error should name the failing endpoint (subagents), got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "HTTP 500") {
+		t.Errorf("error should preserve the inner HTTP status, got: %v", err)
+	}
 }
 
 // 404 on one endpoint is not a partial failure — it's "this Praxis
@@ -143,9 +154,13 @@ func TestFetchTolerates404FromOneEndpoint(t *testing.T) {
 func TestFetchRequiresBaseURLAndToken(t *testing.T) {
 	if _, err := Fetch("", "tok"); err == nil {
 		t.Error("empty baseURL: expected error")
+	} else if !strings.Contains(err.Error(), "baseURL is required") {
+		t.Errorf("empty baseURL: error should name the missing field, got: %v", err)
 	}
 	if _, err := Fetch("http://x", ""); err == nil {
 		t.Error("empty token: expected error")
+	} else if !strings.Contains(err.Error(), "token is required") {
+		t.Errorf("empty token: error should name the missing field, got: %v", err)
 	}
 }
 
