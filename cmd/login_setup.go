@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
@@ -158,6 +159,26 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 					for _, r := range installed {
 						fmt.Fprintf(out, "  ✓ %-20s %-10s %s\n", r.AgentName, r.Kind, r.Path)
 					}
+				}
+			}
+
+			// Orphan cleanup: any praxis-* agent file in a detected
+			// host's AgentDir that's NOT in the freshly-installed set
+			// is a leftover (older praxis-cli version, gated host like
+			// Codex still holding pre-gate files, etc.) — remove it.
+			// Mirrors the catalog-skills orphan sweep above.
+			keep := make(map[string]bool, len(agents))
+			for _, a := range agents {
+				keep[a.PrefixedName()] = true
+			}
+			orphaned, orphErr := agentinstall.RemoveOrphanedByPrefix("praxis-", hosts, keep)
+			if orphErr != nil && !asJSON {
+				fmt.Fprintf(out, "Warning: removing orphaned agent files failed: %v\n", orphErr)
+			}
+			if len(orphaned) > 0 {
+				state.removedAgents = append(state.removedAgents, agentLiteResults(orphaned)...)
+				if !asJSON {
+					fmt.Fprintf(out, "Removed %d orphaned agent file(s).\n", len(orphaned))
 				}
 			}
 		}

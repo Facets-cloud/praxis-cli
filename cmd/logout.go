@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
@@ -51,6 +52,10 @@ there's no way (and no need) to target a non-active profile directly.`,
 					fmt.Fprintf(out, "Warning: removing org skills failed: %v\n", err)
 				}
 			}
+			removedAgents, agErr := agentinstall.UninstallByPrefix("praxis-")
+			if agErr != nil && !asJSON {
+				fmt.Fprintf(out, "Warning: removing agents failed: %v\n", agErr)
+			}
 			// Best-effort: drop the manifest snapshot too — it's tied to
 			// whatever profile was last active and shouldn't survive a wipe.
 			if p, perr := paths.MCPTools(); perr == nil {
@@ -60,12 +65,16 @@ there's no way (and no need) to target a non-active profile directly.`,
 				return render.JSON(out, map[string]any{
 					"removed":        "all",
 					"removed_skills": liteResults(removed),
+					"removed_agents": agentLogoutLite(removedAgents),
 				})
 			}
 			fmt.Fprintln(out, "✓ Removed all profiles.")
 			if len(removed) > 0 {
 				fmt.Fprintf(out, "✓ Removed %d org skill(s) from %d host(s).\n",
 					countSkills(removed), countHosts(removed))
+			}
+			if len(removedAgents) > 0 {
+				fmt.Fprintf(out, "✓ Removed %d agent file(s).\n", len(removedAgents))
 			}
 			return nil
 		}
@@ -86,14 +95,18 @@ there's no way (and no need) to target a non-active profile directly.`,
 			}
 		}
 
-		// Wipe org skills. With the v0.7 single-active-profile model, org
-		// skills always belong to the currently-active profile, so this
-		// is unambiguous.
+		// Wipe org skills + agents. With the v0.7 single-active-profile
+		// model, both always belong to the currently-active profile, so
+		// this is unambiguous.
 		removed, err := skillinstall.UninstallByPrefix("praxis-")
 		if err != nil {
 			if !asJSON {
 				fmt.Fprintf(out, "Warning: removing org skills failed: %v\n", err)
 			}
+		}
+		removedAgents, agErr := agentinstall.UninstallByPrefix("praxis-")
+		if agErr != nil && !asJSON {
+			fmt.Fprintf(out, "Warning: removing agents failed: %v\n", agErr)
 		}
 		if p, perr := paths.MCPTools(); perr == nil {
 			_ = os.Remove(p)
@@ -103,6 +116,7 @@ there's no way (and no need) to target a non-active profile directly.`,
 			return render.JSON(out, map[string]any{
 				"removed":        ifTrue(credsPresent, active.Name),
 				"removed_skills": liteResults(removed),
+				"removed_agents": agentLogoutLite(removedAgents),
 			})
 		}
 		if credsPresent {
@@ -114,8 +128,26 @@ there's no way (and no need) to target a non-active profile directly.`,
 			fmt.Fprintf(out, "✓ Removed %d org skill(s) from %d host(s).\n",
 				countSkills(removed), countHosts(removed))
 		}
+		if len(removedAgents) > 0 {
+			fmt.Fprintf(out, "✓ Removed %d agent file(s).\n", len(removedAgents))
+		}
 		return nil
 	},
+}
+
+// agentLogoutLite shapes the JSON output for removed_agents to match
+// the agentInstallationLite shape login uses.
+func agentLogoutLite(in []skillinstall.AgentInstallation) []agentInstallationLite {
+	out := make([]agentInstallationLite, 0, len(in))
+	for _, r := range in {
+		out = append(out, agentInstallationLite{
+			AgentName: r.AgentName,
+			Kind:      r.Kind,
+			Harness:   r.Harness,
+			Path:      r.Path,
+		})
+	}
+	return out
 }
 
 // countSkills returns the number of distinct skill names in the list.

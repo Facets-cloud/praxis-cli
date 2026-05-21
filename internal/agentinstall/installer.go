@@ -116,6 +116,85 @@ func UninstallByPrefix(prefix string) ([]skillinstall.AgentInstallation, error) 
 	return removed, nil
 }
 
+// RemoveOrphanedByPrefix removes on-disk agent files matching `prefix`
+// in each host's AgentDir that aren't recorded in the receipt and
+// aren't in the `keep` set. Mirrors skillinstall.RemoveOrphanedByPrefix
+// for the agent side — cleans up files from older praxis-cli versions
+// or from gates that have toggled (e.g. files left behind in
+// ~/.codex/agents/ when Codex is gated off).
+//
+// RESERVED NAMESPACE CONTRACT: the `praxis-` prefix is owned by this
+// CLI. Any file under a harness AgentDir whose name starts with
+// `praxis-` and isn't in the receipt or the keep set is removed.
+// Callers should not pass `prefix="praxis-"` if user-authored
+// namespacing is in play.
+//
+// `keep` carries the PrefixedName() of agents we want to retain.
+// In the post-auth flow that's the fresh-fetch's PrefixedName() list;
+// any praxis-* file not in that list (and not in the receipt) is an
+// orphan from a previous install or a gated host.
+func RemoveOrphanedByPrefix(prefix string, hosts []harness.Harness, keep map[string]bool) ([]skillinstall.AgentInstallation, error) {
+	if prefix == "" {
+		return nil, fmt.Errorf("RemoveOrphanedByPrefix: prefix must be non-empty")
+	}
+	receipt, err := loadReceipt()
+	if err != nil {
+		return nil, err
+	}
+	recordedPaths := make(map[string]bool, len(receipt.Agents))
+	for _, entry := range receipt.Agents {
+		recordedPaths[filepath.Clean(entry.Path)] = true
+	}
+
+	now := time.Now().UTC()
+	var removed []skillinstall.AgentInstallation
+	for _, h := range hosts {
+		if h.AgentDir == "" {
+			continue
+		}
+		entries, err := os.ReadDir(h.AgentDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return removed, fmt.Errorf("read %s: %w", h.AgentDir, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			// Strip the per-host extension (.md / .toml) to get the
+			// canonical PrefixedName for the keep-set check.
+			base := name
+			if ext := extensionFor(h.Name); strings.HasSuffix(base, ext) {
+				base = base[:len(base)-len(ext)]
+			}
+			if keep[base] {
+				continue
+			}
+			path := filepath.Join(h.AgentDir, name)
+			if recordedPaths[filepath.Clean(path)] {
+				continue
+			}
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return removed, fmt.Errorf("remove %s: %w", path, err)
+			}
+			removed = append(removed, skillinstall.AgentInstallation{
+				AgentName:   base,
+				Kind:        "agent",
+				Harness:     h.Name,
+				Path:        path,
+				InstalledAt: now,
+			})
+		}
+	}
+	return removed, nil
+}
+
 // List returns every agent currently recorded in the receipt.
 func List() ([]skillinstall.AgentInstallation, error) {
 	receipt, err := loadReceipt()

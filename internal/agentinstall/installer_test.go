@@ -121,6 +121,66 @@ func TestListReturnsReceiptEntries(t *testing.T) {
 	}
 }
 
+// TestRemoveOrphanedByPrefix verifies the orphan-cleanup helper:
+// files matching the prefix in a host's AgentDir that aren't in the
+// receipt and aren't in the keep set get removed. Files in the keep
+// set are preserved; files in the receipt are preserved. The
+// extension is stripped before the keep-set lookup.
+func TestRemoveOrphanedByPrefix(t *testing.T) {
+	home := setupHome(t)
+	hosts := fakeHarnesses(t, home)
+
+	// Seed: install one agent normally (ends up in claude + gemini).
+	if _, err := Install([]agentcatalog.Agent{
+		{Name: "alpha", Description: "a", SystemPrompt: "b", IsActive: true, Kind: agentcatalog.KindAgent},
+	}, hosts); err != nil {
+		t.Fatalf("seed Install: %v", err)
+	}
+
+	// Hand-plant orphans in each host's AgentDir — these are NOT in
+	// the receipt and represent leftover files from older praxis-cli
+	// installs (or gated hosts).
+	orphans := map[string]string{
+		filepath.Join(home, "claude", "praxis-orphan.md"):    "claude orphan body",
+		filepath.Join(home, "gemini", "praxis-orphan.md"):    "gemini orphan body",
+		filepath.Join(home, "codex", "praxis-stranded.toml"): "codex stranded body",
+	}
+	for path, body := range orphans {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// keep set: only alpha (the agent we just installed, via PrefixedName).
+	keep := map[string]bool{"praxis-alpha": true}
+
+	removed, err := RemoveOrphanedByPrefix("praxis-", hosts, keep)
+	if err != nil {
+		t.Fatalf("RemoveOrphanedByPrefix: %v", err)
+	}
+	if len(removed) != 3 {
+		t.Fatalf("want 3 orphans removed, got %d: %#v", len(removed), removed)
+	}
+	// All seeded orphans should be gone.
+	for path := range orphans {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("orphan %s should be removed, still exists", path)
+		}
+	}
+	// The kept agent's files (alpha) should survive.
+	for _, kept := range []string{
+		filepath.Join(home, "claude", "praxis-alpha.md"),
+		filepath.Join(home, "gemini", "praxis-alpha.md"),
+	} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Errorf("kept agent %s should still exist: %v", kept, err)
+		}
+	}
+}
+
 func TestUninstallByPrefixRejectsEmptyPrefix(t *testing.T) {
 	setupHome(t)
 	_, err := UninstallByPrefix("")
