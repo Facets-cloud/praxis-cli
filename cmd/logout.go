@@ -46,15 +46,20 @@ there's no way (and no need) to target a non-active profile directly.`,
 			if err := credentials.DeleteAll(); err != nil {
 				return err
 			}
+			var warnings []string
 			removed, err := skillinstall.UninstallByPrefix("praxis-")
 			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("removing org skills failed: %v", err))
 				if !asJSON {
 					fmt.Fprintf(out, "Warning: removing org skills failed: %v\n", err)
 				}
 			}
 			removedAgents, agErr := agentinstall.UninstallByPrefix("praxis-")
-			if agErr != nil && !asJSON {
-				fmt.Fprintf(out, "Warning: removing agents failed: %v\n", agErr)
+			if agErr != nil {
+				warnings = append(warnings, fmt.Sprintf("removing agents failed: %v", agErr))
+				if !asJSON {
+					fmt.Fprintf(out, "Warning: removing agents failed: %v\n", agErr)
+				}
 			}
 			// Best-effort: drop the manifest snapshot too — it's tied to
 			// whatever profile was last active and shouldn't survive a wipe.
@@ -62,11 +67,15 @@ there's no way (and no need) to target a non-active profile directly.`,
 				_ = os.Remove(p)
 			}
 			if asJSON {
-				return render.JSON(out, map[string]any{
+				envelope := map[string]any{
 					"removed":        "all",
 					"removed_skills": liteResults(removed),
 					"removed_agents": agentLogoutLite(removedAgents),
-				})
+				}
+				if len(warnings) > 0 {
+					envelope["warnings"] = warnings
+				}
+				return render.JSON(out, envelope)
 			}
 			fmt.Fprintln(out, "✓ Removed all profiles.")
 			if len(removed) > 0 {
@@ -98,26 +107,35 @@ there's no way (and no need) to target a non-active profile directly.`,
 		// Wipe org skills + agents. With the v0.7 single-active-profile
 		// model, both always belong to the currently-active profile, so
 		// this is unambiguous.
+		var warnings []string
 		removed, err := skillinstall.UninstallByPrefix("praxis-")
 		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("removing org skills failed: %v", err))
 			if !asJSON {
 				fmt.Fprintf(out, "Warning: removing org skills failed: %v\n", err)
 			}
 		}
 		removedAgents, agErr := agentinstall.UninstallByPrefix("praxis-")
-		if agErr != nil && !asJSON {
-			fmt.Fprintf(out, "Warning: removing agents failed: %v\n", agErr)
+		if agErr != nil {
+			warnings = append(warnings, fmt.Sprintf("removing agents failed: %v", agErr))
+			if !asJSON {
+				fmt.Fprintf(out, "Warning: removing agents failed: %v\n", agErr)
+			}
 		}
 		if p, perr := paths.MCPTools(); perr == nil {
 			_ = os.Remove(p)
 		}
 
 		if asJSON {
-			return render.JSON(out, map[string]any{
+			envelope := map[string]any{
 				"removed":        ifTrue(credsPresent, active.Name),
 				"removed_skills": liteResults(removed),
 				"removed_agents": agentLogoutLite(removedAgents),
-			})
+			}
+			if len(warnings) > 0 {
+				envelope["warnings"] = warnings
+			}
+			return render.JSON(out, envelope)
 		}
 		if credsPresent {
 			fmt.Fprintf(out, "✓ Removed profile %q.\n", active.Name)

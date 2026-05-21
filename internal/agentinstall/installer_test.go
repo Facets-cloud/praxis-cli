@@ -3,6 +3,7 @@ package agentinstall
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/agentcatalog"
@@ -187,6 +188,9 @@ func TestUninstallByPrefixRejectsEmptyPrefix(t *testing.T) {
 	if err == nil {
 		t.Fatal("UninstallByPrefix(\"\") should error — empty prefix would wipe everything")
 	}
+	if !strings.Contains(err.Error(), "non-empty") {
+		t.Errorf("error should name the non-empty-prefix guard, got: %v", err)
+	}
 }
 
 func TestInstallUpsertsExistingEntry(t *testing.T) {
@@ -246,8 +250,19 @@ func TestListRejectsCorruptReceipt(t *testing.T) {
 	if err := os.WriteFile(receiptPath, []byte(`{not json`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := List(); err == nil {
+	_, err := List()
+	if err == nil {
 		t.Fatal("List should return error for corrupt receipt JSON")
+	}
+	// Pin both: the wrap names the receipt path (so diagnostic
+	// output points at the actual file), and the underlying cause
+	// is a JSON parse error (so the failure mode is preserved
+	// through the wrap, not swallowed).
+	if !strings.Contains(err.Error(), receiptPath) {
+		t.Errorf("error should include the receipt path %q, got: %v", receiptPath, err)
+	}
+	if !strings.Contains(err.Error(), "parse") {
+		t.Errorf("error should preserve the underlying parse failure, got: %v", err)
 	}
 }
 

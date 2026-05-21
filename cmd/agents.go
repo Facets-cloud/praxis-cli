@@ -58,7 +58,8 @@ profile.`,
 			fmt.Fprintln(out, "No agents installed. Try `praxis login`.")
 			return nil
 		}
-		return printAgentsPretty(out, shaped)
+		printAgentsPretty(out, shaped)
+		return nil
 	},
 }
 
@@ -82,11 +83,14 @@ func toAgentOutputShape(entries []skillinstall.AgentInstallation) []agentEntryFo
 	return out
 }
 
-func printAgentsPretty(out io.Writer, entries []agentEntryForOutput) error {
+// printAgentsPretty writes the table-formatted listing to out. Returns
+// no error — fmt.Fprintf/Fprintln write failures (e.g. a pipe closing
+// mid-stream) aren't actionable here; the CLI surface treats `agents`
+// as best-effort terminal output, identical to `list-skills`.
+func printAgentsPretty(out io.Writer, entries []agentEntryForOutput) {
 	fmt.Fprintf(out, "%-32s  %-9s  %-12s  %s\n", "NAME", "KIND", "HARNESS", "PATH")
 	fmt.Fprintln(out, "─────────────────────────────────────────────────────────────────────────────")
 	for _, e := range entries {
 		fmt.Fprintf(out, "%-32s  %-9s  %-12s  %s\n", e.AgentName, e.Kind, e.Harness, e.Path)
 	}
-	return nil
 }

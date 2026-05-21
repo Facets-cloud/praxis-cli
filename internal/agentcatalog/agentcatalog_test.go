@@ -200,11 +200,21 @@ func TestRenderTOMLRejectsTripleQuoteInPrompt(t *testing.T) {
 	if err == nil {
 		t.Fatal("Render should reject system_prompt containing triple-quote — Codex TOML sentinel collision")
 	}
+	// Pin the rejection reason — a regression that returned a different
+	// error (e.g. "unsupported harness") for this input would silently
+	// pass the err != nil check.
+	if !strings.Contains(err.Error(), "triple-quote sentinel") {
+		t.Errorf("error should name the triple-quote sentinel collision, got: %v", err)
+	}
 }
 
 func TestRenderUnknownHarness(t *testing.T) {
 	a := Agent{Name: "x", Description: "y", SystemPrompt: "z", IsActive: true, Kind: KindAgent}
-	if _, err := a.Render("nonsense"); err == nil {
+	_, err := a.Render("nonsense")
+	if err == nil {
 		t.Fatal("unknown harness should error")
+	}
+	if !strings.Contains(err.Error(), "unsupported harness") {
+		t.Errorf("error should name the unsupported harness reason, got: %v", err)
 	}
 }

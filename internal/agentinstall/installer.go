@@ -317,6 +317,12 @@ func loadReceipt() (skillinstall.Receipt, error) {
 	return r, nil
 }
 
+// saveReceipt persists the receipt via atomicWriteFile so writes go
+// through the same temp-file + fsync + rename path as agent file
+// writes. Previous hand-rolled implementation here was missing the
+// fsync between Write and Close, leaving a window where a crash
+// could persist file metadata without the data — the shared helper
+// closes that gap and eliminates the duplicate code.
 func saveReceipt(r skillinstall.Receipt) error {
 	path, err := paths.Installed()
 	if err != nil {
@@ -329,21 +335,6 @@ func saveReceipt(r skillinstall.Receipt) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".installed-*.json")
-	if err != nil {
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), 0600); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	_, err = atomicWriteFile(filepath.Dir(path), filepath.Base(path), data, 0600)
+	return err
 }
