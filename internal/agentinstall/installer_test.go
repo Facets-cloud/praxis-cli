@@ -110,9 +110,11 @@ func TestUninstallByPrefixRemovesBothAgentsAndSubagents(t *testing.T) {
 func TestListReturnsReceiptEntries(t *testing.T) {
 	home := setupHome(t)
 	hosts := fakeHarnesses(t, home)
-	_, _ = Install([]agentcatalog.Agent{
+	if _, err := Install([]agentcatalog.Agent{
 		{Name: "alpha", Description: "a", SystemPrompt: "b", IsActive: true, Kind: agentcatalog.KindAgent},
-	}, hosts)
+	}, hosts); err != nil {
+		t.Fatalf("seed Install failed: %v", err)
+	}
 	_ = home
 
 	entries, err := List()
