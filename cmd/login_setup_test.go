@@ -3,10 +3,15 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Facets-cloud/praxis-cli/internal/agentcatalog"
+	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
@@ -127,5 +132,119 @@ func TestRunPostAuthSetup_NoHosts_StillRefreshesSnapshot(t *testing.T) {
 	// attempting it).
 	if state.snapshotPath == "" && state.snapshotWarning == "" {
 		t.Error("manifest snapshot step should have run (path or warning expected)")
+	}
+}
+
+func TestRunPostAuthSetupFetchesAndInstallsAgents(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	stubMCPManifestFetch(t)
+
+	origDetect := detectHarnesses
+	defer func() { detectHarnesses = origDetect }()
+	detectHarnesses = func() []harness.Harness {
+		return []harness.Harness{{
+			Name:     "claude-code",
+			Detected: true,
+			SkillDir: filepath.Join(tmp, "claude", "skills"),
+			AgentDir: filepath.Join(tmp, "claude", "agents"),
+		}}
+	}
+
+	origFetchSk := fetchCatalog
+	defer func() { fetchCatalog = origFetchSk }()
+	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
+
+	origFetchAg := fetchAgents
+	defer func() { fetchAgents = origFetchAg }()
+	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) {
+		return []agentcatalog.Agent{
+			{Name: "alpha", Description: "a", SystemPrompt: "b", IsActive: true, Kind: agentcatalog.KindAgent},
+		}, nil
+	}
+
+	var buf bytes.Buffer
+	state := runPostAuthSetup(&buf, false, "http://x", "tok")
+	if len(state.agents) != 1 {
+		t.Fatalf("want 1 agent installed, got %d", len(state.agents))
+	}
+	want := filepath.Join(tmp, "claude", "agents", "praxis-alpha.md")
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("agent file should exist at %s: %v", want, err)
+	}
+}
+
+func TestRunPostAuthSetupAgentFetchFailureLeavesExistingInPlace(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	stubMCPManifestFetch(t)
+
+	hosts := []harness.Harness{{
+		Name:     "claude-code",
+		Detected: true,
+		AgentDir: filepath.Join(tmp, "claude", "agents"),
+	}}
+
+	// Pre-seed: install an existing agent so the receipt + on-disk file
+	// represent a working previous-profile state. If the fetch-failure
+	// path destructively wipes them, the assertions below catch it.
+	seeded, err := agentinstall.Install([]agentcatalog.Agent{{
+		Name:         "preserve-me",
+		Description:  "should survive a transient fetch failure",
+		SystemPrompt: "seeded body",
+		IsActive:     true,
+		Kind:         agentcatalog.KindAgent,
+	}}, hosts)
+	if err != nil {
+		t.Fatalf("seed install: %v", err)
+	}
+	if len(seeded) != 1 {
+		t.Fatalf("seed install: want 1 entry, got %d", len(seeded))
+	}
+	seededPath := seeded[0].Path
+
+	origDetect := detectHarnesses
+	defer func() { detectHarnesses = origDetect }()
+	detectHarnesses = func() []harness.Harness { return hosts }
+
+	origFetchSk := fetchCatalog
+	defer func() { fetchCatalog = origFetchSk }()
+	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
+
+	origFetchAg := fetchAgents
+	defer func() { fetchAgents = origFetchAg }()
+	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) {
+		return nil, fmt.Errorf("simulated network failure")
+	}
+
+	var buf bytes.Buffer
+	state := runPostAuthSetup(&buf, false, "http://x", "tok")
+
+	// state.agents reports what THIS invocation installed; with a fetch
+	// failure that should be empty — but the seeded agent must remain
+	// in the receipt and on disk untouched.
+	if len(state.agents) != 0 {
+		t.Errorf("state.agents should be empty on fetch failure, got %d", len(state.agents))
+	}
+
+	// Receipt: the seeded entry must still be there.
+	listed, err := agentinstall.List()
+	if err != nil {
+		t.Fatalf("list after runPostAuthSetup: %v", err)
+	}
+	found := false
+	for _, e := range listed {
+		if e.AgentName == "praxis-preserve-me" && e.Harness == "claude-code" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("seeded agent praxis-preserve-me missing from receipt after fetch failure; receipt now: %#v", listed)
+	}
+
+	// On-disk file: must still exist.
+	if _, err := os.Stat(seededPath); err != nil {
+		t.Errorf("seeded agent file %s should still exist after fetch failure: %v", seededPath, err)
 	}
 }

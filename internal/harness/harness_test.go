@@ -159,3 +159,22 @@ func TestStringRendering(t *testing.T) {
 		})
 	}
 }
+
+func TestAllHarnessesHaveAgentDir(t *testing.T) {
+	home := withIsolatedHome(t)
+	want := map[string]string{
+		"claude-code": filepath.Join(home, ".claude", "agents"),
+		"codex":       filepath.Join(home, ".codex", "agents"),
+		"gemini-cli":  filepath.Join(home, ".gemini", "agents"),
+	}
+	for _, h := range All() {
+		got, ok := want[h.Name]
+		if !ok {
+			t.Errorf("unexpected harness %q", h.Name)
+			continue
+		}
+		if h.AgentDir != got {
+			t.Errorf("harness %q AgentDir = %q, want %q", h.Name, h.AgentDir, got)
+		}
+	}
+}

@@ -22,6 +22,7 @@ type Harness struct {
 	Detected    bool   // present on this machine
 	BinaryPath  string // resolved binary path if found in $PATH
 	SkillDir    string // user-level skill dir for this harness
+	AgentDir    string // user-level subagent dir for this harness
 }
 
 // All returns every supported harness with its detection state filled in.
@@ -61,6 +62,7 @@ func detectClaudeCode(home string) Harness {
 		Name:        "claude-code",
 		DisplayName: "Claude Code",
 		SkillDir:    filepath.Join(home, ".claude", "skills"),
+		AgentDir:    filepath.Join(home, ".claude", "agents"),
 	}
 	if p, err := exec.LookPath("claude"); err == nil {
 		h.Detected = true
@@ -79,6 +81,7 @@ func detectCodex(home string) Harness {
 		// Codex's documented user-scope skill directory is ~/.agents/skills/
 		// (the open Agent Skills standard alias).
 		SkillDir: filepath.Join(home, ".agents", "skills"),
+		AgentDir: filepath.Join(home, ".codex", "agents"),
 	}
 	if p, err := exec.LookPath("codex"); err == nil {
 		h.Detected = true
@@ -98,6 +101,7 @@ func detectGeminiCLI(home string) Harness {
 		Name:        "gemini-cli",
 		DisplayName: "Gemini CLI",
 		SkillDir:    filepath.Join(home, ".gemini", "skills"),
+		AgentDir:    filepath.Join(home, ".gemini", "agents"),
 	}
 	if p, err := exec.LookPath("gemini"); err == nil {
 		h.Detected = true

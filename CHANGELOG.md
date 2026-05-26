@@ -6,7 +6,66 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(Empty — see 0.9.0 below.)
+(Empty — see 0.10.0 below.)
+
+## [0.10.0] — 2026-05-21
+
+Introduces sourced agents — `praxis login` now installs custom agents
+alongside skills into Claude Code's and Gemini CLI's subagent
+directories. No new credentials and no server changes (consumes
+existing `/ai-api/custom-agents`).
+
+### Added
+
+- `praxis login` now sources from `/ai-api/custom-agents` after the
+  skills catalog. Filters out inactive rows. Renders per supported
+  host:
+  - Claude Code: `~/.claude/agents/praxis-<name>.md`
+  - Gemini CLI: `~/.gemini/agents/praxis-<name>.md`
+- `praxis agents [--json]` lists installed agent files. Read-only,
+  no network call. AI hosts get `[]` on empty.
+
+### Host scope — Codex gated for v1
+
+The renderer also produces `~/.codex/agents/praxis-<name>.toml` in
+the exact shape the [Codex subagents docs](https://developers.openai.com/codex/subagents)
+prescribe (`name`, `description`, `developer_instructions = """..."""`),
+but Codex's runtime did not surface the installed agents during
+smoke testing — its own docs note "the format may evolve as
+authoring and sharing mature." `agentinstall.Install` gates on
+`supportsAgentInstall(h.Name)` which returns true for `claude-code`
+and `gemini-cli` only. Re-enabling Codex is a one-line flip in
+that function once its loader consumes what's documented; the
+renderer's TOML path is already in place.
+- `praxis status` JSON gains an `agents_installed` field (slice of
+  installed agent records, mirroring `skills_installed`).
+- `praxis login` JSON envelope gains `agents` and `removed_agents`
+  keys describing what changed on disk.
+- `praxis refresh-skills` refreshes the agent catalog alongside skills
+  via the same `runPostAuthSetup` path — no separate `refresh-agents`.
+- Meta-skill body teaches AI hosts where agents live and how to
+  invoke them via each host's native subagent tool.
+
+### Changed
+
+- `internal/skillinstall.Receipt` adds an `Agents` slice. Old
+  skill-only `~/.praxis/installed.json` deserializes cleanly with
+  `Agents` nil.
+- `executionPreamble` constant lifted from `internal/skillcatalog`
+  to `internal/render` so both skills and agents share it.
+- `internal/harness.Harness` adds an `AgentDir` field per host.
+- Agent files are written atomically (temp file + fsync + rename) so
+  a concurrent reader can never observe a partial file.
+
+### Not changed
+
+- Credential model: agents hold zero secrets. All infrastructure
+  access still flows through `praxis mcp` to the gateway under org-
+  managed integration credentials. AWS / GCP / Azure / GitHub PAT /
+  kubeconfigs stay server-side.
+- Profile-switch invariant: `praxis login --profile X` wipes the
+  previous profile's `praxis-*` agents and installs the new
+  profile's, same as skills.
 
 ## [0.9.0] — 2026-05-21
 

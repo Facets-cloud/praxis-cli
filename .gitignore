@@ -7,6 +7,14 @@
 *.exe
 coverage.txt
 
+# Pre-existing test leak: some cmd/* test writes catalog skill files
+# relative to its CWD instead of to t.TempDir(), polluting the repo
+# tree with /cmd/praxis*/ folders containing real-looking SKILL.md
+# contents. Until that test is fixed, ignore the leak so it doesn't
+# litter `git status` on every test run.
+/cmd/praxis/
+/cmd/praxis-*/
+
 # goreleaser output
 /dist/
 

@@ -107,6 +107,9 @@ AI-callable (always pass --json):
   - ` + "`praxis mcp`" + ` — list available MCP tools (no args) or invoke one
     (` + "`praxis mcp <mcp> <fn> --arg k=v ...`" + `). See "Discovering MCP tools"
     below.
+  - ` + "`praxis agents [--json]`" + ` — list every agent file the CLI has
+    installed on this host (custom agents from /ai-api/custom-agents,
+    prefixed ` + "`praxis-`" + `). Read-only, no network call.
   - ` + "`praxis refresh-skills`" + ` — re-fetch this profile's catalog and
     rewrite skill files + MCP snapshot, without re-authenticating. Use
     when the org has published new skills or after ` + "`brew upgrade praxis`" + `.
@@ -145,6 +148,29 @@ praxis mcp k8s_cli run_k8s_cli \
   --arg integration_name=prod-cluster \
   --arg command='get pods -n default' --json
 ` + "```" + `
+
+## Agents
+
+` + "`praxis login`" + ` also installs custom agent files into the supported
+hosts' subagent directories:
+
+  - Claude Code:  ` + "`~/.claude/agents/praxis-<name>.md`" + ` (via the ` + "`Task`" + ` tool)
+  - Gemini CLI:   ` + "`~/.gemini/agents/praxis-<name>.md`" + ` (via ` + "`@<name>`" + ` invocation or ` + "`/agents`" + `)
+
+Each file's frontmatter describes when to invoke it; pick based on
+the user's intent.
+
+Codex is intentionally not targeted in v1: its documented loader
+path (` + "`~/.codex/agents/*.toml`" + `) matches what the renderer produces,
+but its runtime did not surface the installed files in smoke
+testing. The renderer keeps the TOML path; Codex enable is a
+one-line flip in ` + "`supportsAgentInstall`" + ` once the loader consumes
+what's documented.
+
+Agents shell out to ` + "`praxis mcp`" + ` for any infrastructure access — same
+rewrite rule as skills. No new credentials live on the laptop.
+
+` + "`praxis agents [--json]`" + ` lists what's currently installed.
 
 ## Don'ts
 

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Facets-cloud/praxis-cli/internal/render"
 )
 
 func TestBuildLoginURL_Valid(t *testing.T) {
@@ -221,5 +224,32 @@ func TestPollSessionKey_TrimsTrailingSlashFromBaseURL(t *testing.T) {
 	path, _ := gotPath.Load().(string)
 	if strings.HasPrefix(path, "//") {
 		t.Errorf("path had double-slash from trailing-slash baseURL: %s", path)
+	}
+}
+
+func TestLoginJSONEnvelopeIncludesAgentKeys(t *testing.T) {
+	state := postAuthState{
+		agents: []agentInstallationLite{
+			{AgentName: "praxis-alpha", Kind: "agent", Harness: "claude-code", Path: "/x.md"},
+		},
+		removedAgents: []agentInstallationLite{
+			{AgentName: "praxis-old", Kind: "agent", Harness: "claude-code", Path: "/old.md"},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := render.JSON(&buf, map[string]any{
+		"ok":             true,
+		"agents":         state.agents,
+		"removed_agents": state.removedAgents,
+	}); err != nil {
+		t.Fatalf("render JSON: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, `"agents":`) {
+		t.Errorf("envelope missing 'agents' key:\n%s", got)
+	}
+	if !strings.Contains(got, `"removed_agents":`) {
+		t.Errorf("envelope missing 'removed_agents' key:\n%s", got)
 	}
 }

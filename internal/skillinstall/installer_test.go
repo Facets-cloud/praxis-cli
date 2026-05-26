@@ -475,3 +475,23 @@ func TestSaveReceipt_AtomicWrite_SurvivesParseRoundTrip(t *testing.T) {
 		t.Errorf("receipt JSON does not round-trip: %v", err)
 	}
 }
+
+func TestReceiptLoadsOldSkillsOnlyJSON(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	if err := os.MkdirAll(filepath.Join(tmp, ".praxis"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	old := `{"skills":[{"skill_name":"praxis","harness":"claude-code","path":"/x","installed_at":"2026-01-01T00:00:00Z"}]}`
+	if err := os.WriteFile(filepath.Join(tmp, ".praxis", "installed.json"), []byte(old), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("want 1 skill entry, got %d", len(entries))
+	}
+}
