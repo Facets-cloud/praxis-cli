@@ -49,12 +49,23 @@ Each capability is one or more functions on a server-side MCP. Run
 
 ## Install
 
+**macOS** (Homebrew cask):
+
 ```bash
-brew install Facets-cloud/tap/praxis
+brew install --cask Facets-cloud/tap/praxis
 ```
 
-Or grab a release binary directly:
-<https://github.com/Facets-cloud/praxis-cli/releases/latest>
+**Linux** — download the binary directly (Homebrew on Linux does not
+support casks):
+
+```bash
+curl -fsSL -o praxis \
+  https://github.com/Facets-cloud/praxis-cli/releases/latest/download/praxis_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+chmod +x praxis && sudo mv praxis /usr/local/bin/
+```
+
+Once installed, `praxis update` self-updates against GitHub Releases
+on both platforms. Latest release: <https://github.com/Facets-cloud/praxis-cli/releases/latest>.
 
 ## Set up — one command
 
