@@ -50,7 +50,7 @@ jobs:
           # GITHUB_TOKEN can publish releases on this repo only.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # HOMEBREW_TAP_TOKEN is referenced by .goreleaser.yml's
-          # brews[].repository.token to push the formula update to
+          # homebrew_casks[].repository.token to push the cask update to
           # Facets-cloud/homebrew-tap (a different repo than this one).
           # Must be a PAT with write access to that repo.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

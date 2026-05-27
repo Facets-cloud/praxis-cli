@@ -53,9 +53,10 @@ release:
   prerelease: auto
   name_template: "v{{ .Version }}"
 
-brews:
+homebrew_casks:
   - name: praxis
     ids: [praxis]
+    binaries: [praxis]
     repository:
       owner: Facets-cloud
       name: homebrew-tap
@@ -67,20 +68,26 @@ brews:
       # env var is set by .github/workflows/release.yml from the
       # repo secret of the same name.
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
+    directory: Casks
     homepage: https://askpraxis.ai
     description: Bring Praxis cloud capabilities to any local AI host
     license: MIT
-    install: |
-      # Raw-binary assets shipped via GitHub Releases arrive with mode
-      # 0644 (GitHub strips the executable bit on upload). chmod before
-      # the test-step or install call tries to exec the binary.
-      binary = Dir["*"].find { |f| File.file?(f) }
-      File.chmod(0755, binary)
-      bin.install binary => "praxis"
-      generate_completions_from_executable(bin/"praxis", "completion")
-    test: |
-      system "#{bin}/praxis", "version"
+    # Helps `brew audit` pass when homepage domain differs from the
+    # GitHub Releases download domain.
+    url:
+      verified: github.com/Facets-cloud/praxis-cli/
+    # Binary is unsigned/un-notarized — strip the macOS quarantine
+    # attribute on install so Gatekeeper doesn't block first launch.
+    # Operate on staged_path (the dir) rather than a specific filename:
+    # the staged file keeps its per-arch download name (e.g.
+    # `praxis_darwin_arm64`); `target: "praxis"` only renames the
+    # symlink in `bin/`, not the file on disk.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", staged_path.to_s]
+          end
     commit_author:
       name: praxis-bot
       email: bot@askpraxis.ai
