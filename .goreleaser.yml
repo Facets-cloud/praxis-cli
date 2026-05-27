@@ -75,14 +75,18 @@ homebrew_casks:
     # Helps `brew audit` pass when homepage domain differs from the
     # GitHub Releases download domain.
     url:
-      verified: github.com/Facets-cloud/praxis-cli
+      verified: github.com/Facets-cloud/praxis-cli/
     # Binary is unsigned/un-notarized — strip the macOS quarantine
     # attribute on install so Gatekeeper doesn't block first launch.
+    # Operate on staged_path (the dir) rather than a specific filename:
+    # the staged file keeps its per-arch download name (e.g.
+    # `praxis_darwin_arm64`); `target: "praxis"` only renames the
+    # symlink in `bin/`, not the file on disk.
     hooks:
       post:
         install: |
           if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/praxis"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", staged_path.to_s]
           end
     commit_author:
       name: praxis-bot
