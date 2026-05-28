@@ -347,22 +347,33 @@ func ContentFor(name string) (string, error) {
 	return body, nil
 }
 
-// IsMetaSkill reports whether `name` is a binary-embedded meta-skill.
-// Used by UninstallByPrefix to preserve meta-skills when wiping the
-// "praxis-" prefix during login profile-switches and logout.
+// IsMetaSkill reports whether `name` is a binary-embedded meta-skill —
+// either a single-file skill (dummySkills) or a multi-file tree skill
+// (treeSkills). Used by UninstallByPrefix / RemoveOrphanedByPrefix to
+// preserve meta-skills when wiping the "praxis-" prefix during login
+// profile-switches and logout.
 func IsMetaSkill(name string) bool {
-	_, ok := dummySkills[name]
-	return ok
+	if _, ok := dummySkills[name]; ok {
+		return true
+	}
+	return isTreeSkill(name)
 }
 
-// MetaSkillNames returns the names of every binary-embedded meta-skill
-// in deterministic (alphabetical) order. Used by login to iterate the
-// install step — deterministic order keeps the install-log output
-// stable across runs and prevents tests from being flaky on map
-// iteration randomness.
+// MetaSkillNames returns the names of every binary-embedded meta-skill —
+// single-file and tree skills — in deterministic (alphabetical) order.
+// Used by login to iterate the install step; deterministic order keeps the
+// install-log output stable across runs and prevents tests from being flaky
+// on map iteration randomness.
 func MetaSkillNames() []string {
-	names := make([]string, 0, len(dummySkills))
+	set := make(map[string]struct{}, len(dummySkills))
 	for k := range dummySkills {
+		set[k] = struct{}{}
+	}
+	for k := range treeSkills() {
+		set[k] = struct{}{}
+	}
+	names := make([]string, 0, len(set))
+	for k := range set {
 		names = append(names, k)
 	}
 	sort.Strings(names)
