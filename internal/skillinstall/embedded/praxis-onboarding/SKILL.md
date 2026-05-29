@@ -103,12 +103,28 @@ and environment creation. These cost nothing and are reversible. *If* the user
 opted into autonomy ("just do it / go fast"), you may **announce the exact
 command and proceed** without a blocking yes. Otherwise, confirm normally.
 
-Two rules that hold in both tiers:
+Three rules that hold in both tiers:
 - **`run_raptor_cli` is general-purpose.** Issue only the specific documented
   command the current stop calls for. Never improvise extra mutations.
 - **Always offer teardown** at the end of any flow that deployed real
   resources — even if the user is in a hurry. The destroy itself is a HARD
   GATE.
+- **Never read credential or secret files into the transcript.** The
+  conversation transcript persists to `~/.claude/projects/` and may be synced,
+  shared, or pasted — dumping a credential file creates a new exposure
+  surface beyond the original file. Never use `Read`, `cat`, `head`, `tail`,
+  `less`, `more`, `grep`, `xxd`, `hexdump`, or any pipe that lands contents in
+  the transcript, on these paths:
+  - `~/.aws/*`, `~/.praxis/*`, `~/.facets/*`
+  - `~/.config/gcloud/**`, `~/.azure/**`
+  - any `*.pem`, `*.key`, `*.p12`, `id_*` (SSH keys), `*.token` file
+
+  When you need a single value from such a file, use extraction that prints
+  only the value, never the whole file: `TOKEN=$(awk -F'=' '/^token *=/
+  {print $2; exit}' ~/.praxis/credentials)`. Or ask the user to set the env
+  var themselves. If a leak does happen, do NOT explain or acknowledge what
+  was in the file, switch approach immediately, and tell the user the
+  exposed credentials should be rotated.
 
 ### Red flags — you are rationalizing if you think…
 
@@ -119,6 +135,7 @@ Two rules that hold in both tiers:
 | "I'll skip the sandbox check to save a step" | That check is what stops you destroying something real. |
 | "This destroy is fine, they trusted me" | Destructive = HARD GATE, always an explicit yes. |
 | "Confirming the cheap steps too keeps it consistent" | Over-nagging kills an onboarding flow. SOFT steps may proceed when autonomy was granted. |
+| "I just need to peek at the credentials file to find a token" | Never `Read`/`cat` credential files — the transcript persists them. Use single-value extraction (`awk -F= '...'`) or ask the user to set an env var. |
 
 ## Progress file format
 

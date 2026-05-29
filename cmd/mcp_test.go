@@ -92,6 +92,65 @@ func TestBuildMCPBody_BodyNotObject_Rejected(t *testing.T) {
 	}
 }
 
+// Regression tests for B7 — `--arg` value parsing.
+//
+// The bug: pflag's StringSlice does CSV-style parsing on each --arg value,
+// which trips on embedded double quotes (`bare " in non-quoted-field`) and
+// also splits on commas inside a single value. Real-world callers pass
+// raptor commands like `--arg command='create project foo --description
+// "Bar"'` — those quotes / commas must reach buildMCPBody intact.
+//
+// Fix: bind --arg with StringArrayVar (literal per-flag value, no CSV
+// splitting). The tests below ParseFlags on mcpCmd and assert the literal
+// value comes through.
+
+func TestMcpArgFlag_EmbeddedQuotesPreserved(t *testing.T) {
+	resetMcpFlags()
+	defer resetMcpFlags()
+
+	value := `command=create project praxis-hello --description "Onboarding sample project"`
+	if err := mcpCmd.ParseFlags([]string{"--arg", value}); err != nil {
+		t.Fatalf("--arg parse failed on embedded double quotes: %v", err)
+	}
+	if len(mcpArgs) != 1 || mcpArgs[0] != value {
+		t.Errorf("got mcpArgs=%q; want [%q]", mcpArgs, value)
+	}
+}
+
+func TestMcpArgFlag_EmbeddedCommasPreserved(t *testing.T) {
+	resetMcpFlags()
+	defer resetMcpFlags()
+
+	value := `tags=a,b,c`
+	if err := mcpCmd.ParseFlags([]string{"--arg", value}); err != nil {
+		t.Fatalf("--arg parse failed on embedded commas: %v", err)
+	}
+	if len(mcpArgs) != 1 || mcpArgs[0] != value {
+		t.Errorf("got mcpArgs=%q; want [%q] (1 entry, comma-splitting must be disabled)", mcpArgs, value)
+	}
+}
+
+func TestMcpArgFlag_RepeatedFlags_MultipleEntries(t *testing.T) {
+	resetMcpFlags()
+	defer resetMcpFlags()
+
+	if err := mcpCmd.ParseFlags([]string{
+		"--arg", `command=foo "bar"`,
+		"--arg", `integration_name=aws-prod`,
+	}); err != nil {
+		t.Fatalf("--arg parse failed: %v", err)
+	}
+	if len(mcpArgs) != 2 {
+		t.Fatalf("got mcpArgs=%q; want 2 entries from two --arg invocations", mcpArgs)
+	}
+	if mcpArgs[0] != `command=foo "bar"` {
+		t.Errorf("first arg: got %q", mcpArgs[0])
+	}
+	if mcpArgs[1] != `integration_name=aws-prod` {
+		t.Errorf("second arg: got %q", mcpArgs[1])
+	}
+}
+
 func TestExtractDetail(t *testing.T) {
 	got := extractDetail([]byte(`{"detail":"missing key"}`), "fallback")
 	if got != "missing key" {

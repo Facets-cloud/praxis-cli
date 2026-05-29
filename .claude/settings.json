@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "_comment": "Project-level Claude Code settings for praxis-cli. The deny list below prevents Claude from reading credential / secret files into the conversation transcript. See SKILL.md 'Credential safety' rule and the praxis-onboarding QA findings for context.",
+  "permissions": {
+    "deny": [
+      "Read(~/.aws/**)",
+      "Read(~/.praxis/credentials)",
+      "Read(~/.praxis/credentials.*)",
+      "Read(~/.facets/**)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/.azure/**)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/*.p12)",
+      "Read(**/id_rsa)",
+      "Read(**/id_rsa.*)",
+      "Read(**/id_ed25519)",
+      "Read(**/id_ed25519.*)",
+      "Read(**/*.token)",
+      "Bash(cat ~/.aws/*)",
+      "Bash(cat ~/.praxis/credentials*)",
+      "Bash(cat ~/.facets/*)",
+      "Bash(cat ~/.config/gcloud/*)",
+      "Bash(cat ~/.azure/*)"
+    ]
+  }
+}

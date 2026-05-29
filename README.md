@@ -268,6 +268,32 @@ praxis logout --all
 ~/.gemini/skills/...                  same shape for Gemini CLI
 ```
 
+## Security — credential-file deny rules
+
+This repo ships a project-level `.claude/settings.json` that **denies
+Claude Code from reading credential / secret files** into the
+conversation transcript. The deny list covers `~/.aws/`, `~/.praxis/`,
+`~/.facets/`, `~/.config/gcloud/`, `~/.azure/`, and common key file
+patterns (`*.pem`, `*.key`, `id_*`, `*.token`). Project-level settings
+apply to anyone working inside this repo.
+
+**Recommended for all users:** adopt the same deny rules globally in
+`~/.claude/settings.json` so they apply to *every* Claude Code session
+on your machine, not just sessions opened inside praxis-cli. Copy the
+`permissions.deny` block from this repo's
+[`.claude/settings.json`](.claude/settings.json) into your global file.
+
+Why this matters: the praxis CLI stores PAT tokens in
+`~/.praxis/credentials`. The conversation transcript is persisted to
+`~/.claude/projects/<…>/<…>.jsonl` and may be synced, shared, or
+pasted. A `Read` or `cat` of a credentials file would dump tokens into
+that transcript — a new exposure surface beyond the file itself. The
+deny rules prevent the tool call before it executes.
+
+If you do find a token in a transcript, rotate the affected PAT via
+the Facets UI (Users → API tokens → revoke + regenerate) and scrub or
+delete the local jsonl file.
+
 ## Why a CLI
 
 CLIs run anywhere: any AI host, CI, cron, shell pipelines. MCP
