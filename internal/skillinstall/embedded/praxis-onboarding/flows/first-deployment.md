@@ -178,13 +178,17 @@ There is no flag to tell which type the CP is. So **always capture the
 canonical name from the response** and use it in every subsequent raptor
 command in this flow.
 
-```
-raptor create project praxis-hello --project-type <type> --clouds <cloud> -o json
+```bash
+# create the project and capture the canonical name in one shot
+project=$(raptor create project praxis-hello --project-type <type> --clouds <cloud> -o json \
+  | jq -r '.name')
 ```
 
-Parse the `.name` field from the JSON response. Refer to it as `<project>`
-in every later stop. **From this point on, never use the user-typed name in
-raptor commands** — always use the captured `<project>`.
+The `.name` field in the JSON response holds whatever the CP actually
+stored — either the user-typed name (PaaS) or `<name>-<cpuid>` (SaaS).
+Refer to that captured value as `<project>` in every later stop.
+**From this point on, never use the user-typed name in raptor commands**
+— always use the captured `<project>`.
 
 ### 4c — Add the cloud_account blueprint resource  `[SOFT]`
 

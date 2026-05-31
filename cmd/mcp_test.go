@@ -101,53 +101,52 @@ func TestBuildMCPBody_BodyNotObject_Rejected(t *testing.T) {
 // "Bar"'` — those quotes / commas must reach buildMCPBody intact.
 //
 // Fix: bind --arg with StringArrayVar (literal per-flag value, no CSV
-// splitting). The tests below ParseFlags on mcpCmd and assert the literal
-// value comes through.
+// splitting). The table cases below ParseFlags on mcpCmd and assert the
+// literal value comes through.
 
-func TestMcpArgFlag_EmbeddedQuotesPreserved(t *testing.T) {
-	resetMcpFlags()
-	defer resetMcpFlags()
+func TestMcpArgFlag_LiteralValueParsing(t *testing.T) {
+	tests := []struct {
+		name     string
+		flagArgs []string
+		want     []string
+	}{
+		{
+			name:     "embedded quotes preserved",
+			flagArgs: []string{"--arg", `command=create project praxis-hello --description "Onboarding sample project"`},
+			want:     []string{`command=create project praxis-hello --description "Onboarding sample project"`},
+		},
+		{
+			name:     "embedded commas preserved (no CSV splitting)",
+			flagArgs: []string{"--arg", `tags=a,b,c`},
+			want:     []string{`tags=a,b,c`},
+		},
+		{
+			name: "repeated flags produce multiple entries",
+			flagArgs: []string{
+				"--arg", `command=foo "bar"`,
+				"--arg", `integration_name=aws-prod`,
+			},
+			want: []string{`command=foo "bar"`, `integration_name=aws-prod`},
+		},
+	}
 
-	value := `command=create project praxis-hello --description "Onboarding sample project"`
-	if err := mcpCmd.ParseFlags([]string{"--arg", value}); err != nil {
-		t.Fatalf("--arg parse failed on embedded double quotes: %v", err)
-	}
-	if len(mcpArgs) != 1 || mcpArgs[0] != value {
-		t.Errorf("got mcpArgs=%q; want [%q]", mcpArgs, value)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetMcpFlags()
+			defer resetMcpFlags()
 
-func TestMcpArgFlag_EmbeddedCommasPreserved(t *testing.T) {
-	resetMcpFlags()
-	defer resetMcpFlags()
-
-	value := `tags=a,b,c`
-	if err := mcpCmd.ParseFlags([]string{"--arg", value}); err != nil {
-		t.Fatalf("--arg parse failed on embedded commas: %v", err)
-	}
-	if len(mcpArgs) != 1 || mcpArgs[0] != value {
-		t.Errorf("got mcpArgs=%q; want [%q] (1 entry, comma-splitting must be disabled)", mcpArgs, value)
-	}
-}
-
-func TestMcpArgFlag_RepeatedFlags_MultipleEntries(t *testing.T) {
-	resetMcpFlags()
-	defer resetMcpFlags()
-
-	if err := mcpCmd.ParseFlags([]string{
-		"--arg", `command=foo "bar"`,
-		"--arg", `integration_name=aws-prod`,
-	}); err != nil {
-		t.Fatalf("--arg parse failed: %v", err)
-	}
-	if len(mcpArgs) != 2 {
-		t.Fatalf("got mcpArgs=%q; want 2 entries from two --arg invocations", mcpArgs)
-	}
-	if mcpArgs[0] != `command=foo "bar"` {
-		t.Errorf("first arg: got %q", mcpArgs[0])
-	}
-	if mcpArgs[1] != `integration_name=aws-prod` {
-		t.Errorf("second arg: got %q", mcpArgs[1])
+			if err := mcpCmd.ParseFlags(tt.flagArgs); err != nil {
+				t.Fatalf("ParseFlags() error = %v", err)
+			}
+			if len(mcpArgs) != len(tt.want) {
+				t.Fatalf("got %d args, want %d: %q", len(mcpArgs), len(tt.want), mcpArgs)
+			}
+			for i, want := range tt.want {
+				if mcpArgs[i] != want {
+					t.Errorf("arg[%d] = %q, want %q", i, mcpArgs[i], want)
+				}
+			}
+		})
 	}
 }
 
