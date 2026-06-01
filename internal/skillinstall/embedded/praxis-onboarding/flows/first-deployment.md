@@ -168,27 +168,35 @@ until acct=$(raptor get accounts -o json 2>&1) && \
 
 ### 4b — Create the project and capture its canonical name  `[SOFT]`
 
-**Important: the CP may rewrite the project name.** Facets has two customer
-types, and they name projects differently:
+**Use `hello-world` as the project name** — it's the universal "sample
+project" name, instantly readable as "this is a test, safe to destroy". Do
+NOT improvise alternates ("onboarding-hello", "my-app", etc.); the
+consistency makes the flow easier to follow and the teardown story
+obvious. The user doesn't need to pick — `hello-world` is the canonical
+default for this flow.
+
+**Important: the CP may rewrite the project name.** Facets has two
+customer types and names projects differently:
 - **SaaS:** the project name is suffixed with the CP UID (e.g. you type
-  `praxis-hello`, the CP stores `praxis-hello-4788907041`).
+  `hello-world`, the CP stores `hello-world-<cpuid>`).
 - **PaaS:** the name stays as you typed it.
 
 There is no flag to tell which type the CP is. So **always capture the
 canonical name from the response** and use it in every subsequent raptor
-command in this flow.
+command in this flow. The suffix is not the user's concern — the capture
+handles it.
 
 ```bash
 # create the project and capture the canonical name in one shot
-project=$(raptor create project praxis-hello --project-type <type> --clouds <cloud> -o json \
+project=$(raptor create project hello-world --project-type <type> --clouds <cloud> -o json \
   | jq -r '.name')
 ```
 
 The `.name` field in the JSON response holds whatever the CP actually
-stored — either the user-typed name (PaaS) or `<name>-<cpuid>` (SaaS).
+stored — either `hello-world` (PaaS) or `hello-world-<cpuid>` (SaaS).
 Refer to that captured value as `<project>` in every later stop.
-**From this point on, never use the user-typed name in raptor commands**
-— always use the captured `<project>`.
+**From this point on, never use the literal `hello-world` in raptor
+commands** — always use the captured `<project>`.
 
 ### 4c — Add the cloud_account blueprint resource  `[SOFT]`
 
