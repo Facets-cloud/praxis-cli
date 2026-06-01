@@ -92,6 +92,64 @@ func TestBuildMCPBody_BodyNotObject_Rejected(t *testing.T) {
 	}
 }
 
+// Regression tests for B7 — `--arg` value parsing.
+//
+// The bug: pflag's StringSlice does CSV-style parsing on each --arg value,
+// which trips on embedded double quotes (`bare " in non-quoted-field`) and
+// also splits on commas inside a single value. Real-world callers pass
+// raptor commands like `--arg command='create project foo --description
+// "Bar"'` — those quotes / commas must reach buildMCPBody intact.
+//
+// Fix: bind --arg with StringArrayVar (literal per-flag value, no CSV
+// splitting). The table cases below ParseFlags on mcpCmd and assert the
+// literal value comes through.
+
+func TestMcpArgFlag_LiteralValueParsing(t *testing.T) {
+	tests := []struct {
+		name     string
+		flagArgs []string
+		want     []string
+	}{
+		{
+			name:     "embedded quotes preserved",
+			flagArgs: []string{"--arg", `command=create project praxis-hello --description "Onboarding sample project"`},
+			want:     []string{`command=create project praxis-hello --description "Onboarding sample project"`},
+		},
+		{
+			name:     "embedded commas preserved (no CSV splitting)",
+			flagArgs: []string{"--arg", `tags=a,b,c`},
+			want:     []string{`tags=a,b,c`},
+		},
+		{
+			name: "repeated flags produce multiple entries",
+			flagArgs: []string{
+				"--arg", `command=foo "bar"`,
+				"--arg", `integration_name=aws-prod`,
+			},
+			want: []string{`command=foo "bar"`, `integration_name=aws-prod`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetMcpFlags()
+			defer resetMcpFlags()
+
+			if err := mcpCmd.ParseFlags(tt.flagArgs); err != nil {
+				t.Fatalf("ParseFlags() error = %v", err)
+			}
+			if len(mcpArgs) != len(tt.want) {
+				t.Fatalf("got %d args, want %d: %q", len(mcpArgs), len(tt.want), mcpArgs)
+			}
+			for i, want := range tt.want {
+				if mcpArgs[i] != want {
+					t.Errorf("arg[%d] = %q, want %q", i, mcpArgs[i], want)
+				}
+			}
+		})
+	}
+}
+
 func TestExtractDetail(t *testing.T) {
 	got := extractDetail([]byte(`{"detail":"missing key"}`), "fallback")
 	if got != "missing key" {

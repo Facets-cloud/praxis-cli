@@ -279,6 +279,63 @@ praxis logout --all
 ~/.gemini/skills/...                  same shape for Gemini CLI
 ```
 
+## Security — credential-file deny rules
+
+This repo ships a project-level `.claude/settings.json` that **denies
+Claude Code from reading credential / secret files** into the
+conversation transcript. The deny list covers `~/.praxis/credentials`
+plus the whole of `~/.aws/`, `~/.facets/`, `~/.config/gcloud/`,
+`~/.azure/`, and common key file patterns (`*.pem`, `*.key`, `id_rsa*`,
+`id_ed25519*`, `*.token`). The rest of `~/.praxis/` stays readable on
+purpose — the praxis skill greps `~/.praxis/mcp-tools.json`.
+Project-level settings apply to anyone working inside this repo.
+
+**Recommended for all users:** adopt the same deny rules globally in
+`~/.claude/settings.json` so they apply to *every* Claude Code session
+on your machine, not just sessions opened inside praxis-cli.
+
+If `~/.claude/settings.json` **does not exist yet**, copy the entire
+[`.claude/settings.json`](.claude/settings.json) from this repo as a
+starting point:
+
+```bash
+mkdir -p ~/.claude
+cp .claude/settings.json ~/.claude/settings.json
+```
+
+If you **already have** a `~/.claude/settings.json` with other
+permissions or settings, merge in the `permissions.deny` entries
+from this repo's file — don't replace your whole settings object.
+Append entries to your existing `permissions.deny` array (deduping
+any already present), preserving everything else.
+
+Why this matters: the praxis CLI stores PAT tokens in
+`~/.praxis/credentials`. The conversation transcript is persisted to
+`~/.claude/projects/<encoded-project>/<session-uuid>.jsonl` and may
+be synced, shared, or pasted. A `Read` or `cat` of a credentials
+file would dump tokens into that transcript — a new exposure surface
+beyond the file itself. The deny rules prevent the tool call before
+it executes.
+
+**If you find a token in a transcript:**
+
+1. **Rotate the affected PAT immediately** via the Facets UI
+   (Users → API tokens → revoke + regenerate).
+2. **Clean the transcript.** Transcript files live at
+   `~/.claude/projects/<encoded-project>/<session-uuid>.jsonl` (one
+   JSONL file per session). Find the affected file:
+   ```bash
+   grep -rl '<the-leaked-token-prefix>' ~/.claude/projects/
+   ```
+   Then either **delete the whole session file** (simplest; loses
+   conversation history) or **scrub the specific lines** containing
+   the token while preserving the rest. For a quick redact:
+   ```bash
+   sed -i.bak 's/<token-value>/REDACTED/g' <the-file>
+   ```
+   After scrubbing, verify each line of the JSONL is still valid
+   JSON (`python3 -c 'import sys,json; [json.loads(l) for l in sys.stdin]' < <the-file>`).
+
 ## Why a CLI
 
 CLIs run anywhere: any AI host, CI, cron, shell pipelines. MCP

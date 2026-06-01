@@ -7,6 +7,7 @@ package skillinstall
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,15 +47,86 @@ type Receipt struct {
 // skill directory and records the installations in the receipt. Returns
 // the per-host results in the order the hosts were given.
 //
-// The body comes from ContentFor — used for binary-embedded skills (the
-// "praxis" meta-skill in v0.x). For server-fetched org skills, use
+// The body comes from ContentFor — used for binary-embedded single-file
+// skills (the "praxis" meta-skill in v0.x). Multi-file tree meta-skills are
+// dispatched to InstallTree. For server-fetched org skills, use
 // InstallWithBody instead.
 func Install(skillName string, hosts []harness.Harness) ([]Installation, error) {
+	if fsys, ok := treeSkillFS(skillName); ok {
+		return InstallTree(skillName, fsys, hosts)
+	}
 	body, err := ContentFor(skillName)
 	if err != nil {
 		return nil, err
 	}
 	return InstallWithBody(skillName, body, hosts)
+}
+
+// InstallTree writes a multi-file (tree) skill into every host's skill
+// directory, recreating the layout of fsys under <SkillDir>/<skillName>/.
+// The canonical recorded path is the SKILL.md at the tree root, so
+// list/status/uninstall treat a tree skill like any other installation.
+// Used for binary-embedded multi-file meta-skills.
+func InstallTree(skillName string, fsys fs.FS, hosts []harness.Harness) ([]Installation, error) {
+	receipt, err := loadReceipt()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	results := make([]Installation, 0, len(hosts))
+	for _, h := range hosts {
+		dir := filepath.Join(h.SkillDir, skillName)
+		if err := writeTree(fsys, dir); err != nil {
+			return results, err
+		}
+		install := Installation{
+			SkillName:   skillName,
+			Harness:     h.Name,
+			Path:        filepath.Join(dir, "SKILL.md"),
+			InstalledAt: now,
+		}
+		results = append(results, install)
+		receipt = upsert(receipt, install)
+	}
+
+	if err := saveReceipt(receipt); err != nil {
+		return results, fmt.Errorf("save receipt: %w", err)
+	}
+	return results, nil
+}
+
+// writeTree replaces dstDir with the contents of fsys, recreating
+// subdirectories. dstDir is cleared first so a re-install or Refresh from a
+// binary whose embedded tree dropped or renamed a file does not leave the
+// stale file behind — the on-disk tree always matches the embedded source.
+func writeTree(fsys fs.FS, dstDir string) error {
+	if err := os.RemoveAll(dstDir); err != nil {
+		return fmt.Errorf("clear %s: %w", dstDir, err)
+	}
+	return fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(dstDir, filepath.FromSlash(p))
+		if d.IsDir() {
+			if err := os.MkdirAll(dst, 0700); err != nil {
+				return fmt.Errorf("create %s: %w", dst, err)
+			}
+			return nil
+		}
+		data, err := fs.ReadFile(fsys, p)
+		if err != nil {
+			return fmt.Errorf("read embedded %s: %w", p, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
+			return fmt.Errorf("create %s: %w", filepath.Dir(dst), err)
+		}
+		if err := os.WriteFile(dst, data, 0600); err != nil {
+			return fmt.Errorf("write %s: %w", dst, err)
+		}
+		return nil
+	})
 }
 
 // InstallWithBody is like Install but takes the file body directly,
@@ -110,11 +182,18 @@ func Uninstall(skillName string) ([]Installation, error) {
 			kept = append(kept, entry)
 			continue
 		}
-		if err := os.Remove(entry.Path); err != nil && !os.IsNotExist(err) {
-			return removed, fmt.Errorf("remove %s: %w", entry.Path, err)
+		if isTreeSkill(entry.SkillName) {
+			// Multi-file skill: drop the whole tree dir.
+			if err := os.RemoveAll(filepath.Dir(entry.Path)); err != nil && !os.IsNotExist(err) {
+				return removed, fmt.Errorf("remove %s: %w", filepath.Dir(entry.Path), err)
+			}
+		} else {
+			if err := os.Remove(entry.Path); err != nil && !os.IsNotExist(err) {
+				return removed, fmt.Errorf("remove %s: %w", entry.Path, err)
+			}
+			// Best-effort: drop the parent skill dir if it's empty.
+			_ = os.Remove(filepath.Dir(entry.Path))
 		}
-		// Best-effort: drop the parent skill dir if it's empty.
-		_ = os.Remove(filepath.Dir(entry.Path))
 		removed = append(removed, entry)
 	}
 	receipt.Skills = kept
@@ -257,6 +336,15 @@ func Refresh() ([]Installation, error) {
 	now := time.Now().UTC()
 	refreshed := make([]Installation, 0, len(receipt.Skills))
 	for i, entry := range receipt.Skills {
+		// Multi-file tree meta-skills: rewrite the whole tree from embed.
+		if fsys, ok := treeSkillFS(entry.SkillName); ok {
+			if err := writeTree(fsys, filepath.Dir(entry.Path)); err != nil {
+				return refreshed, fmt.Errorf("refresh tree %s: %w", entry.SkillName, err)
+			}
+			receipt.Skills[i].InstalledAt = now
+			refreshed = append(refreshed, receipt.Skills[i])
+			continue
+		}
 		body, err := ContentFor(entry.SkillName)
 		if err != nil {
 			// Skill no longer in catalog — leave the file alone, skip.
