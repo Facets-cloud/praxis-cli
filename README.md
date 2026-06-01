@@ -272,9 +272,11 @@ praxis logout --all
 
 This repo ships a project-level `.claude/settings.json` that **denies
 Claude Code from reading credential / secret files** into the
-conversation transcript. The deny list covers `~/.aws/`, `~/.praxis/`,
-`~/.facets/`, `~/.config/gcloud/`, `~/.azure/`, and common key file
-patterns (`*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*.token`).
+conversation transcript. The deny list covers `~/.praxis/credentials`
+plus the whole of `~/.aws/`, `~/.facets/`, `~/.config/gcloud/`,
+`~/.azure/`, and common key file patterns (`*.pem`, `*.key`, `id_rsa*`,
+`id_ed25519*`, `*.token`). The rest of `~/.praxis/` stays readable on
+purpose — the praxis skill greps `~/.praxis/mcp-tools.json`.
 Project-level settings apply to anyone working inside this repo.
 
 **Recommended for all users:** adopt the same deny rules globally in

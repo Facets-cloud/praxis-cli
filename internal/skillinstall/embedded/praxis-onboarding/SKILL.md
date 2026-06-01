@@ -179,7 +179,7 @@ highest completed step + 1 is where to continue. Create the file if missing.
 
 | id | title | file | what it does |
 |----|-------|------|--------------|
-| `first-deployment` | First deployment (sample, with teardown) | `flows/first-deployment.md` | Detect & link CP → ensure modules (import only if empty) → tweak a module → project → env → real release → verify → teardown |
+| `first-deployment` | First deployment (sample, with teardown) | `flows/first-deployment.md` | Detect CP (linked CP is a prereq) → ensure modules (import only if empty) → tweak a module → project → env → real release → verify → teardown |
 
 **Adding a flow later:** drop a new file in `flows/`, add one row here. The
 engine loop, safety rules, and progress format are reused unchanged.

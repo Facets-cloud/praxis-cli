@@ -158,8 +158,9 @@ account that shell session is signed into. Local CLI, instance-with-role,
 and CI runners all work equally; don't push any one of them.
 
 **Do not use `-w` via the MCP wrapper** — linking polls a webhook for
-several minutes, exceeding the wrapper's 2-min HTTP timeout. Trigger
-without `-w`, then poll:
+several minutes, well past the wrapper's default 60-second HTTP timeout
+(raise it with `praxis mcp … --timeout <dur>` if you must wait
+synchronously). Trigger without `-w`, then poll:
 
 ```
 until acct=$(raptor get accounts -o json 2>&1) && \
@@ -330,7 +331,7 @@ raptor launch environment <env> -p <project>
 ```
 
 **Do not use `-w` via the MCP wrapper** — launch typically runs 1–5 min, which
-exceeds the wrapper's 2-min HTTP timeout. Trigger without `-w`, then poll:
+exceeds the wrapper's default 60-second HTTP timeout. Trigger without `-w`, then poll:
 
 ```
 # poll until launch leaves IN_PROGRESS
@@ -394,8 +395,8 @@ even under "don't ask me"). Then:
 raptor create release -p <project> -e <env>
 ```
 
-**Do not use `-w` via the MCP wrapper** — release also exceeds the 2-min HTTP
-timeout. Trigger without `-w`, then poll:
+**Do not use `-w` via the MCP wrapper** — release also exceeds the default
+60-second HTTP timeout. Trigger without `-w`, then poll:
 
 ```
 until rel=$(raptor get releases -p <project> -e <env> 2>&1) && \
