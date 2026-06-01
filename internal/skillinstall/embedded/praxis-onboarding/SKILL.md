@@ -77,6 +77,8 @@ For each stop in the flow:
    stops: see Safety below — confirm first, every time.**
 3. **Check.** Ask: *"Got it? — yes / explain more / skip ahead."* Wait for the
    answer. On "explain more", re-explain with a different angle, then re-ask.
+   **Skip this check entirely** when the previous step had a HARD GATE — the
+   explicit yes at the gate IS the check. Don't double-confirm.
 4. **Record.** Append the completed step index to the progress file under this
    flow's id (see format). This is what makes resume work.
 
@@ -94,21 +96,58 @@ command, name the consequence, wait for a separate, explicit yes. No
 exceptions, no defaults-to-continue:
 - the **sandbox confirmation** (Stop 0) — proof this control plane/cloud is
   safe to create and destroy in, before any mutation;
-- anything **billable** — the release that provisions real cloud infra. State
-  plainly it creates billable resources and roughly what, then get the yes;
+- anything that **INTRODUCES new billable infra** — first cloud-account link,
+  first environment launch (provisions VPC/NAT/etc.), or a release that adds
+  net-new resources. State plainly what new infrastructure will be created
+  and roughly what it costs, then get the yes;
 - anything **destructive** — teardown / destroy applies.
 
-**SOFT — free and reversible.** Catalog import, a module-spec tweak, project
-and environment creation. These cost nothing and are reversible. *If* the user
-opted into autonomy ("just do it / go fast"), you may **announce the exact
-command and proceed** without a blocking yes. Otherwise, confirm normally.
+**SOFT — free, reversible, OR spec-only changes on already-deployed infra.**
+Catalog import, module-spec tweaks, project + environment creation, and
+**applies that only change spec fields on resources already deployed** (e.g.
+flipping `versioning_enabled` on a bucket that already exists, retagging,
+config-only updates). These don't introduce new billable infrastructure. *If*
+the user opted into autonomy ("just do it / go fast"), you may **announce the
+exact command and proceed** without a blocking yes. Otherwise, confirm
+normally — a brief one-line confirm, NOT a HARD GATE.
 
-Two rules that hold in both tiers:
+**Gate verbosity scales down.** The FIRST HARD GATE in a flow carries the
+full rationale (what's about to happen, why it's gated, cost). SUBSEQUENT
+HARD GATEs are brief — one-line action + explicit yes. Don't re-explain cost
+models the user already accepted at an earlier gate; reference them in a
+single phrase ("same cost story as launch") and ask for the yes.
+
+Four rules that hold in both tiers:
 - **`run_raptor_cli` is general-purpose.** Issue only the specific documented
   command the current stop calls for. Never improvise extra mutations.
 - **Always offer teardown** at the end of any flow that deployed real
   resources — even if the user is in a hurry. The destroy itself is a HARD
   GATE.
+- **Before retrying a submission verb on a CLI error, check state first.**
+  When `plan` / `create release` / `launch environment` / `destroy environment`
+  returns a CLI error, do NOT immediately retry. First run `get releases`
+  (or the relevant `get` verb) to see whether the operation actually ran
+  server-side. CLI parse failures and "couldn't capture release ID" errors
+  often mean the server succeeded but the CLI couldn't read the response —
+  retrying creates duplicate releases. Distinguish "CLI couldn't parse the
+  response" from "server rejected the request"; only the latter warrants a
+  retry.
+- **Never read credential or secret files into the transcript.** The
+  conversation transcript persists to `~/.claude/projects/` and may be synced,
+  shared, or pasted — dumping a credential file creates a new exposure
+  surface beyond the original file. Never use `Read`, `cat`, `head`, `tail`,
+  `less`, `more`, `grep`, `xxd`, `hexdump`, or any pipe that lands contents in
+  the transcript, on these paths:
+  - `~/.aws/*`, `~/.praxis/*`, `~/.facets/*`
+  - `~/.config/gcloud/**`, `~/.azure/**`
+  - any `*.pem`, `*.key`, `*.p12`, `id_*` (SSH keys), `*.token` file
+
+  When you need a single value from such a file, use extraction that prints
+  only the value, never the whole file: `TOKEN=$(awk -F'=' '/^token *=/
+  {print $2; exit}' ~/.praxis/credentials)`. Or ask the user to set the env
+  var themselves. If a leak does happen, do NOT explain or acknowledge what
+  was in the file, switch approach immediately, and tell the user the
+  exposed credentials should be rotated.
 
 ### Red flags — you are rationalizing if you think…
 
@@ -119,6 +158,7 @@ Two rules that hold in both tiers:
 | "I'll skip the sandbox check to save a step" | That check is what stops you destroying something real. |
 | "This destroy is fine, they trusted me" | Destructive = HARD GATE, always an explicit yes. |
 | "Confirming the cheap steps too keeps it consistent" | Over-nagging kills an onboarding flow. SOFT steps may proceed when autonomy was granted. |
+| "I just need to peek at the credentials file to find a token" | Never `Read`/`cat` credential files — the transcript persists them. Use single-value extraction (`awk -F= '...'`) or ask the user to set an env var. |
 
 ## Progress file format
 

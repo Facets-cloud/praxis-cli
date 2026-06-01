@@ -27,7 +27,11 @@ var (
 
 func init() {
 	mcpCmd.Flags().BoolVar(&mcpJSON, "json", false, "JSON output (default when stdout is non-TTY)")
-	mcpCmd.Flags().StringSliceVar(&mcpArgs, "arg", nil, "key=value pair (repeatable); merged into request body")
+	// Use StringArrayVar (not StringSliceVar) so each --arg value is taken as a
+	// literal string with no CSV-style splitting. StringSlice trips on embedded
+	// commas and double quotes in the value — see TestMcpArgFlag_* regression
+	// tests covering raptor commands like `--arg command='... "quoted" ...'`.
+	mcpCmd.Flags().StringArrayVar(&mcpArgs, "arg", nil, "key=value pair (repeatable); merged into request body")
 	mcpCmd.Flags().StringVar(&mcpBody, "body", "", "raw JSON body (use '-' for stdin); overrides --arg")
 	mcpCmd.Flags().DurationVar(&mcpTimeout, "timeout", 60*time.Second, "request timeout")
 	rootCmd.AddCommand(mcpCmd)
