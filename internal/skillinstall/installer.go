@@ -96,8 +96,14 @@ func InstallTree(skillName string, fsys fs.FS, hosts []harness.Harness) ([]Insta
 	return results, nil
 }
 
-// writeTree copies every file in fsys into dstDir, recreating subdirectories.
+// writeTree replaces dstDir with the contents of fsys, recreating
+// subdirectories. dstDir is cleared first so a re-install or Refresh from a
+// binary whose embedded tree dropped or renamed a file does not leave the
+// stale file behind — the on-disk tree always matches the embedded source.
 func writeTree(fsys fs.FS, dstDir string) error {
+	if err := os.RemoveAll(dstDir); err != nil {
+		return fmt.Errorf("clear %s: %w", dstDir, err)
+	}
 	return fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err

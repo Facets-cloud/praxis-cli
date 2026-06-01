@@ -89,6 +89,64 @@ func TestInstall_TreeSkill_WritesWholeTree(t *testing.T) {
 	}
 }
 
+func TestInstallTree_PrunesStaleFiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+	results, err := Install(onboardingSkill, hosts)
+	if err != nil {
+		t.Fatalf("Install err = %v", err)
+	}
+
+	// Simulate a previous binary version that shipped a flow file this binary
+	// no longer carries. Drop an orphan into each installed tree.
+	for _, in := range results {
+		stale := filepath.Join(filepath.Dir(in.Path), "flows", "retired-flow.md")
+		if err := os.WriteFile(stale, []byte("stale"), 0600); err != nil {
+			t.Fatalf("seed stale file: %v", err)
+		}
+	}
+
+	// Re-install (e.g. the user re-runs login). The orphan must not survive.
+	if _, err := Install(onboardingSkill, hosts); err != nil {
+		t.Fatalf("re-Install err = %v", err)
+	}
+	for _, in := range results {
+		stale := filepath.Join(filepath.Dir(in.Path), "flows", "retired-flow.md")
+		if _, statErr := os.Stat(stale); !os.IsNotExist(statErr) {
+			t.Errorf("stale file %s survived re-install (stat err = %v); tree install must prune orphans", stale, statErr)
+		}
+		// The real files must still be there.
+		if _, statErr := os.Stat(filepath.Join(filepath.Dir(in.Path), "SKILL.md")); statErr != nil {
+			t.Errorf("SKILL.md missing after re-install: %v", statErr)
+		}
+	}
+}
+
+func TestRefresh_PrunesStaleTreeFiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+	results, err := Install(onboardingSkill, hosts)
+	if err != nil {
+		t.Fatalf("Install err = %v", err)
+	}
+
+	stale := filepath.Join(filepath.Dir(results[0].Path), "flows", "retired-flow.md")
+	if err := os.WriteFile(stale, []byte("stale"), 0600); err != nil {
+		t.Fatalf("seed stale file: %v", err)
+	}
+
+	if _, err := Refresh(); err != nil {
+		t.Fatalf("Refresh err = %v", err)
+	}
+	if _, statErr := os.Stat(stale); !os.IsNotExist(statErr) {
+		t.Errorf("stale file %s survived Refresh (stat err = %v); tree refresh must prune orphans", stale, statErr)
+	}
+	// The real flow file must still be present after refresh.
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(results[0].Path), "flows", "first-deployment.md")); statErr != nil {
+		t.Errorf("flow file missing after refresh: %v", statErr)
+	}
+}
+
 func TestUninstall_TreeSkill_RemovesWholeTree(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	hosts := fakeHosts(t)
