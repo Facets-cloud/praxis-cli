@@ -403,7 +403,9 @@ until rel=$(raptor get releases -p <project> -e <env> 2>&1) && \
 ```
 
 On failure, hand off to `praxis-release-debugging` / `troubleshoot` and read the
-logs together: `raptor logs release -p <project> -e <env> <release-id>`.
+logs together: `raptor logs release -p <project> -e <env> <release-id> --stream`.
+The `--stream` flag is what tees the log lines into stdout — without it you only
+get the tempfile path, which the model can't read back through the MCP wrapper.
 
 ---
 
