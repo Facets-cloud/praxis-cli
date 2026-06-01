@@ -248,9 +248,10 @@ at Stop 6.
 ## Stop 5 — Create, configure, and launch the environment  `[SOFT]` create+overrides · `[HARD GATE]` launch
 
 **Teach:** An *environment* is a concrete deployment target within the project.
-Creating it is just metadata. **Launching it** is the first cloud-touching
-action — it bootstraps env-level infrastructure (state backend, runner role,
-networking scaffolding) before any blueprint resource can be deployed.
+Creating it is just metadata. **Launching it** is the first action that
+provisions billable cloud infrastructure (Stop 4a's IAM-role bootstrap was
+free) — it sets up env-level scaffolding (state backend, runner role,
+networking) before any blueprint resource can be deployed.
 
 Three substeps in order: create the env, apply any required env-level
 overrides, then launch. Skipping the overrides causes launch to fail several
