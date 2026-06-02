@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,121 +84,159 @@ func runLoginRunE(t *testing.T) (string, error) {
 
 // ─── resolveLoginURL ─────────────────────────────────────────────────────
 
-func TestResolveLoginURL_FlagWins(t *testing.T) {
-	isolateHome(t)
-	seedProfile(t, "default", "https://stored.test", "tok")
-	got, err := resolveLoginURL("default", "https://flag.test")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestResolveLoginURL(t *testing.T) {
+	tests := []struct {
+		name        string
+		seedName    string // "" → seed nothing
+		seedURL     string
+		profile     string
+		flagURL     string
+		wantURL     string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "explicit --url wins over stored profile URL",
+			seedName: "default", seedURL: "https://stored.test",
+			profile: "default", flagURL: "https://flag.test",
+			wantURL: "https://flag.test",
+		},
+		{
+			name:     "existing profile reuses its stored URL",
+			seedName: "acme", seedURL: "https://acme.test",
+			profile: "acme", flagURL: "",
+			wantURL: "https://acme.test",
+		},
+		{
+			name:    "default profile falls back to the built-in URL",
+			profile: "default", flagURL: "",
+			wantURL: credentials.DefaultURL,
+		},
+		{
+			name:    "new named profile without --url errors",
+			profile: "acme", flagURL: "",
+			wantErr: true, errContains: "--url",
+		},
 	}
-	if got != "https://flag.test" {
-		t.Errorf("got %q, want explicit flag URL", got)
-	}
-}
-
-func TestResolveLoginURL_ExistingProfileReusesStoredURL(t *testing.T) {
-	isolateHome(t)
-	seedProfile(t, "acme", "https://acme.test", "tok")
-	got, err := resolveLoginURL("acme", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "https://acme.test" {
-		t.Errorf("got %q, want stored profile URL", got)
-	}
-}
-
-func TestResolveLoginURL_DefaultFallsBackToBuiltin(t *testing.T) {
-	isolateHome(t) // no profiles seeded
-	got, err := resolveLoginURL("default", "")
-	if err != nil {
-		t.Fatalf("default profile must not require --url: %v", err)
-	}
-	if got != credentials.DefaultURL {
-		t.Errorf("got %q, want built-in %q", got, credentials.DefaultURL)
-	}
-}
-
-func TestResolveLoginURL_NewNamedProfileWithoutURLErrors(t *testing.T) {
-	isolateHome(t) // "acme" does not exist
-	_, err := resolveLoginURL("acme", "")
-	if err == nil {
-		t.Fatal("expected error for new named profile without --url, got nil")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateHome(t)
+			if tt.seedName != "" {
+				seedProfile(t, tt.seedName, tt.seedURL, "tok")
+			}
+			got, err := resolveLoginURL(tt.profile, tt.flagURL)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.errContains)
+				}
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("error = %v, want substring %q", err, tt.errContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.wantURL {
+				t.Errorf("got %q, want %q", got, tt.wantURL)
+			}
+		})
 	}
 }
 
 // ─── tryReuseStoredToken ─────────────────────────────────────────────────
 
-func TestTryReuse_NoStoredToken(t *testing.T) {
-	isolateHome(t)
-	post := stubPostAuth(t)
-	reused, err := tryReuseStoredToken(io.Discard, true, "default", credentials.DefaultURL)
-	if reused || err != nil {
-		t.Fatalf("got (reused=%v, err=%v), want (false, nil)", reused, err)
+func TestTryReuseStoredToken(t *testing.T) {
+	tests := []struct {
+		name             string
+		seed             bool
+		storedURL        string
+		storedToken      string
+		targetURL        string
+		authMeErr        error
+		wantReused       bool
+		wantPostAuth     bool
+		wantAuthMeCalled bool
+		wantActive       string // "" → don't assert active pointer
+	}{
+		{
+			name:      "no stored token → no reuse, browser fallback",
+			seed:      false,
+			targetURL: credentials.DefaultURL,
+		},
+		{
+			name:      "URL re-target skips reuse without verifying",
+			seed:      true,
+			storedURL: "https://stored.test", storedToken: "tok",
+			targetURL: "https://other.test",
+		},
+		{
+			name:      "valid token reuses, persists, sets active",
+			seed:      true,
+			storedURL: "https://stored.test", storedToken: "tok",
+			targetURL:        "https://stored.test",
+			wantReused:       true,
+			wantPostAuth:     true,
+			wantAuthMeCalled: true,
+			wantActive:       "default",
+		},
+		{
+			name:      "invalid token falls back gracefully",
+			seed:      true,
+			storedURL: "https://stored.test", storedToken: "expired",
+			targetURL:        "https://stored.test",
+			authMeErr:        io.ErrUnexpectedEOF,
+			wantAuthMeCalled: true,
+		},
 	}
-	if *post {
-		t.Error("post-auth setup ran without a stored token")
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateHome(t)
+			if tt.seed {
+				seedProfile(t, "default", tt.storedURL, tt.storedToken)
+			}
+			post := stubPostAuth(t)
+			authMeCalled := false
+			stubAuthMe(t, func(baseURL, token string) (*authMeResponse, error) {
+				authMeCalled = true
+				if baseURL != tt.targetURL || token != tt.storedToken {
+					t.Errorf("fetchAuthMe(%q,%q), want (%q,%q)", baseURL, token, tt.targetURL, tt.storedToken)
+				}
+				if tt.authMeErr != nil {
+					return nil, tt.authMeErr
+				}
+				return &authMeResponse{Email: "u@x"}, nil
+			})
 
-func TestTryReuse_URLMismatchSkips(t *testing.T) {
-	isolateHome(t)
-	seedProfile(t, "default", "https://stored.test", "tok")
-	post := stubPostAuth(t)
-	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
-		t.Fatal("fetchAuthMe must not be called on URL mismatch")
-		return nil, nil
-	})
-	reused, err := tryReuseStoredToken(io.Discard, true, "default", "https://other.test")
-	if reused || err != nil {
-		t.Fatalf("got (reused=%v, err=%v), want (false, nil)", reused, err)
-	}
-	if *post {
-		t.Error("post-auth setup ran on URL mismatch")
-	}
-}
-
-func TestTryReuse_ValidTokenReuses(t *testing.T) {
-	isolateHome(t)
-	seedProfile(t, "default", "https://stored.test", "tok")
-	post := stubPostAuth(t)
-	stubAuthMe(t, func(baseURL, token string) (*authMeResponse, error) {
-		if token != "tok" || baseURL != "https://stored.test" {
-			t.Errorf("fetchAuthMe called with (%q,%q)", baseURL, token)
-		}
-		return &authMeResponse{Email: "u@x"}, nil
-	})
-	reused, err := tryReuseStoredToken(io.Discard, true, "default", "https://stored.test")
-	if !reused || err != nil {
-		t.Fatalf("got (reused=%v, err=%v), want (true, nil)", reused, err)
-	}
-	if !*post {
-		t.Error("post-auth setup did not run for a valid reused token")
-	}
-	// Active pointer must now be the reused profile.
-	active, _ := credentials.ResolveActive("")
-	if active.Name != "default" || !active.Loaded {
-		t.Errorf("active profile = %+v, want default loaded", active)
-	}
-}
-
-func TestTryReuse_InvalidTokenFallsBack(t *testing.T) {
-	isolateHome(t)
-	seedProfile(t, "default", "https://stored.test", "expired")
-	post := stubPostAuth(t)
-	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
-		return nil, io.ErrUnexpectedEOF // any verification failure
-	})
-	reused, err := tryReuseStoredToken(io.Discard, true, "default", "https://stored.test")
-	if reused || err != nil {
-		t.Fatalf("got (reused=%v, err=%v), want (false, nil) graceful fallback", reused, err)
-	}
-	if *post {
-		t.Error("post-auth setup ran despite failed verification")
+			reused, err := tryReuseStoredToken(io.Discard, true, "default", tt.targetURL)
+			if err != nil {
+				t.Fatalf("tryReuseStoredToken returned err = %v, want nil (fallback is non-fatal)", err)
+			}
+			if reused != tt.wantReused {
+				t.Errorf("reused = %v, want %v", reused, tt.wantReused)
+			}
+			if *post != tt.wantPostAuth {
+				t.Errorf("post-auth setup ran = %v, want %v", *post, tt.wantPostAuth)
+			}
+			if authMeCalled != tt.wantAuthMeCalled {
+				t.Errorf("fetchAuthMe called = %v, want %v", authMeCalled, tt.wantAuthMeCalled)
+			}
+			if tt.wantActive != "" {
+				active, _ := credentials.ResolveActive("")
+				if active.Name != tt.wantActive || !active.Loaded {
+					t.Errorf("active profile = %+v, want %q loaded", active, tt.wantActive)
+				}
+			}
+		})
 	}
 }
 
 // ─── RunE precedence ─────────────────────────────────────────────────────
+//
+// These stay as separate functions rather than a table: each exercises a
+// distinct branch of the precedence chain with its own seam stubbing and
+// assertions (browser called vs. not, error returned), so a shared table
+// would obscure more than it consolidates.
 
 func TestLoginRunE_ValidStoredTokenSkipsBrowser(t *testing.T) {
 	isolateHome(t)
@@ -276,6 +315,9 @@ func TestLoginRunE_NewNamedProfileWithoutURLErrors(t *testing.T) {
 	_, err := runLoginRunE(t)
 	if err == nil {
 		t.Fatal("expected error for new named profile without --url")
+	}
+	if !strings.Contains(err.Error(), "--url") {
+		t.Errorf("error = %v, want message containing '--url'", err)
 	}
 	if *browser {
 		t.Error("browser flow ran despite a usage error")
