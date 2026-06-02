@@ -32,14 +32,24 @@ var (
 	loginProfile string
 	loginURL     string
 	loginToken   string
+	loginForce   bool
 	loginJSON    bool
 	loginTimeout time.Duration
+)
+
+// browserLoginFn and postAuthSetup are package-level seams so tests can
+// exercise login's path selection (reuse vs. browser) and persistence
+// without opening a browser, hitting the network, or installing skills.
+var (
+	browserLoginFn = browserSessionPollLogin
+	postAuthSetup  = runPostAuthSetup
 )
 
 func init() {
 	loginCmd.Flags().StringVar(&loginProfile, "profile", "", "save under this profile name (default: \"default\")")
 	loginCmd.Flags().StringVar(&loginURL, "url", "", "Praxis deployment URL (default: existing profile URL or "+credentials.DefaultURL+")")
 	loginCmd.Flags().StringVar(&loginToken, "token", "", "skip browser flow; save and verify the given API key directly")
+	loginCmd.Flags().BoolVar(&loginForce, "force", false, "skip reusing a stored token; always open the browser")
 	loginCmd.Flags().BoolVar(&loginJSON, "json", false, "JSON output")
 	loginCmd.Flags().DurationVar(&loginTimeout, "timeout", 90*time.Second, "max time to wait for browser callback")
 	rootCmd.AddCommand(loginCmd)
@@ -53,7 +63,10 @@ var loginCmd = &cobra.Command{
   1. Install the praxis meta-skill into every detected AI host
      (~/.claude/skills/praxis, ~/.agents/skills/praxis,
       ~/.gemini/skills/praxis) — idempotent.
-  2. Open a browser to create a Praxis API key (or use --token to skip).
+  2. Reuse the active profile's stored token when it's still valid for
+     this URL (no browser); otherwise open a browser to create a Praxis
+     API key. Use --token to supply a key directly, or --force to always
+     re-authenticate via the browser.
   3. Save credentials and flip the active profile pointer.
   4. Wipe any praxis-* org skills from the previous profile.
   5. Fetch this profile's skill catalog from the server and install
@@ -78,26 +91,92 @@ separate refresh command in v0.7.`,
 		if profileName == "" {
 			profileName = credentials.DefaultProfileName
 		}
-		baseURL := resolveLoginURL(profileName, loginURL)
+		baseURL, err := resolveLoginURL(profileName, loginURL)
+		if err != nil {
+			render.PrintError(out, asJSON, err.Error(),
+				"pass --url <https://your-praxis-deployment> to create this profile",
+				exitcode.Usage)
+			return err
+		}
 
+		// --token is the explicit non-browser path: verify the supplied
+		// key and persist it, unchanged by the reuse logic.
 		if loginToken != "" {
 			return saveAndVerifyToken(out, asJSON, profileName, baseURL, loginToken)
 		}
-		return browserSessionPollLogin(out, asJSON, profileName, baseURL, loginTimeout)
+
+		// Smart default: if the active profile already has a token valid
+		// for this URL, refresh skills + manifest without a browser hop.
+		// --force opts out and always re-authenticates via the browser.
+		if !loginForce {
+			reused, rerr := tryReuseStoredToken(out, asJSON, profileName, baseURL)
+			if reused {
+				return rerr
+			}
+		}
+		return browserLoginFn(out, asJSON, profileName, baseURL, loginTimeout)
 	},
 }
 
 // resolveLoginURL resolves the URL for a NEW or EXISTING profile during
 // login: explicit --url > existing profile's saved URL > built-in default.
-func resolveLoginURL(profileName, flagURL string) string {
+//
+// A NEW *named* profile (one not present in the store) without --url is
+// an error — there's no URL to reuse and guessing askpraxis.ai for a
+// named deployment would be wrong. The "default" profile keeps the
+// built-in fallback so a zero-config first run still works.
+func resolveLoginURL(profileName, flagURL string) (string, error) {
 	if flagURL != "" {
-		return flagURL
+		return flagURL, nil
 	}
 	store, _ := credentials.Load()
 	if p, ok := store[profileName]; ok && p.URL != "" {
-		return p.URL
+		return p.URL, nil
 	}
-	return credentials.DefaultURL
+	if profileName == credentials.DefaultProfileName {
+		return credentials.DefaultURL, nil
+	}
+	return "", fmt.Errorf("profile %q does not exist yet; pass --url to create it", profileName)
+}
+
+// tryReuseStoredToken attempts a no-browser login using the token already
+// stored for profileName.
+//
+// It returns reused=true only when it has TAKEN OWNERSHIP of the login —
+// the stored token verified and the persist+setup tail ran (the returned
+// error is that tail's result, nil on success). The caller must NOT fall
+// back to the browser in that case.
+//
+// reused=false means no reuse was possible — no stored token, the profile
+// is being re-targeted at a different URL, or the stored token failed
+// verification (expired/revoked). The error is always nil here; the caller
+// should proceed to the browser flow. A verification failure is reported
+// as a one-line notice on stderr, not an error, so the fallback is smooth.
+func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string) (bool, error) {
+	store, err := credentials.Load()
+	if err != nil {
+		return false, nil // can't read the store — just use the browser
+	}
+	prof, ok := store[profileName]
+	if !ok || prof.Token == "" {
+		return false, nil // nothing stored to reuse
+	}
+	if prof.URL != baseURL {
+		// Re-targeting this profile at a different URL: the stored token
+		// belongs to the old deployment, so it can't be reused here.
+		return false, nil
+	}
+
+	user, err := fetchAuthMe(baseURL, prof.Token)
+	if err != nil {
+		if !asJSON {
+			fmt.Fprintf(os.Stderr,
+				"Stored token for profile %q is no longer valid (%v); opening browser…\n",
+				profileName, err)
+		}
+		return false, nil // graceful fallback to the browser
+	}
+	return true, persistAndSetup(out, asJSON, profileName, baseURL, prof.Token, user.Email)
 }
 
 // browserSessionPollLogin opens the browser to the api-keys page with a
@@ -250,6 +329,10 @@ func suggestedKeyName() string {
 	return "praxis-cli-" + hex.EncodeToString(b)[:5]
 }
 
+// saveAndVerifyToken verifies a freshly-obtained token (from --token or
+// the browser flow) and persists it. A verification failure here is fatal
+// — the user explicitly supplied this key, so there's no graceful
+// fallback to attempt.
 func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token string) error {
 	user, err := fetchAuthMe(baseURL, token)
 	if err != nil {
@@ -259,10 +342,19 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 			exitcode.Auth)
 		os.Exit(exitcode.Auth)
 	}
+	return persistAndSetup(out, asJSON, profileName, baseURL, token, user.Email)
+}
 
+// persistAndSetup saves the verified token under profileName, flips the
+// active-profile pointer, runs post-auth setup (meta-skill + catalog +
+// MCP manifest), and renders the result. It is the shared tail of both
+// the verify-then-save path (saveAndVerifyToken) and the reuse path
+// (tryReuseStoredToken). Returning an error rather than os.Exit lets the
+// reuse path stay non-fatal up to this point.
+func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, email string) error {
 	prof := credentials.Profile{
 		URL:      baseURL,
-		Username: user.Email,
+		Username: email,
 		Token:    token,
 	}
 	if err := credentials.Put(profileName, prof); err != nil {
@@ -274,24 +366,24 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 
 	// Post-auth: install meta-skill, wipe previous org skills, install
 	// this profile's catalog, refresh the MCP tools snapshot.
-	postAuthState := runPostAuthSetup(out, asJSON, baseURL, token)
+	state := postAuthSetup(out, asJSON, baseURL, token)
 
 	if asJSON {
 		return render.JSON(out, map[string]any{
 			"ok":               true,
 			"profile":          profileName,
-			"username":         user.Email,
+			"username":         email,
 			"url":              baseURL,
-			"meta_skill":       postAuthState.metaSkill,
-			"catalog_skills":   postAuthState.catalogSkills,
-			"removed_skills":   postAuthState.removedSkills,
-			"agents":           postAuthState.agents,
-			"removed_agents":   postAuthState.removedAgents,
-			"snapshot_path":    postAuthState.snapshotPath,
-			"snapshot_warning": postAuthState.snapshotWarning,
+			"meta_skill":       state.metaSkill,
+			"catalog_skills":   state.catalogSkills,
+			"removed_skills":   state.removedSkills,
+			"agents":           state.agents,
+			"removed_agents":   state.removedAgents,
+			"snapshot_path":    state.snapshotPath,
+			"snapshot_warning": state.snapshotWarning,
 		})
 	}
-	fmt.Fprintf(out, "\n✓ Logged in as %s (profile: %s, url: %s)\n", user.Email, profileName, baseURL)
+	fmt.Fprintf(out, "\n✓ Logged in as %s (profile: %s, url: %s)\n", email, profileName, baseURL)
 	return nil
 }
 
