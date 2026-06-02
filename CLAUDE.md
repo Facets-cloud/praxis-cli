@@ -104,6 +104,36 @@ Releases binary download. `praxis update` self-updates against GitHub
 Releases. `install.askpraxis.ai` is a separate shell-script install
 path (not yet built).
 
+## Shipping a change (merge → release → upgrade → test)
+
+The end-to-end runbook for getting a merged change into the locally
+installed binary. Releases are **tag-driven**: pushing a `v*.*.*` tag
+fires `.github/workflows/release.yml`, which runs goreleaser to publish
+the GitHub Release and bump the Homebrew cask in `facets-cloud/tap`.
+There is no `make release` target.
+
+1. **Wait for review + CI, then merge the PR.** Let CodeRabbit finish
+   its pass and address its findings; the `build` and `goreleaser-check`
+   checks must be green. Squash-merge to `main`.
+2. **Tag the new version on `main`:**
+   ```bash
+   git checkout main && git pull
+   git tag vX.Y.Z          # minor bump for a feature, patch for a fix
+   git push origin vX.Y.Z
+   ```
+   (Current scheme: semver, e.g. `v0.12.0` → `v0.13.0` for a feature.)
+3. **Watch the release CI** (`gh run watch` / `gh run list --workflow
+   release.yml`). goreleaser publishes the GitHub Release and pushes the
+   updated cask to the tap. Needs the `HOMEBREW_TAP_TOKEN` secret.
+4. **Upgrade locally** once the cask lands:
+   ```bash
+   brew update && brew upgrade --cask praxis
+   ```
+   (Installed at `/opt/homebrew/bin/praxis` from cask `facets-cloud/tap`.)
+5. **Test in local** — run `praxis version` to confirm the new version,
+   then exercise the shipped change against the real CLI (read-only
+   commands are safe to run live).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

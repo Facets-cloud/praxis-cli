@@ -21,7 +21,7 @@ func TestRoot_HelpListsAllShippedCommands(t *testing.T) {
 	out := buf.String()
 	// User-facing surface: 9 commands.
 	for _, want := range []string{
-		"login", "logout", "status", "mcp", "refresh-skills",
+		"login", "logout", "status", "profiles", "mcp", "refresh-skills",
 		"update", "version", "completion",
 	} {
 		if !strings.Contains(out, want) {
