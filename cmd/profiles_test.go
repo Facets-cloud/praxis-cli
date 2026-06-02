@@ -17,6 +17,16 @@ func resetProfilesFlags() {
 	profilesRefresh = false
 }
 
+// mustPut seeds a profile and fails the test immediately if the store
+// write errors, so a setup failure surfaces at its true cause rather than
+// as a misleading downstream assertion.
+func mustPut(t *testing.T, name string, p credentials.Profile) {
+	t.Helper()
+	if err := credentials.Put(name, p); err != nil {
+		t.Fatalf("credentials.Put(%q) failed: %v", name, err)
+	}
+}
+
 // decodeProfiles unmarshals the command's JSON output into the typed
 // shape so assertions are structural, not substring-fragile.
 func decodeProfiles(t *testing.T, b []byte) profilesOutput {
@@ -42,14 +52,14 @@ func TestProfilesCmd_ListsAllProfiles(t *testing.T) {
 	t.Setenv("PRAXIS_PROFILE", "")
 	resetProfilesFlags()
 
-	_ = credentials.Put("default", credentials.Profile{
+	mustPut(t, "default", credentials.Profile{
 		URL: "https://default.test", Username: "anshul@facets.cloud", Token: "td",
 	})
-	_ = credentials.Put("dev", credentials.Profile{
+	mustPut(t, "dev", credentials.Profile{
 		URL: "https://dev.test", Username: "dev@facets.cloud", Token: "tdev",
 	})
 	// A profile with no token — configured but not logged in.
-	_ = credentials.Put("root", credentials.Profile{URL: "https://root.test"})
+	mustPut(t, "root", credentials.Profile{URL: "https://root.test"})
 
 	var buf bytes.Buffer
 	profilesCmd.SetOut(&buf)
@@ -79,8 +89,8 @@ func TestProfilesCmd_ActiveMarker(t *testing.T) {
 	t.Setenv("PRAXIS_PROFILE", "")
 	resetProfilesFlags()
 
-	_ = credentials.Put("default", credentials.Profile{URL: "https://default.test", Token: "td"})
-	_ = credentials.Put("dev", credentials.Profile{URL: "https://dev.test", Token: "tdev"})
+	mustPut(t, "default", credentials.Profile{URL: "https://default.test", Token: "td"})
+	mustPut(t, "dev", credentials.Profile{URL: "https://dev.test", Token: "tdev"})
 	if err := credentials.SetActive("dev"); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +120,7 @@ func TestProfilesCmd_SingleProfile(t *testing.T) {
 	t.Setenv("PRAXIS_PROFILE", "")
 	resetProfilesFlags()
 
-	_ = credentials.Put("default", credentials.Profile{
+	mustPut(t, "default", credentials.Profile{
 		URL: "https://x.test", Username: "anshul@facets.cloud", Token: "t",
 	})
 
@@ -159,7 +169,7 @@ func TestProfilesCmd_DoesNotCallNetworkByDefault(t *testing.T) {
 	}
 	defer func() { fetchAuthMe = orig }()
 
-	_ = credentials.Put("default", credentials.Profile{URL: "https://x", Token: "t"})
+	mustPut(t, "default", credentials.Profile{URL: "https://x", Token: "t"})
 
 	profilesCmd.SetOut(&bytes.Buffer{})
 	if err := profilesCmd.RunE(profilesCmd, nil); err != nil {
@@ -184,10 +194,10 @@ func TestProfilesCmd_Refresh_VerifiesEachLoggedInProfile(t *testing.T) {
 	}
 	defer func() { fetchAuthMe = orig }()
 
-	_ = credentials.Put("default", credentials.Profile{URL: "https://d.test", Token: "td"})
-	_ = credentials.Put("dev", credentials.Profile{URL: "https://dev.test", Token: "tdev"})
+	mustPut(t, "default", credentials.Profile{URL: "https://d.test", Token: "td"})
+	mustPut(t, "dev", credentials.Profile{URL: "https://dev.test", Token: "tdev"})
 	// No token — must be skipped by --refresh (nothing to verify).
-	_ = credentials.Put("root", credentials.Profile{URL: "https://root.test"})
+	mustPut(t, "root", credentials.Profile{URL: "https://root.test"})
 
 	var buf bytes.Buffer
 	profilesCmd.SetOut(&buf)
@@ -276,7 +286,7 @@ func TestProfilesCmd_Refresh_RecordsTokenFailure(t *testing.T) {
 	}
 	defer func() { fetchAuthMe = orig }()
 
-	_ = credentials.Put("default", credentials.Profile{URL: "https://d.test", Token: "td"})
+	mustPut(t, "default", credentials.Profile{URL: "https://d.test", Token: "td"})
 
 	var buf bytes.Buffer
 	profilesCmd.SetOut(&buf)
