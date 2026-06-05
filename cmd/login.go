@@ -366,7 +366,7 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, em
 
 	// Post-auth: install meta-skill, wipe previous org skills, install
 	// this profile's catalog, refresh the MCP tools snapshot.
-	state := postAuthSetup(out, asJSON, baseURL, token, false)
+	state := postAuthSetup(out, asJSON, baseURL, token)
 
 	if asJSON {
 		return render.JSON(out, map[string]any{
