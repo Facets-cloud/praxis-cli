@@ -42,6 +42,12 @@ func stubPostAuth(t *testing.T) *bool {
 	called := false
 	orig := postAuthSetup
 	postAuthSetup = func(out io.Writer, asJSON bool, baseURL, token string, projectScoped bool) postAuthState {
+		// The login path is never project-scoped — only `refresh-skills
+		// --project` is. Guard the compatibility contract so a future
+		// signature change can't silently start passing true here.
+		if projectScoped {
+			t.Errorf("login should call postAuthSetup with projectScoped=false, got true")
+		}
 		called = true
 		return postAuthState{}
 	}

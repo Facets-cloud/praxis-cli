@@ -28,6 +28,11 @@ type postAuthState struct {
 	removedAgents   []agentInstallationLite
 	snapshotPath    string
 	snapshotWarning string
+	// projectScoped is the *effective* install scope after resolving the
+	// working directory — not the requested flag. It's false when
+	// --project was requested but getwd() failed and the install fell
+	// back to user-level, so callers report where files actually landed.
+	projectScoped bool
 }
 
 // agentInstallationLite is the JSON shape used in login output. Mirrors
@@ -74,9 +79,15 @@ type agentInstallationLite struct {
 func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string, projectScoped bool) postAuthState {
 	state := postAuthState{}
 	hosts := detectHarnesses()
+	// effectiveProjectScoped tracks the scope we actually install at. It
+	// starts from the requested flag but drops to false if getwd() fails,
+	// because we then fall back to a genuine user-level install — which
+	// must run the user-level wipes and be reported as user scope.
+	effectiveProjectScoped := projectScoped
 	if projectScoped && len(hosts) > 0 {
 		dir, err := getwd()
 		if err != nil {
+			effectiveProjectScoped = false
 			if !asJSON {
 				fmt.Fprintf(out, "Warning: cannot resolve working directory for project-scoped install: %v\n", err)
 				fmt.Fprintln(out, "Falling back to user-level install.")
@@ -90,6 +101,7 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string, project
 			}
 		}
 	}
+	state.projectScoped = effectiveProjectScoped
 	noHosts := len(hosts) == 0
 	if noHosts && !asJSON {
 		fmt.Fprintln(out, "No supported AI hosts detected on this machine.")
@@ -137,7 +149,7 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string, project
 		case len(skills) == 0:
 			// Empty catalog is a definitive answer — wipe stale entries.
 			// The receipt-based wipe is user-level only (see func doc).
-			if !projectScoped {
+			if !effectiveProjectScoped {
 				removed := wipePrevProfileSkills(out, asJSON)
 				state.removedSkills = liteResults(removed)
 			}
@@ -149,7 +161,7 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string, project
 		default:
 			// Catalog in hand. Now wipe and install. The receipt-based
 			// wipe is user-level only (see func doc).
-			if !projectScoped {
+			if !effectiveProjectScoped {
 				removed := wipePrevProfileSkills(out, asJSON)
 				state.removedSkills = liteResults(removed)
 			}
@@ -172,7 +184,7 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string, project
 		default:
 			// Receipt-based agent wipe is user-level only — same
 			// reasoning as the skill wipe above (see func doc).
-			if !projectScoped {
+			if !effectiveProjectScoped {
 				removed, err := uninstallAgentsByPrefix("praxis-")
 				if err != nil {
 					if !asJSON {

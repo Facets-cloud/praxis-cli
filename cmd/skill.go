@@ -269,8 +269,12 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 
 		state := runPostAuthSetup(out, asJSON, active.Profile.URL, active.Profile.Token, refreshSkillsProject)
 
+		// Report the *effective* scope, not the requested flag: if
+		// --project was set but the working directory couldn't be
+		// resolved, runPostAuthSetup falls back to a user-level install,
+		// and the user must be told where files actually landed.
 		scope := "user"
-		if refreshSkillsProject {
+		if state.projectScoped {
 			scope = "project"
 		}
 		if asJSON {

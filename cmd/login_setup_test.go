@@ -239,6 +239,78 @@ func TestRunPostAuthSetup_ProjectScope_DoesNotWipeUserLevelInstall(t *testing.T)
 	}
 }
 
+// TestRunPostAuthSetup_ProjectScope_GetwdError_FallsBackToUserLevel pins
+// the getwd-failure fallback contract (CodeRabbit PR #23 actionable #1):
+// when projectScoped is requested but the working directory cannot be
+// resolved, the install must degrade to a *genuine* user-level refresh.
+// That means the receipt-based wipe of the previous profile's praxis-*
+// skills MUST run (it's gated on effective scope, not the requested
+// flag), and the effective scope reported back must be user-level.
+func TestRunPostAuthSetup_ProjectScope_GetwdError_FallsBackToUserLevel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PRAXIS_PROFILE", "")
+	stubMCPManifestFetch(t)
+
+	// Pre-seed a previous-profile org skill in the receipt + on disk.
+	userHosts := []harness.Harness{{
+		Name:     "claude-code",
+		Detected: true,
+		SkillDir: filepath.Join(home, ".claude", "skills"),
+	}}
+	if _, err := skillinstall.InstallWithBody("praxis-prevprofile", "body", userHosts); err != nil {
+		t.Fatalf("seed install: %v", err)
+	}
+
+	// getwd fails — this is the fallback trigger.
+	origGetwd := getwd
+	getwd = func() (string, error) { return "", errors.New("simulated getwd failure") }
+	t.Cleanup(func() { getwd = origGetwd })
+
+	origDetect := detectHarnesses
+	detectHarnesses = func() []harness.Harness {
+		return []harness.Harness{{
+			Name:     "claude-code",
+			Detected: true,
+			SkillDir: filepath.Join(home, ".claude", "skills"),
+			AgentDir: filepath.Join(home, ".claude", "agents"),
+		}}
+	}
+	t.Cleanup(func() { detectHarnesses = origDetect })
+
+	origFetchSk := fetchCatalog
+	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
+	t.Cleanup(func() { fetchCatalog = origFetchSk })
+	origFetchAg := fetchAgents
+	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) { return nil, nil }
+	t.Cleanup(func() { fetchAgents = origFetchAg })
+
+	var buf bytes.Buffer
+	// Requested projectScoped=true, but getwd fails → effective user-level.
+	state := runPostAuthSetup(&buf, false, "http://x", "tok", true)
+
+	// Effective scope must be user-level so callers report the truth.
+	if state.projectScoped {
+		t.Errorf("effective scope must be user-level after getwd failure; state.projectScoped = true")
+	}
+	// The fallback message must be surfaced to the user.
+	if !strings.Contains(buf.String(), "Falling back to user-level install") {
+		t.Errorf("output missing fallback notice: %s", buf.String())
+	}
+	// The user-level wipe MUST have run — the previous profile's skill is
+	// gone from the receipt. (Before the fix it survived because the wipe
+	// gate stayed on the requested flag, not the effective scope.)
+	listed, err := skillinstall.List()
+	if err != nil {
+		t.Fatalf("skillinstall.List(): %v", err)
+	}
+	for _, e := range listed {
+		if e.SkillName == "praxis-prevprofile" {
+			t.Errorf("user-level fallback must wipe previous-profile skill, but praxis-prevprofile survived; List() = %+v", listed)
+		}
+	}
+}
+
 func TestRunPostAuthSetupFetchesAndInstallsAgents(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

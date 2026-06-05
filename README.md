@@ -105,9 +105,11 @@ praxis login --url https://praxis.your-org.example
 Once saved, you don't need to pass `--url` again. Re-running
 `praxis login` reuses the URL stored in your credentials file.
 
-Re-running `praxis login` is also how you **refresh** your skills and
-the MCP manifest. There's no separate `init`, `install-skill`, or
-`refresh-skills` command — login is the one mutator.
+Re-running `praxis login` is the canonical way to **refresh** your
+skills and the MCP manifest. If you're already logged in and just want
+the refresh without re-authenticating, `praxis refresh-skills` does the
+same thing minus the browser flow (pass `--project` to scope the install
+to the current repo instead of your user-level home dir).
 
 That's it. Open Claude Code (or Codex, or Gemini CLI) and try:
 

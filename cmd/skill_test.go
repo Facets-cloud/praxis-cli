@@ -301,10 +301,18 @@ func TestRefreshSkills_ProjectFlag_ScopesToProjectDir(t *testing.T) {
 	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) { return nil, nil }
 	t.Cleanup(func() { fetchAgents = origFetchAg })
 
-	// Drive the flags the way cobra would for `--project --json`.
-	origProject, origJSON := refreshSkillsProject, refreshSkillsJSON
-	refreshSkillsProject, refreshSkillsJSON = true, true
-	t.Cleanup(func() { refreshSkillsProject, refreshSkillsJSON = origProject, origJSON })
+	// Drive the flags through Cobra to validate the flag wiring (not just
+	// the underlying vars) so a removed/renamed binding is caught.
+	if err := refreshSkillsCmd.Flags().Set("project", "true"); err != nil {
+		t.Fatalf("set --project: %v", err)
+	}
+	if err := refreshSkillsCmd.Flags().Set("json", "true"); err != nil {
+		t.Fatalf("set --json: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = refreshSkillsCmd.Flags().Set("project", "false")
+		_ = refreshSkillsCmd.Flags().Set("json", "false")
+	})
 
 	var buf bytes.Buffer
 	refreshSkillsCmd.SetOut(&buf)
@@ -321,6 +329,65 @@ func TestRefreshSkills_ProjectFlag_ScopesToProjectDir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "praxis", "SKILL.md")); err == nil {
 		t.Error("--project must not write to user-level home dir")
+	}
+}
+
+// TestRefreshSkills_ProjectFlag_GetwdError_ReportsUserScope pins the
+// scope-reporting half of CodeRabbit PR #23 actionable #2: when --project
+// is requested but the working directory can't be resolved, the install
+// silently falls back to user-level, so the reported scope (JSON + text)
+// must say "user", not the requested "project".
+func TestRefreshSkills_ProjectFlag_GetwdError_ReportsUserScope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PRAXIS_PROFILE", "")
+	stubMCPManifestFetch(t)
+
+	if err := credentialsPut("default", "https://x.test", "tester@x", "sk_test_T"); err != nil {
+		t.Fatal(err)
+	}
+
+	// getwd fails — forces the user-level fallback.
+	origGetwd := getwd
+	getwd = func() (string, error) { return "", errors.New("no cwd") }
+	t.Cleanup(func() { getwd = origGetwd })
+
+	withSeams(t,
+		func() []harness.Harness {
+			return []harness.Harness{{
+				Name:     "claude-code",
+				Detected: true,
+				SkillDir: filepath.Join(home, ".claude", "skills"),
+				AgentDir: filepath.Join(home, ".claude", "agents"),
+			}}
+		}, nil, nil, nil)
+
+	origFetchSk := fetchCatalog
+	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
+	t.Cleanup(func() { fetchCatalog = origFetchSk })
+	origFetchAg := fetchAgents
+	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) { return nil, nil }
+	t.Cleanup(func() { fetchAgents = origFetchAg })
+
+	if err := refreshSkillsCmd.Flags().Set("project", "true"); err != nil {
+		t.Fatalf("set --project: %v", err)
+	}
+	if err := refreshSkillsCmd.Flags().Set("json", "true"); err != nil {
+		t.Fatalf("set --json: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = refreshSkillsCmd.Flags().Set("project", "false")
+		_ = refreshSkillsCmd.Flags().Set("json", "false")
+	})
+
+	var buf bytes.Buffer
+	refreshSkillsCmd.SetOut(&buf)
+	if err := refreshSkillsCmd.RunE(refreshSkillsCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+
+	if !strings.Contains(buf.String(), `"scope": "user"`) {
+		t.Errorf("getwd-failure fallback must report user scope, not project; got:\n%s", buf.String())
 	}
 }
 
