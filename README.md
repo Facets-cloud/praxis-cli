@@ -153,16 +153,12 @@ praxis agents [--json]
    agents from /ai-api/custom-agents, prefixed `praxis-`). Read-only,
    no network call.
 
-praxis refresh-skills [--project] [--json]
+praxis refresh-skills [--json]
    Re-fetch this profile's catalog and rewrite skill files + MCP
    snapshot, without re-authenticating. Use when the org has
    published new skills or after `brew upgrade praxis`. Equivalent
    to `praxis login` minus the browser flow; requires existing
    valid credentials.
-   Installs at USER level by default (~/.claude/skills, ...), so
-   skills apply across every repo. Pass --project to scope the
-   install to the current repo (<cwd>/.claude/skills, ...) instead —
-   handy when you want Praxis skills active in one repository only.
 
 praxis update [--yes] [--json]
    Self-update binary. --json implies --yes.

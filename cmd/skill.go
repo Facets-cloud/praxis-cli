@@ -216,15 +216,10 @@ var listSkillsCmd = &cobra.Command{
 	},
 }
 
-var (
-	refreshSkillsJSON    bool
-	refreshSkillsProject bool
-)
+var refreshSkillsJSON bool
 
 func init() {
 	refreshSkillsCmd.Flags().BoolVar(&refreshSkillsJSON, "json", false, "JSON output")
-	refreshSkillsCmd.Flags().BoolVar(&refreshSkillsProject, "project", false,
-		"install into the current repo (<cwd>/.claude/skills, ...) instead of the user-level home dir")
 }
 
 var refreshSkillsCmd = &cobra.Command{
@@ -238,13 +233,6 @@ flow — useful when you're already logged in and just want to:
   • rebuild the MCP tool snapshot after the gateway exposed a new tool
   • re-write the meta-skill body after ` + "`brew upgrade praxis`" + `
     (so AI hosts see the new on-disk content immediately)
-
-By default this installs at USER level — the host's home-scope skill
-dir (~/.claude/skills, ~/.agents/skills, ~/.gemini/skills) — so the
-skills apply across every repo. Pass --project to scope the install to
-the current repo instead, writing to <cwd>/.claude/skills (and the
-equivalent per-host project dirs). Use --project when you only want
-Praxis skills active inside one repository and not globally.
 
 Requires an existing valid login. Exits 3 if not logged in — run
 ` + "`praxis login`" + ` first.
@@ -267,16 +255,11 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 			os.Exit(exitcode.Auth)
 		}
 
-		state := runPostAuthSetup(out, asJSON, active.Profile.URL, active.Profile.Token, refreshSkillsProject)
+		state := runPostAuthSetup(out, asJSON, active.Profile.URL, active.Profile.Token)
 
-		scope := "user"
-		if refreshSkillsProject {
-			scope = "project"
-		}
 		if asJSON {
 			return render.JSON(out, map[string]any{
 				"profile":          active.Name,
-				"scope":            scope,
 				"meta_skill":       state.metaSkill,
 				"removed_skills":   state.removedSkills,
 				"catalog_skills":   state.catalogSkills,
@@ -286,7 +269,7 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 				"snapshot_warning": state.snapshotWarning,
 			})
 		}
-		fmt.Fprintf(out, "\n✓ Refreshed profile %q (%s-level).\n", active.Name, scope)
+		fmt.Fprintf(out, "\n✓ Refreshed profile %q.\n", active.Name)
 		return nil
 	},
 }

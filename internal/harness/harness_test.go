@@ -124,60 +124,6 @@ func TestSkillDir_PerHarness(t *testing.T) {
 	}
 }
 
-func TestProjectScoped_ClaudeCode(t *testing.T) {
-	home := withIsolatedHome(t)
-	proj := t.TempDir()
-	h, ok := ByName("claude-code")
-	if !ok {
-		t.Fatal("claude-code missing")
-	}
-	scoped := h.ProjectScoped(proj)
-	if want := filepath.Join(proj, ".claude", "skills"); scoped.SkillDir != want {
-		t.Errorf("scoped SkillDir = %q, want %q", scoped.SkillDir, want)
-	}
-	if want := filepath.Join(proj, ".claude", "agents"); scoped.AgentDir != want {
-		t.Errorf("scoped AgentDir = %q, want %q", scoped.AgentDir, want)
-	}
-	// Value receiver: the original must be untouched (still user-level).
-	if h.SkillDir != filepath.Join(home, ".claude", "skills") {
-		t.Errorf("receiver mutated: SkillDir = %q", h.SkillDir)
-	}
-	if h.AgentDir != filepath.Join(home, ".claude", "agents") {
-		t.Errorf("receiver mutated: AgentDir = %q", h.AgentDir)
-	}
-}
-
-// Codex splits its skill dir (~/.agents/skills) and agent dir
-// (~/.codex/agents) across different dotdirs — ProjectScoped must rebase
-// each independently, not assume a shared base.
-func TestProjectScoped_Codex(t *testing.T) {
-	withIsolatedHome(t)
-	proj := t.TempDir()
-	h, _ := ByName("codex")
-	scoped := h.ProjectScoped(proj)
-	if want := filepath.Join(proj, ".agents", "skills"); scoped.SkillDir != want {
-		t.Errorf("scoped SkillDir = %q, want %q", scoped.SkillDir, want)
-	}
-	if want := filepath.Join(proj, ".codex", "agents"); scoped.AgentDir != want {
-		t.Errorf("scoped AgentDir = %q, want %q", scoped.AgentDir, want)
-	}
-}
-
-// A SkillDir that is not under the user's home directory is left
-// unchanged — ProjectScoped only rebases home-relative paths.
-func TestProjectScoped_NonHomeDirUnchanged(t *testing.T) {
-	withIsolatedHome(t)
-	proj := t.TempDir()
-	h := Harness{Name: "x", SkillDir: "/etc/skills", AgentDir: "/etc/agents"}
-	scoped := h.ProjectScoped(proj)
-	if scoped.SkillDir != "/etc/skills" {
-		t.Errorf("non-home SkillDir rebased: %q", scoped.SkillDir)
-	}
-	if scoped.AgentDir != "/etc/agents" {
-		t.Errorf("non-home AgentDir rebased: %q", scoped.AgentDir)
-	}
-}
-
 func TestByName_Unknown(t *testing.T) {
 	withIsolatedHome(t)
 	if _, ok := ByName("not-a-real-harness"); ok {
