@@ -3,10 +3,13 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Facets-cloud/praxis-cli/internal/agentcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
@@ -263,6 +266,61 @@ func TestInstallSkill_CatalogFlow(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\nfull:\n%s", want, out)
 		}
+	}
+}
+
+func TestRefreshSkills_ProjectFlag_ScopesToProjectDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PRAXIS_PROFILE", "")
+	stubMCPManifestFetch(t)
+
+	if err := credentialsPut("default", "https://x.test", "tester@x", "sk_test_T"); err != nil {
+		t.Fatal(err)
+	}
+
+	proj := t.TempDir()
+	origGetwd := getwd
+	getwd = func() (string, error) { return proj, nil }
+	t.Cleanup(func() { getwd = origGetwd })
+
+	withSeams(t,
+		func() []harness.Harness {
+			return []harness.Harness{{
+				Name:     "claude-code",
+				Detected: true,
+				SkillDir: filepath.Join(home, ".claude", "skills"),
+				AgentDir: filepath.Join(home, ".claude", "agents"),
+			}}
+		}, nil, nil, nil)
+
+	origFetchSk := fetchCatalog
+	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
+	t.Cleanup(func() { fetchCatalog = origFetchSk })
+	origFetchAg := fetchAgents
+	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) { return nil, nil }
+	t.Cleanup(func() { fetchAgents = origFetchAg })
+
+	// Drive the flags the way cobra would for `--project --json`.
+	origProject, origJSON := refreshSkillsProject, refreshSkillsJSON
+	refreshSkillsProject, refreshSkillsJSON = true, true
+	t.Cleanup(func() { refreshSkillsProject, refreshSkillsJSON = origProject, origJSON })
+
+	var buf bytes.Buffer
+	refreshSkillsCmd.SetOut(&buf)
+	if err := refreshSkillsCmd.RunE(refreshSkillsCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+
+	if !strings.Contains(buf.String(), `"scope": "project"`) {
+		t.Errorf("JSON output should report project scope; got:\n%s", buf.String())
+	}
+	// Skills went to the project dir, not the user-level home dir.
+	if _, err := os.Stat(filepath.Join(proj, ".claude", "skills", "praxis", "SKILL.md")); err != nil {
+		t.Errorf("meta-skill should be under project dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "praxis", "SKILL.md")); err == nil {
+		t.Error("--project must not write to user-level home dir")
 	}
 }
 

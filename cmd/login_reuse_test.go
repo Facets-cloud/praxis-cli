@@ -41,7 +41,7 @@ func stubPostAuth(t *testing.T) *bool {
 	t.Helper()
 	called := false
 	orig := postAuthSetup
-	postAuthSetup = func(out io.Writer, asJSON bool, baseURL, token string) postAuthState {
+	postAuthSetup = func(out io.Writer, asJSON bool, baseURL, token string, projectScoped bool) postAuthState {
 		called = true
 		return postAuthState{}
 	}

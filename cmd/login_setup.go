@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
@@ -10,6 +11,10 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
+
+// getwd is a seam for the current working directory so project-scoped
+// installs can be tested without chdir'ing the test process.
+var getwd = os.Getwd
 
 // postAuthState captures what runPostAuthSetup did, for inclusion in
 // the JSON output of `praxis login --json`. AI hosts read this to know
@@ -54,9 +59,37 @@ type agentInstallationLite struct {
 // Each step is best-effort: a failure logs a warning to `out` but does
 // not roll back the credentials save. The user can re-run login any
 // time to retry the steps that failed (login is idempotent).
-func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAuthState {
+// runPostAuthSetup installs the meta-skill + org catalog + agents into
+// the detected hosts and refreshes the MCP snapshot. When projectScoped
+// is true the install targets are rebased from the user-level home dirs
+// (~/.claude/skills, ...) onto the current working directory
+// (<repo>/.claude/skills, ...), so `praxis refresh-skills --project`
+// scopes skills to a single repo instead of applying them globally.
+//
+// Project scope also SKIPS the receipt-based "wipe previous profile"
+// step (UninstallByPrefix), which operates off the shared user-level
+// receipt and would otherwise delete the user's global install while
+// doing a repo-local refresh. The disk-scoped orphan sweep still runs —
+// it only touches the (project-scoped) host dirs, so it stays safe.
+func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string, projectScoped bool) postAuthState {
 	state := postAuthState{}
 	hosts := detectHarnesses()
+	if projectScoped && len(hosts) > 0 {
+		dir, err := getwd()
+		if err != nil {
+			if !asJSON {
+				fmt.Fprintf(out, "Warning: cannot resolve working directory for project-scoped install: %v\n", err)
+				fmt.Fprintln(out, "Falling back to user-level install.")
+			}
+		} else {
+			for i := range hosts {
+				hosts[i] = hosts[i].ProjectScoped(dir)
+			}
+			if !asJSON {
+				fmt.Fprintf(out, "Installing project-scoped under %s\n", dir)
+			}
+		}
+	}
 	noHosts := len(hosts) == 0
 	if noHosts && !asJSON {
 		fmt.Fprintln(out, "No supported AI hosts detected on this machine.")
@@ -103,17 +136,23 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 			}
 		case len(skills) == 0:
 			// Empty catalog is a definitive answer — wipe stale entries.
-			removed := wipePrevProfileSkills(out, asJSON)
-			state.removedSkills = liteResults(removed)
+			// The receipt-based wipe is user-level only (see func doc).
+			if !projectScoped {
+				removed := wipePrevProfileSkills(out, asJSON)
+				state.removedSkills = liteResults(removed)
+			}
 			orphaned := removeOrphanedProfileSkills(out, asJSON, nil, hosts)
 			state.removedSkills = append(state.removedSkills, liteResults(orphaned)...)
 			if !asJSON {
 				fmt.Fprintln(out, "\nCatalog is empty for this org — nothing to install.")
 			}
 		default:
-			// Catalog in hand. Now wipe and install.
-			removed := wipePrevProfileSkills(out, asJSON)
-			state.removedSkills = liteResults(removed)
+			// Catalog in hand. Now wipe and install. The receipt-based
+			// wipe is user-level only (see func doc).
+			if !projectScoped {
+				removed := wipePrevProfileSkills(out, asJSON)
+				state.removedSkills = liteResults(removed)
+			}
 			orphaned := removeOrphanedProfileSkills(out, asJSON, skills, hosts)
 			state.removedSkills = append(state.removedSkills, liteResults(orphaned)...)
 			state.catalogSkills = installFetchedCatalog(out, asJSON, skills, hosts)
@@ -131,15 +170,19 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 				fmt.Fprintln(out, "Existing agents left in place. Re-run `praxis login` once the gateway is reachable.")
 			}
 		default:
-			removed, err := uninstallAgentsByPrefix("praxis-")
-			if err != nil {
-				if !asJSON {
-					fmt.Fprintf(out, "Warning: removing previous profile's agents failed: %v\n", err)
+			// Receipt-based agent wipe is user-level only — same
+			// reasoning as the skill wipe above (see func doc).
+			if !projectScoped {
+				removed, err := uninstallAgentsByPrefix("praxis-")
+				if err != nil {
+					if !asJSON {
+						fmt.Fprintf(out, "Warning: removing previous profile's agents failed: %v\n", err)
+					}
 				}
-			}
-			state.removedAgents = agentLiteResults(removed)
-			if !asJSON && len(removed) > 0 {
-				fmt.Fprintf(out, "\nRemoved %d agent file(s) from previous profile.\n", len(removed))
+				state.removedAgents = agentLiteResults(removed)
+				if !asJSON && len(removed) > 0 {
+					fmt.Fprintf(out, "\nRemoved %d agent file(s) from previous profile.\n", len(removed))
+				}
 			}
 
 			if len(agents) == 0 {

@@ -66,7 +66,7 @@ func TestRunPostAuthSetup_CatalogFetchFailure_PreservesExisting(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	state := runPostAuthSetup(&buf, false, "https://x.test", "tok")
+	state := runPostAuthSetup(&buf, false, "https://x.test", "tok", false)
 
 	// Existing praxis-* installs must still be in the receipt — the
 	// fetch failure must not have triggered UninstallByPrefix.
@@ -117,7 +117,7 @@ func TestRunPostAuthSetup_NoHosts_StillRefreshesSnapshot(t *testing.T) {
 	t.Cleanup(func() { detectHarnesses = origDetect })
 
 	var buf bytes.Buffer
-	state := runPostAuthSetup(&buf, false, "https://x.test", "tok")
+	state := runPostAuthSetup(&buf, false, "https://x.test", "tok", false)
 
 	// Friendly message but flow continues.
 	if !strings.Contains(buf.String(), "No supported AI hosts") {
@@ -132,6 +132,110 @@ func TestRunPostAuthSetup_NoHosts_StillRefreshesSnapshot(t *testing.T) {
 	// attempting it).
 	if state.snapshotPath == "" && state.snapshotWarning == "" {
 		t.Error("manifest snapshot step should have run (path or warning expected)")
+	}
+}
+
+// TestRunPostAuthSetup_ProjectScope_WritesIntoProjectDir pins the core
+// of the new project-level install option: when projectScoped is true,
+// skill files land under the current working directory's host dirs
+// (e.g. <cwd>/.claude/skills) rather than the global user-level
+// ~/.claude/skills.
+func TestRunPostAuthSetup_ProjectScope_WritesIntoProjectDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PRAXIS_PROFILE", "")
+	stubMCPManifestFetch(t)
+
+	proj := t.TempDir()
+	origGetwd := getwd
+	getwd = func() (string, error) { return proj, nil }
+	t.Cleanup(func() { getwd = origGetwd })
+
+	origDetect := detectHarnesses
+	detectHarnesses = func() []harness.Harness {
+		return []harness.Harness{{
+			Name:     "claude-code",
+			Detected: true,
+			SkillDir: filepath.Join(home, ".claude", "skills"),
+			AgentDir: filepath.Join(home, ".claude", "agents"),
+		}}
+	}
+	t.Cleanup(func() { detectHarnesses = origDetect })
+
+	origFetchSk := fetchCatalog
+	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
+	t.Cleanup(func() { fetchCatalog = origFetchSk })
+
+	origFetchAg := fetchAgents
+	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) { return nil, nil }
+	t.Cleanup(func() { fetchAgents = origFetchAg })
+
+	var buf bytes.Buffer
+	runPostAuthSetup(&buf, false, "http://x", "tok", true)
+
+	// The "praxis" meta-skill must land in the PROJECT dir...
+	projSkill := filepath.Join(proj, ".claude", "skills", "praxis", "SKILL.md")
+	if _, err := os.Stat(projSkill); err != nil {
+		t.Errorf("meta-skill should be installed under project dir %s: %v", projSkill, err)
+	}
+	// ...and NOT in the user-level home dir.
+	homeSkill := filepath.Join(home, ".claude", "skills", "praxis", "SKILL.md")
+	if _, err := os.Stat(homeSkill); err == nil {
+		t.Errorf("project scope must not write meta-skill to home dir %s", homeSkill)
+	}
+}
+
+// TestRunPostAuthSetup_ProjectScope_DoesNotWipeUserLevelInstall guards
+// the dangerous interaction with the shared install receipt: a
+// project-scoped refresh must NOT trigger the receipt-based wipe that
+// would delete the user's existing global (user-level) skills.
+func TestRunPostAuthSetup_ProjectScope_DoesNotWipeUserLevelInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PRAXIS_PROFILE", "")
+	stubMCPManifestFetch(t)
+
+	// Pre-seed a user-level org skill in the receipt + on disk.
+	userHosts := []harness.Harness{{
+		Name:     "claude-code",
+		Detected: true,
+		SkillDir: filepath.Join(home, ".claude", "skills"),
+	}}
+	seeded, err := skillinstall.InstallWithBody("praxis-userlevel", "body", userHosts)
+	if err != nil {
+		t.Fatalf("seed install: %v", err)
+	}
+	seededPath := seeded[0].Path
+
+	proj := t.TempDir()
+	origGetwd := getwd
+	getwd = func() (string, error) { return proj, nil }
+	t.Cleanup(func() { getwd = origGetwd })
+
+	origDetect := detectHarnesses
+	detectHarnesses = func() []harness.Harness {
+		return []harness.Harness{{
+			Name:     "claude-code",
+			Detected: true,
+			SkillDir: filepath.Join(home, ".claude", "skills"),
+			AgentDir: filepath.Join(home, ".claude", "agents"),
+		}}
+	}
+	t.Cleanup(func() { detectHarnesses = origDetect })
+
+	origFetchSk := fetchCatalog
+	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
+	t.Cleanup(func() { fetchCatalog = origFetchSk })
+
+	origFetchAg := fetchAgents
+	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) { return nil, nil }
+	t.Cleanup(func() { fetchAgents = origFetchAg })
+
+	var buf bytes.Buffer
+	runPostAuthSetup(&buf, false, "http://x", "tok", true)
+
+	if _, err := os.Stat(seededPath); err != nil {
+		t.Errorf("user-level skill must survive a project-scoped refresh, but %s is gone: %v", seededPath, err)
 	}
 }
 
@@ -164,7 +268,7 @@ func TestRunPostAuthSetupFetchesAndInstallsAgents(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	state := runPostAuthSetup(&buf, false, "http://x", "tok")
+	state := runPostAuthSetup(&buf, false, "http://x", "tok", false)
 	if len(state.agents) != 1 {
 		t.Fatalf("want 1 agent installed, got %d", len(state.agents))
 	}
@@ -218,7 +322,7 @@ func TestRunPostAuthSetupAgentFetchFailureLeavesExistingInPlace(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	state := runPostAuthSetup(&buf, false, "http://x", "tok")
+	state := runPostAuthSetup(&buf, false, "http://x", "tok", false)
 
 	// state.agents reports what THIS invocation installed; with a fetch
 	// failure that should be empty — but the seeded agent must remain
