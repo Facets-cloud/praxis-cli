@@ -124,6 +124,89 @@ func TestSkillDir_PerHarness(t *testing.T) {
 	}
 }
 
+// TestProjectScoped covers ProjectScoped's path-rebasing across harness
+// shapes: a home-relative harness (claude-code), one whose skill and
+// agent dirs live under different dotdirs (codex — must rebase each
+// independently), and a non-home harness (paths left untouched). Cases
+// that pass checkOriginal also assert the value receiver leaves the
+// original harness user-level.
+func TestProjectScoped(t *testing.T) {
+	home := withIsolatedHome(t)
+	tests := []struct {
+		name          string
+		harness       Harness
+		wantSkill     string
+		wantAgent     string
+		origSkill     string // expected original SkillDir when checkOriginal
+		origAgent     string // expected original AgentDir when checkOriginal
+		checkOriginal bool
+	}{
+		{
+			name:          "claude-code rebases home-relative dirs",
+			harness:       mustByName(t, "claude-code"),
+			wantSkill:     filepath.Join(".claude", "skills"),
+			wantAgent:     filepath.Join(".claude", "agents"),
+			origSkill:     filepath.Join(home, ".claude", "skills"),
+			origAgent:     filepath.Join(home, ".claude", "agents"),
+			checkOriginal: true,
+		},
+		{
+			// Codex splits skills (~/.agents/skills) and agents
+			// (~/.codex/agents) across different dotdirs — each must rebase
+			// independently, not assume a shared base.
+			name:      "codex rebases split dotdirs independently",
+			harness:   mustByName(t, "codex"),
+			wantSkill: filepath.Join(".agents", "skills"),
+			wantAgent: filepath.Join(".codex", "agents"),
+		},
+		{
+			// Paths not under the user's home are left unchanged.
+			name:      "non-home dirs left unchanged",
+			harness:   Harness{Name: "x", SkillDir: "/etc/skills", AgentDir: "/etc/agents"},
+			wantSkill: "/etc/skills",
+			wantAgent: "/etc/agents",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proj := t.TempDir()
+			wantSkill, wantAgent := tt.wantSkill, tt.wantAgent
+			if !filepath.IsAbs(wantSkill) {
+				wantSkill = filepath.Join(proj, wantSkill)
+			}
+			if !filepath.IsAbs(wantAgent) {
+				wantAgent = filepath.Join(proj, wantAgent)
+			}
+			scoped := tt.harness.ProjectScoped(proj)
+			if scoped.SkillDir != wantSkill {
+				t.Errorf("scoped SkillDir = %q, want %q", scoped.SkillDir, wantSkill)
+			}
+			if scoped.AgentDir != wantAgent {
+				t.Errorf("scoped AgentDir = %q, want %q", scoped.AgentDir, wantAgent)
+			}
+			if tt.checkOriginal {
+				// Value receiver: the original must be untouched.
+				if tt.harness.SkillDir != tt.origSkill {
+					t.Errorf("receiver mutated: SkillDir = %q, want %q", tt.harness.SkillDir, tt.origSkill)
+				}
+				if tt.harness.AgentDir != tt.origAgent {
+					t.Errorf("receiver mutated: AgentDir = %q, want %q", tt.harness.AgentDir, tt.origAgent)
+				}
+			}
+		})
+	}
+}
+
+// mustByName looks up a harness by name or fails the test.
+func mustByName(t *testing.T, name string) Harness {
+	t.Helper()
+	h, ok := ByName(name)
+	if !ok {
+		t.Fatalf("ByName(%q) = !ok", name)
+	}
+	return h
+}
+
 func TestByName_Unknown(t *testing.T) {
 	withIsolatedHome(t)
 	if _, ok := ByName("not-a-real-harness"); ok {
