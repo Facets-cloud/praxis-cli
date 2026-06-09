@@ -37,6 +37,12 @@ const (
 // The server endpoint returns more fields than the CLI consumes —
 // the rest are ignored at unmarshal time.
 type Agent struct {
+	// ID is the agent's server-side database id. Needed to address the
+	// agent's nested resources (schedules / runs / findings live under
+	// /ai-api/custom-agents/{id}/...). The global "praxis" duty agent
+	// gets a generated id at seed time — there is no fixed constant —
+	// so callers resolve name → id via Fetch().
+	ID           string `json:"id"`
 	Name         string `json:"name"`
 	DisplayName  string `json:"display_name"`
 	Description  string `json:"description"`
@@ -70,6 +76,25 @@ const (
 // returns nil, nil) rather than an error, so deployments that don't
 // expose the endpoint install nothing rather than failing login.
 var Fetch = func(baseURL, token string) ([]Agent, error) {
+	return fetchActiveSorted(baseURL, token, customAgentsPath)
+}
+
+// FetchIncludingGlobal hits /ai-api/custom-agents?include_global=true so
+// GLOBAL-scope agents — notably the "praxis" duty agent — are returned
+// alongside the org's own agents. Login uses the plain Fetch (org-only)
+// to decide which agents to install on disk; this variant exists so
+// `praxis duty` can resolve the global praxis agent's id (its nested
+// schedules/runs/findings are addressed by that id).
+var FetchIncludingGlobal = func(baseURL, token string) ([]Agent, error) {
+	return fetchActiveSorted(baseURL, token, customAgentsPath+"?include_global=true")
+}
+
+// fetchActiveSorted is the shared core of Fetch and FetchIncludingGlobal:
+// validate inputs, GET the given path, drop inactive rows, and sort by
+// name. The two exported seams differ only in the path (the
+// include_global query) — keeping the validation/filter/sort policy here
+// means the org-only and global-inclusive listings can't drift apart.
+func fetchActiveSorted(baseURL, token, path string) ([]Agent, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("baseURL is required")
 	}
@@ -77,7 +102,7 @@ var Fetch = func(baseURL, token string) ([]Agent, error) {
 		return nil, fmt.Errorf("token is required")
 	}
 
-	agents, err := fetchOne(baseURL, token, customAgentsPath, KindAgent)
+	agents, err := fetchOne(baseURL, token, path, KindAgent)
 	if err != nil {
 		return nil, fmt.Errorf("fetch custom-agents: %w", err)
 	}

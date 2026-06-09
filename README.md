@@ -36,6 +36,13 @@ Each capability is one or more functions on a server-side MCP. Run
   but its runtime didn't surface the files in smoke testing — it's
   gated off until Codex's loader catches up to its own docs.
 
+- **Triage scheduled-agent ("duty") output** — list the org's duties,
+  read a duty's recent runs, open the report artifact a run produced,
+  and list a duty's findings. Read-only: pulls overnight schedule output
+  into the terminal so your AI can answer "what did my duties find, and
+  what should I do about it?" without opening the web UI. See
+  `praxis duty --help`.
+
 ### Coming soon
 
 - **Incident operations** — open / query / attach evidence to
@@ -122,7 +129,7 @@ That's it. Open Claude Code (or Codex, or Gemini CLI) and try:
 
 ## Command surface
 
-The CLI ships **10 user-facing commands**. All AI-callable commands
+The CLI ships **11 user-facing commands**. All AI-callable commands
 accept `--json` (auto-emit when stdout is non-TTY) with stable JSON
 schemas. `login` requires a human at a browser; it still emits a
 JSON envelope so your AI host can see what got installed.
@@ -154,6 +161,16 @@ praxis agents [--json]
    List every agent file praxis has installed on this host (custom
    agents from /ai-api/custom-agents, prefixed `praxis-`). Read-only,
    no network call.
+
+praxis duty <subcommand> [--agent <name|id>] [--json]
+   Query Agent Schedule ("duty") runs, findings, and the report
+   artifacts they produce. Read-only. --agent defaults to the global
+   "praxis" duty agent; <duty> args accept a schedule name or id.
+     list                          duties under the agent
+     runs --duty <d> [--limit N]   recent runs (newest first)
+     run <run_id>                  one run's detail
+     report <run_id>               the report artifact a run produced
+     findings <duty> [--status open|resolved|all] [--limit N]
 
 praxis refresh-skills [--project] [--json]
    Re-fetch this profile's catalog and rewrite skill files + MCP
