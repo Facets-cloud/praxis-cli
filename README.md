@@ -18,9 +18,10 @@ Once installed and logged in, your local AI host can:
 - **Query cloud infra** — run read-only `aws`, `gcloud`, and `az`
   commands against your org's integrations through the `cloud_cli`
   MCP. Mutating verbs blocked at the validator.
-- **Drive Facets via Raptor** — every read-only `raptor` verb
-  (projects, releases, environments, schemas, logs) through the
-  `raptor_cli` MCP, under your org's Facets PAT.
+- **Drive Facets via Raptor** — the full `raptor` verb surface, read
+  and write (projects, releases, environments, schemas, logs), through
+  the `raptor_cli` MCP, under your org's Facets PAT. RBAC and audit
+  are enforced server-side.
 - **Read & search the infrastructure catalog** — list registered
   repos, search GitHub, register newly discovered repos via the
   `catalog_ops` MCP.
