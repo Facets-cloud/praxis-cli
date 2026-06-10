@@ -51,8 +51,11 @@ cmd/                  cobra command tree (only commands that DO something
   update.go           `praxis update` (self-update via GitHub Releases)
   completion.go       `praxis completion {bash|zsh|fish|powershell}`
   logout.go           `praxis logout` (deletes ~/.praxis/credentials)
+  duty.go             `praxis duty *` (Agent Schedule runs/findings/reports)
 internal/             pure logic, unit-tested
   paths/              ~/.praxis filesystem locations
+  duties/             REST client for Agent Schedules (duties): runs,
+                       findings, artifacts — mirrors internal/memory
   selfupdate/         GitHub Releases fetch, checksum, atomic replace
 Makefile              build (with ldflags), install, test, lint, clean
 .goreleaser.yml       release config — raw binaries × 4 arches + brew tap

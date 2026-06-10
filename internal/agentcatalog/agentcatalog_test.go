@@ -19,6 +19,7 @@ func TestAgentPrefixedName(t *testing.T) {
 
 func TestAgentUnmarshal(t *testing.T) {
 	raw := `{
+		"id": "agt_abc123",
 		"name": "terraform-planner",
 		"display_name": "Terraform Planner",
 		"description": "Reviews terraform plans",
@@ -33,6 +34,9 @@ func TestAgentUnmarshal(t *testing.T) {
 	var a Agent
 	if err := json.Unmarshal([]byte(raw), &a); err != nil {
 		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.ID != "agt_abc123" {
+		t.Errorf("ID = %q; want agt_abc123 (needed to address nested duty resources)", a.ID)
 	}
 	if a.Name != "terraform-planner" {
 		t.Errorf("Name = %q", a.Name)
@@ -74,6 +78,43 @@ func TestFetchFiltersInactive(t *testing.T) {
 	}
 	if got[0].Kind != KindAgent {
 		t.Errorf("Kind = %q, want %q", got[0].Kind, KindAgent)
+	}
+}
+
+// TestFetchIncludingGlobal asks for include_global=true (so the GLOBAL
+// "praxis" duty agent is returned) and captures the agent id needed to
+// address its nested schedules/runs/findings.
+func TestFetchIncludingGlobal(t *testing.T) {
+	const customJSON = `[
+		{"id":"agt_praxis","name":"praxis","system_prompt":"p","scope":"global","is_active":true},
+		{"id":"agt_org","name":"org-bot","system_prompt":"o","scope":"organization","is_active":true}
+	]`
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("include_global")
+		_, _ = w.Write([]byte(customJSON))
+	}))
+	defer srv.Close()
+
+	got, err := FetchIncludingGlobal(srv.URL, "tok")
+	if err != nil {
+		t.Fatalf("FetchIncludingGlobal: %v", err)
+	}
+	if gotQuery != "true" {
+		t.Errorf("include_global query = %q; want true", gotQuery)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 agents, got %d", len(got))
+	}
+	// Sorted by name: org-bot, praxis.
+	var praxisID string
+	for _, a := range got {
+		if a.Name == "praxis" {
+			praxisID = a.ID
+		}
+	}
+	if praxisID != "agt_praxis" {
+		t.Errorf("praxis id = %q; want agt_praxis", praxisID)
 	}
 }
 

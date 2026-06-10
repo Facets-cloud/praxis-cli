@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // Harness is one supported AI host.
@@ -111,6 +112,35 @@ func detectGeminiCLI(home string) Harness {
 		h.Detected = true
 	}
 	return h
+}
+
+// ProjectScoped returns a copy of h whose SkillDir and AgentDir are
+// rebased from the user's home directory onto projectDir. For example a
+// Claude Code SkillDir of ~/.claude/skills becomes
+// <projectDir>/.claude/skills, and ~/.codex/agents becomes
+// <projectDir>/.codex/agents. This is how `praxis refresh-skills
+// --project` scopes an install to a single repo instead of the global
+// user-level location. Detection state is preserved — only the write
+// targets move. A directory that is not under the home dir is left
+// unchanged.
+func (h Harness) ProjectScoped(projectDir string) Harness {
+	home, _ := os.UserHomeDir()
+	h.SkillDir = rebaseUnderHome(home, projectDir, h.SkillDir)
+	h.AgentDir = rebaseUnderHome(home, projectDir, h.AgentDir)
+	return h
+}
+
+// rebaseUnderHome moves a home-relative path onto base. If p is not
+// under home (or the relative computation fails), p is returned as-is.
+func rebaseUnderHome(home, base, p string) string {
+	if home == "" || p == "" {
+		return p
+	}
+	rel, err := filepath.Rel(home, p)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return p
+	}
+	return filepath.Join(base, rel)
 }
 
 // String renders one line for status output.
