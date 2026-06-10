@@ -328,6 +328,13 @@ var callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Dur
 			orig := via[0]
 			req.Method = orig.Method
 			req.Header = orig.Header.Clone()
+			// Never leak the bearer token to a foreign domain: mirror
+			// Go's own sensitive-header rule and forward Authorization
+			// only when the redirect target is the original host or a
+			// subdomain of it (apex → www stays covered).
+			if !isDomainOrSubdomain(req.URL.Hostname(), orig.URL.Hostname()) {
+				req.Header.Del("Authorization")
+			}
 			if orig.GetBody != nil {
 				b, err := orig.GetBody()
 				if err != nil {
@@ -356,6 +363,18 @@ var callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Dur
 		return nil, resp.StatusCode, err
 	}
 	return raw, resp.StatusCode, nil
+}
+
+// isDomainOrSubdomain reports whether child is the same host as parent
+// or a label-aligned subdomain of it (www.askpraxis.ai ⊂ askpraxis.ai,
+// but evilaskpraxis.ai ⊄ askpraxis.ai). This is the same rule net/http
+// uses to decide whether sensitive headers may follow a redirect.
+func isDomainOrSubdomain(child, parent string) bool {
+	child, parent = strings.ToLower(child), strings.ToLower(parent)
+	if child == parent {
+		return true
+	}
+	return strings.HasSuffix(child, "."+parent)
 }
 
 // extractDetail tries to pull `detail` out of a FastAPI-style error body

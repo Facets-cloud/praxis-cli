@@ -225,6 +225,73 @@ func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
 	}
 }
 
+// TestCallMCP_DropsAuthOnCrossDomainRedirect: preserving the method and
+// body across redirects must NOT extend to leaking the bearer token to a
+// different domain. Mirror Go's own sensitive-header rule: forward
+// Authorization only when the redirect target is the same host or a
+// subdomain of it. Here the first server (127.0.0.1) redirects to a
+// "foreign" host (localhost — same loopback, different hostname), so the
+// token must be stripped while method and body still survive.
+func TestCallMCP_DropsAuthOnCrossDomainRedirect(t *testing.T) {
+	var gotMethod, gotBody, gotAuth string
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer foreign.Close()
+	// 127.0.0.1:<port> → localhost:<port>: same machine (so the test can
+	// actually connect) but a different hostname, i.e. a cross-domain
+	// redirect as far as header-forwarding rules are concerned.
+	foreignURL := strings.Replace(foreign.URL, "127.0.0.1", "localhost", 1)
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, foreignURL+r.URL.Path, http.StatusMovedPermanently)
+	}))
+	defer origin.Close()
+
+	body := []byte(`{"command":"get projects"}`)
+	_, status, err := callMCP(origin.URL, "sk_test_SECRET", "raptor_cli", "run_raptor_cli", body, 5*time.Second)
+	if err != nil {
+		t.Fatalf("callMCP error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization leaked across domains: got %q, want empty", gotAuth)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method after redirect = %q, want POST", gotMethod)
+	}
+	if gotBody != string(body) {
+		t.Errorf("body after redirect = %q, want %q", gotBody, body)
+	}
+}
+
+func TestIsDomainOrSubdomain(t *testing.T) {
+	tests := []struct {
+		child, parent string
+		want          bool
+	}{
+		{"askpraxis.ai", "askpraxis.ai", true},
+		{"www.askpraxis.ai", "askpraxis.ai", true},  // apex → www
+		{"WWW.ASKPRAXIS.AI", "askpraxis.ai", true},  // case-insensitive
+		{"askpraxis.ai", "www.askpraxis.ai", false}, // parent isn't a suffix domain of child
+		{"evilaskpraxis.ai", "askpraxis.ai", false}, // suffix must be label-aligned
+		{"evil.com", "askpraxis.ai", false},
+		{"localhost", "127.0.0.1", false},
+	}
+	for _, tt := range tests {
+		if got := isDomainOrSubdomain(tt.child, tt.parent); got != tt.want {
+			t.Errorf("isDomainOrSubdomain(%q, %q) = %v, want %v", tt.child, tt.parent, got, tt.want)
+		}
+	}
+}
+
 // TestPrettyMCPOutput_UnwrapsSingleTextEnvelope covers issue #18 E3:
 // the gateway wraps tool output as
 // {"content":[{"type":"text","text":"<escaped JSON>"}]}. For human
