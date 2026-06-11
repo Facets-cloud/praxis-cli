@@ -28,6 +28,11 @@ import (
 // 5-minute server-side TTL.
 const pollInterval = 1500 * time.Millisecond
 
+// pollRequestTimeout bounds a SINGLE poll attempt. A request that
+// outlives it is a transient failure (retry), never the overall login
+// deadline. Var rather than const so tests can shrink it.
+var pollRequestTimeout = 5 * time.Second
+
 var (
 	loginProfile string
 	loginURL     string
@@ -245,7 +250,7 @@ func browserSessionPollLogin(out io.Writer, asJSON bool, profileName, baseURL st
 func pollSessionKey(ctx context.Context, baseURL, nonce string, interval time.Duration) (string, error) {
 	endpoint := fmt.Sprintf("%s/ai-api/v1/cli-session/%s/key",
 		strings.TrimRight(baseURL, "/"), nonce)
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: pollRequestTimeout}
 
 	for {
 		key, status, err := pollSessionOnce(ctx, client, endpoint)
@@ -283,9 +288,15 @@ func pollSessionOnce(ctx context.Context, client *http.Client, endpoint string) 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return "", pollPending, err
+		if ctx.Err() != nil {
+			// The OVERALL login deadline (or a cancel) fired — stop.
+			return "", pollPending, ctx.Err()
 		}
+		// Everything else is transient and must keep the loop polling.
+		// That includes the client's own per-request timeout, whose
+		// error matches errors.Is(err, context.DeadlineExceeded) since
+		// Go 1.16 — checking the error instead of ctx.Err() here used
+		// to abort the whole login as "timed out" after one slow poll.
 		return "", pollTransient, nil
 	}
 	defer resp.Body.Close()

@@ -171,6 +171,42 @@ func TestPollSessionKey_FatalOn400(t *testing.T) {
 	}
 }
 
+func TestPollSessionKey_SlowRequestIsTransientNotTimeout(t *testing.T) {
+	// Regression: a single poll request that outlived the per-request
+	// http.Client timeout used to be reported as context.DeadlineExceeded
+	// (the client wraps its timeout error to match that sentinel since
+	// Go 1.16), which the login flow renders as "login timed out" — long
+	// before the overall 90s deadline. A stalled request must instead be
+	// treated as transient and the loop must keep polling.
+	prev := pollRequestTimeout
+	pollRequestTimeout = 50 * time.Millisecond
+	defer func() { pollRequestTimeout = prev }()
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			time.Sleep(250 * time.Millisecond) // outlive the client timeout
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"plaintext_key":"sk_live_AFTER_STALL"}`))
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got, err := pollSessionKey(ctx, srv.URL, "n", fastPoll)
+	if err != nil {
+		t.Fatalf("a single stalled request should be transient, got err = %v", err)
+	}
+	if got != "sk_live_AFTER_STALL" {
+		t.Errorf("got %q, want sk_live_AFTER_STALL", got)
+	}
+	if calls.Load() < 2 {
+		t.Errorf("expected a retry after the stalled request, got %d calls", calls.Load())
+	}
+}
+
 func TestPollSessionKey_TimeoutReturnsDeadlineExceeded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent) // always pending
