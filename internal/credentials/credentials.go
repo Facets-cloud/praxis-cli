@@ -58,7 +58,10 @@ func validateProfileName(name string) error {
 }
 
 // DefaultURL is the built-in fallback when a profile has no URL set.
-const DefaultURL = "https://askpraxis.ai"
+// Use the canonical www host: the apex https://askpraxis.ai
+// 301-redirects to www, and a stored apex URL forces every MCP invoke
+// to pay (and, before the callMCP redirect fix, fail on) that redirect.
+const DefaultURL = "https://www.askpraxis.ai"
 
 // DefaultProfileName is the literal section name used when no other
 // signal selects a profile.

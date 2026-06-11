@@ -136,8 +136,7 @@ Examples:
 		if asJSON {
 			_, _ = out.Write(append(bytes.TrimRight(resp, "\n"), '\n'))
 		} else {
-			pretty := prettyJSON(resp)
-			fmt.Fprintln(out, pretty)
+			fmt.Fprintln(out, prettyMCPOutput(resp))
 		}
 
 		if exitWithToolError {
@@ -314,7 +313,39 @@ var callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Dur
 	if baseURL == "" {
 		return nil, 0, errors.New("profile has no URL set")
 	}
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{
+		Timeout: timeout,
+		// Go's default redirect policy downgrades POST→GET and drops the
+		// body on 301/302/303. A gateway that 301-redirects (e.g. the
+		// askpraxis.ai apex → www) would therefore turn every invoke into
+		// a body-less GET that 404s — misreported downstream as "unknown
+		// mcp/fn". Preserve the method, body, and Authorization header so
+		// the invoke survives the redirect intact.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			orig := via[0]
+			req.Method = orig.Method
+			req.Header = orig.Header.Clone()
+			// Never leak the bearer token to a foreign domain: mirror
+			// Go's own sensitive-header rule and forward Authorization
+			// only when the redirect target is the original host or a
+			// subdomain of it (apex → www stays covered).
+			if !isDomainOrSubdomain(req.URL.Hostname(), orig.URL.Hostname()) {
+				req.Header.Del("Authorization")
+			}
+			if orig.GetBody != nil {
+				b, err := orig.GetBody()
+				if err != nil {
+					return err
+				}
+				req.Body = b
+				req.ContentLength = orig.ContentLength
+			}
+			return nil
+		},
+	}
 	url := strings.TrimRight(baseURL, "/") + "/ai-api/v1/mcp/" + mcp + "/" + fn
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
@@ -332,6 +363,18 @@ var callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Dur
 		return nil, resp.StatusCode, err
 	}
 	return raw, resp.StatusCode, nil
+}
+
+// isDomainOrSubdomain reports whether child is the same host as parent
+// or a label-aligned subdomain of it (www.askpraxis.ai ⊂ askpraxis.ai,
+// but evilaskpraxis.ai ⊄ askpraxis.ai). This is the same rule net/http
+// uses to decide whether sensitive headers may follow a redirect.
+func isDomainOrSubdomain(child, parent string) bool {
+	child, parent = strings.ToLower(child), strings.ToLower(parent)
+	if child == parent {
+		return true
+	}
+	return strings.HasSuffix(child, "."+parent)
 }
 
 // extractDetail tries to pull `detail` out of a FastAPI-style error body
@@ -372,4 +415,34 @@ func prettyJSON(raw []byte) string {
 		return string(raw)
 	}
 	return string(out)
+}
+
+// prettyMCPOutput renders an MCP response for human (non-JSON) output.
+// The gateway wraps tool output as
+//
+//	{"content":[{"type":"text","text":"<payload>"}]}
+//
+// where the payload is itself usually escaped JSON. When the envelope
+// carries exactly one text item, unwrap it: pretty-print the inner JSON
+// if it parses, otherwise surface the text verbatim. Anything that
+// isn't this single-text shape (plain responses, multi-item content,
+// non-text items) falls through to ordinary pretty-printing so we never
+// hide structure by guessing. JSON output (`--json`) is unaffected — it
+// still passes the canonical envelope through untouched.
+func prettyMCPOutput(raw []byte) string {
+	var env struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &env); err == nil &&
+		len(env.Content) == 1 && env.Content[0].Type == "text" && env.Content[0].Text != "" {
+		inner := env.Content[0].Text
+		if json.Valid([]byte(inner)) {
+			return prettyJSON([]byte(inner))
+		}
+		return inner
+	}
+	return prettyJSON(raw)
 }

@@ -181,6 +181,11 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 		}
 		return false, nil // graceful fallback to the browser
 	}
+	// Persist the canonical (post-redirect) host so a stale stored URL
+	// self-heals on the next login (issue #19-A).
+	if user.canonicalBaseURL != "" {
+		baseURL = user.canonicalBaseURL
+	}
 	return true, persistAndSetup(out, asJSON, profileName, baseURL, prof.Token, user.Email)
 }
 
@@ -353,6 +358,12 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 			exitcode.Auth)
 		os.Exit(exitcode.Auth)
 	}
+	// Store the canonical (post-redirect) host, not what the user typed:
+	// a stored apex URL would force every later MCP invoke through the
+	// apex → www 301 (issue #19-A).
+	if user.canonicalBaseURL != "" {
+		baseURL = user.canonicalBaseURL
+	}
 	return persistAndSetup(out, asJSON, profileName, baseURL, token, user.Email)
 }
 
@@ -402,6 +413,14 @@ type authMeResponse struct {
 	UserID   string `json:"user_id"`
 	Email    string `json:"email"`
 	Username string `json:"username"`
+
+	// canonicalBaseURL is the deployment base URL the /auth/me call
+	// actually landed on after following redirects (e.g. the apex
+	// askpraxis.ai 301s to www). Login persists this instead of the URL
+	// the user typed, so later MCP invokes never pay that redirect.
+	// Empty when a test stub doesn't set it — callers fall back to the
+	// URL they already have.
+	canonicalBaseURL string
 }
 
 // fetchAuthMe is the seam: tests swap it to avoid hitting a real server.
@@ -423,6 +442,17 @@ var fetchAuthMe = func(baseURL, token string) (*authMeResponse, error) {
 	var me authMeResponse
 	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
 		return nil, err
+	}
+	// resp.Request is the FINAL request after the client followed any
+	// redirects; strip the known endpoint path to recover the canonical
+	// deployment base (preserving any path prefix the deployment lives
+	// under). Fall back to what the caller passed if the shape is ever
+	// unexpected.
+	me.canonicalBaseURL = baseURL
+	if final := resp.Request.URL.String(); strings.HasSuffix(final, "/ai-api/auth/me") {
+		if base := strings.TrimRight(strings.TrimSuffix(final, "/ai-api/auth/me"), "/"); base != "" {
+			me.canonicalBaseURL = base
+		}
 	}
 	return &me, nil
 }

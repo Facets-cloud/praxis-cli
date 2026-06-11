@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -178,6 +180,164 @@ func TestPrettyJSON(t *testing.T) {
 	// non-JSON falls through unchanged
 	if got := prettyJSON([]byte(`abc`)); got != "abc" {
 		t.Errorf("got %q", got)
+	}
+}
+
+// TestCallMCP_PreservesPOSTAcrossRedirect reproduces the issue #18 P0:
+// the default host https://askpraxis.ai 301-redirects to www, and Go's
+// default http.Client downgrades POST→GET and drops the body on a 301,
+// so every invoke hits a body-less GET that 404s and gets misreported
+// as "unknown mcp/fn". callMCP must preserve the method, body, and
+// Authorization header across the gateway's redirect.
+func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
+	var gotMethod, gotBody, gotAuth string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ai-api/v1/mcp/raptor_cli/run_raptor_cli", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/ai-api/v1/mcp/raptor_cli/run_raptor_cli/final", http.StatusMovedPermanently)
+	})
+	mux.HandleFunc("/ai-api/v1/mcp/raptor_cli/run_raptor_cli/final", func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body := []byte(`{"command":"get projects"}`)
+	resp, status, err := callMCP(srv.URL, "sk_test_T", "raptor_cli", "run_raptor_cli", body, 5*time.Second)
+	if err != nil {
+		t.Fatalf("callMCP error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; resp=%s", status, resp)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method after redirect = %q, want POST (Go must not downgrade POST→GET on 301)", gotMethod)
+	}
+	if gotBody != string(body) {
+		t.Errorf("body after redirect = %q, want %q (body must survive the redirect)", gotBody, body)
+	}
+	if gotAuth != "Bearer sk_test_T" {
+		t.Errorf("Authorization after redirect = %q, want %q", gotAuth, "Bearer sk_test_T")
+	}
+}
+
+// TestCallMCP_DropsAuthOnCrossDomainRedirect: preserving the method and
+// body across redirects must NOT extend to leaking the bearer token to a
+// different domain. Mirror Go's own sensitive-header rule: forward
+// Authorization only when the redirect target is the same host or a
+// subdomain of it. Here the first server (127.0.0.1) redirects to a
+// "foreign" host (localhost — same loopback, different hostname), so the
+// token must be stripped while method and body still survive.
+func TestCallMCP_DropsAuthOnCrossDomainRedirect(t *testing.T) {
+	var gotMethod, gotBody, gotAuth string
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer foreign.Close()
+	// 127.0.0.1:<port> → localhost:<port>: same machine (so the test can
+	// actually connect) but a different hostname, i.e. a cross-domain
+	// redirect as far as header-forwarding rules are concerned.
+	foreignURL := strings.Replace(foreign.URL, "127.0.0.1", "localhost", 1)
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, foreignURL+r.URL.Path, http.StatusMovedPermanently)
+	}))
+	defer origin.Close()
+
+	body := []byte(`{"command":"get projects"}`)
+	_, status, err := callMCP(origin.URL, "sk_test_SECRET", "raptor_cli", "run_raptor_cli", body, 5*time.Second)
+	if err != nil {
+		t.Fatalf("callMCP error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization leaked across domains: got %q, want empty", gotAuth)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method after redirect = %q, want POST", gotMethod)
+	}
+	if gotBody != string(body) {
+		t.Errorf("body after redirect = %q, want %q", gotBody, body)
+	}
+}
+
+func TestIsDomainOrSubdomain(t *testing.T) {
+	tests := []struct {
+		child, parent string
+		want          bool
+	}{
+		{"askpraxis.ai", "askpraxis.ai", true},
+		{"www.askpraxis.ai", "askpraxis.ai", true},  // apex → www
+		{"WWW.ASKPRAXIS.AI", "askpraxis.ai", true},  // case-insensitive
+		{"askpraxis.ai", "www.askpraxis.ai", false}, // parent isn't a suffix domain of child
+		{"evilaskpraxis.ai", "askpraxis.ai", false}, // suffix must be label-aligned
+		{"evil.com", "askpraxis.ai", false},
+		{"localhost", "127.0.0.1", false},
+	}
+	for _, tt := range tests {
+		if got := isDomainOrSubdomain(tt.child, tt.parent); got != tt.want {
+			t.Errorf("isDomainOrSubdomain(%q, %q) = %v, want %v", tt.child, tt.parent, got, tt.want)
+		}
+	}
+}
+
+// TestPrettyMCPOutput_UnwrapsSingleTextEnvelope covers issue #18 E3:
+// the gateway wraps tool output as
+// {"content":[{"type":"text","text":"<escaped JSON>"}]}. For human
+// (pretty) output the single text payload should be unwrapped and its
+// inner JSON pretty-printed, instead of showing double-encoded escapes.
+func TestPrettyMCPOutput_UnwrapsSingleTextEnvelope(t *testing.T) {
+	envelope := []byte(`{"content":[{"type":"text","text":"{\"projects\":[\"a\",\"b\"]}"}]}`)
+	out := prettyMCPOutput(envelope)
+	if strings.Contains(out, `\"`) {
+		t.Errorf("output still double-encoded: %q", out)
+	}
+	if !strings.Contains(out, "projects") || !strings.Contains(out, `"a"`) {
+		t.Errorf("inner JSON not surfaced: %q", out)
+	}
+	if !strings.Contains(out, "\n") {
+		t.Errorf("expected pretty/indented inner JSON, got %q", out)
+	}
+}
+
+// Inner text that isn't JSON should be surfaced verbatim, not wrapped.
+func TestPrettyMCPOutput_UnwrapsPlainTextEnvelope(t *testing.T) {
+	envelope := []byte(`{"content":[{"type":"text","text":"only for Kubernetes-based environments"}]}`)
+	out := prettyMCPOutput(envelope)
+	if out != "only for Kubernetes-based environments" {
+		t.Errorf("plain-text payload = %q, want unwrapped verbatim", out)
+	}
+}
+
+// A non-envelope payload falls through to ordinary pretty-printing.
+func TestPrettyMCPOutput_NonEnvelopeFallsThrough(t *testing.T) {
+	out := prettyMCPOutput([]byte(`{"integrations":["aws-prod"]}`))
+	if !strings.Contains(out, "  ") {
+		t.Errorf("expected indented JSON, got %q", out)
+	}
+	if !strings.Contains(out, "integrations") {
+		t.Errorf("payload not surfaced: %q", out)
+	}
+}
+
+// A multi-item content array is not the single-text shape, so it should
+// be left as the raw (pretty-printed) envelope rather than guessing.
+func TestPrettyMCPOutput_MultiContentNotUnwrapped(t *testing.T) {
+	envelope := []byte(`{"content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}`)
+	out := prettyMCPOutput(envelope)
+	if !strings.Contains(out, "content") {
+		t.Errorf("multi-item envelope should fall through to raw pretty, got %q", out)
 	}
 }
 

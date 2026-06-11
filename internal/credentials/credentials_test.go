@@ -314,3 +314,14 @@ url = https://y
 		t.Errorf("acme.url = %q", got["acme"]["url"])
 	}
 }
+
+// TestDefaultURL_IsCanonicalHost guards issue #18: the apex
+// https://askpraxis.ai 301-redirects to www, which (before the callMCP
+// redirect fix) broke every MCP invoke on a fresh install. Default to
+// the canonical host so fresh logins don't redirect at all.
+func TestDefaultURL_IsCanonicalHost(t *testing.T) {
+	const want = "https://www.askpraxis.ai"
+	if DefaultURL != want {
+		t.Errorf("DefaultURL = %q, want %q (canonical host, no 301 redirect)", DefaultURL, want)
+	}
+}
