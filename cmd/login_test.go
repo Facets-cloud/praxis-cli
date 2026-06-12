@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 )
 
@@ -287,5 +288,51 @@ func TestLoginJSONEnvelopeIncludesAgentKeys(t *testing.T) {
 	}
 	if !strings.Contains(got, `"removed_agents":`) {
 		t.Errorf("envelope missing 'removed_agents' key:\n%s", got)
+	}
+}
+
+// Regression: `praxis login --url https://host/` used to keep the
+// trailing slash, producing double slashes in every concatenated path
+// (https://host//ui/ai/settings/api-keys, //v1/...).
+func TestResolveLoginURL_TrimsTrailingSlash(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate credentials store
+
+	tests := []struct {
+		name    string
+		flagURL string
+		want    string
+	}{
+		{"trailing slash", "https://root.console.facets.cloud/", "https://root.console.facets.cloud"},
+		{"multiple trailing slashes", "https://root.console.facets.cloud///", "https://root.console.facets.cloud"},
+		{"no trailing slash unchanged", "https://root.console.facets.cloud", "https://root.console.facets.cloud"},
+		{"surrounding whitespace", "  https://root.console.facets.cloud/ ", "https://root.console.facets.cloud"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveLoginURL("default", tt.flagURL)
+			if err != nil {
+				t.Fatalf("resolveLoginURL err = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("resolveLoginURL(%q) = %q, want %q", tt.flagURL, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveLoginURL_TrimsStoredProfileURL(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := credentials.Save(map[string]credentials.Profile{
+		"acme": {URL: "https://acme.example.com/", Token: "tok"},
+	}); err != nil {
+		t.Fatalf("seed credentials: %v", err)
+	}
+
+	got, err := resolveLoginURL("acme", "")
+	if err != nil {
+		t.Fatalf("resolveLoginURL err = %v", err)
+	}
+	if want := "https://acme.example.com"; got != want {
+		t.Errorf("resolveLoginURL stored URL = %q, want %q", got, want)
 	}
 }

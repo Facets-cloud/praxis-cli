@@ -132,16 +132,23 @@ separate refresh command in v0.7.`,
 // built-in fallback so a zero-config first run still works.
 func resolveLoginURL(profileName, flagURL string) (string, error) {
 	if flagURL != "" {
-		return flagURL, nil
+		return normalizeBaseURL(flagURL), nil
 	}
 	store, _ := credentials.Load()
 	if p, ok := store[profileName]; ok && p.URL != "" {
-		return p.URL, nil
+		return normalizeBaseURL(p.URL), nil
 	}
 	if profileName == credentials.DefaultProfileName {
 		return credentials.DefaultURL, nil
 	}
 	return "", fmt.Errorf("profile %q does not exist yet; pass --url to create it", profileName)
+}
+
+// normalizeBaseURL strips trailing slashes so path concatenation
+// (baseURL + "/v1/...") never produces a double slash, regardless of
+// how the user typed --url or what an older CLI persisted.
+func normalizeBaseURL(raw string) string {
+	return strings.TrimRight(strings.TrimSpace(raw), "/")
 }
 
 // tryReuseStoredToken attempts a no-browser login using the token already
