@@ -144,8 +144,12 @@ holds AWS / kube secrets.
     every ` + "`praxis login`" + ` and ` + "`praxis refresh-skills`" + `. Grep when you
     need tool names without going to the network.
   - **Call**: ` + "`praxis mcp <mcp> <fn> --arg k=v ... --json`" + ` (or
-    ` + "`--body '<json>'`" + ` for nested args). Output is the raw MCP envelope
-    (` + "`{content: [...], isError?: bool}`" + `).
+    ` + "`--body '<json>'`" + ` for nested args). Output is the tool's JSON
+    result directly — the CLI unwraps the MCP envelope when the payload
+    is a single JSON text item. On tool error (exit 1) or non-JSON
+    payloads you get the raw envelope
+    (` + "`{content: [...], isError?: bool}`" + `). Pass ` + "`--envelope`" + ` to
+    always get the raw envelope.
 
 Example flow:
 ` + "```bash" + `

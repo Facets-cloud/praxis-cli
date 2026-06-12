@@ -8,6 +8,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** `praxis mcp <mcp> <fn>` JSON output (explicit `--json`
+  *and* any piped/non-TTY invocation) now unwraps the MCP envelope:
+  when the response is a single text content item whose payload is
+  valid JSON, the payload is printed directly, so callers consume the
+  tool result without the `jq -r '.content[0].text' | jq` double-parse.
+  Tool errors (`isError: true`, exit 1), plain-text payloads,
+  multi-item content, and non-envelope bodies still emit the canonical
+  envelope, so JSON output stays valid JSON. Scripts that parse
+  `.content[0].text` must drop that step — or pass the new `--envelope`
+  flag, which always prints the raw envelope (in human output mode
+  too).
 - `praxis status --json` now lives up to "small JSON snapshot":
   `skills_installed` / `agents_installed` are deduped, sorted name
   arrays instead of per-(name, harness) objects with paths and
