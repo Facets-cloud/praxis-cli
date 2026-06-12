@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
@@ -13,12 +14,15 @@ import (
 var (
 	statusJSON    bool
 	statusRefresh bool
+	statusFull    bool
 )
 
 func init() {
 	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "JSON output")
 	statusCmd.Flags().BoolVar(&statusRefresh, "refresh", false,
 		"also call /ai-api/auth/me to verify the token is still valid")
+	statusCmd.Flags().BoolVar(&statusFull, "full", false,
+		"include per-harness install detail (paths) in JSON output")
 	rootCmd.AddCommand(statusCmd)
 }
 
@@ -40,24 +44,30 @@ verification result.`,
 		active, _ := credentials.ResolveActive("")
 		skills, _ := skillinstall.List()
 		agents, _ := agentinstall.List()
-		// Normalize nil to empty slice so JSON marshals as `[]` not
-		// `null` — AI host parsers don't have to handle two empty shapes.
-		if skills == nil {
-			skills = []skillinstall.Installation{}
-		}
-		if agents == nil {
-			agents = []skillinstall.AgentInstallation{}
-		}
 		loggedIn := active.Loaded && active.Profile.Token != ""
 
 		state := map[string]any{
-			"profile":          active.Name,
-			"profile_source":   active.Source,
-			"url":              active.Profile.URL,
-			"logged_in":        loggedIn,
-			"username":         active.Profile.Username,
-			"skills_installed": skills,
-			"agents_installed": agents,
+			"profile":        active.Name,
+			"profile_source": active.Source,
+			"url":            active.Profile.URL,
+			"logged_in":      loggedIn,
+			"username":       active.Profile.Username,
+		}
+		if asJSON {
+			if statusFull {
+				// Same shaped schema as `list-skills --json` and
+				// `praxis agents --json` — the receipt structs (with
+				// their internal timestamp) stay off the wire.
+				state["skills_installed"] = toSkillOutputShape(skills)
+				state["agents_installed"] = toAgentOutputShape(agents)
+			} else {
+				// Status is read at the start of every AI conversation —
+				// keep it small. Names only; per-harness paths live behind
+				// --full, `praxis agents --json`, and `list-skills --json`.
+				skillNames, agentNames := summarizeInstalls(skills, agents)
+				state["skills_installed"] = skillNames
+				state["agents_installed"] = agentNames
+			}
 		}
 
 		// --refresh: live token check via /auth/me. Folds in the
@@ -111,4 +121,24 @@ verification result.`,
 		}
 		return nil
 	},
+}
+
+// summarizeInstalls collapses the per-(name, harness) receipt entries into
+// deduped, sorted name lists. Slices are always non-nil so JSON marshals
+// `[]`, never `null`.
+func summarizeInstalls(
+	skills []skillinstall.Installation,
+	agents []skillinstall.AgentInstallation,
+) (skillNames, agentNames []string) {
+	skillNames = make([]string, 0, len(skills))
+	for _, s := range skills {
+		skillNames = append(skillNames, s.SkillName)
+	}
+	agentNames = make([]string, 0, len(agents))
+	for _, a := range agents {
+		agentNames = append(agentNames, a.AgentName)
+	}
+	slices.Sort(skillNames)
+	slices.Sort(agentNames)
+	return slices.Compact(skillNames), slices.Compact(agentNames)
 }

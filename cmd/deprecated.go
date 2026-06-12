@@ -45,7 +45,10 @@ func init() {
 	deprecate(uninstallSkillCmd, "praxis logout")
 	deprecate(whoamiCmd, "praxis status --refresh")
 	deprecate(useCmd, "praxis login --profile <name>")
-	deprecate(listSkillsCmd, "praxis status")
+	// list-skills was deprecated in v0.7 in favor of `praxis status`,
+	// but un-deprecated when status switched to summarized output:
+	// it is now the per-skill detail view (`list-skills --json`),
+	// mirroring `praxis agents`.
 	// refresh-skills is NOT deprecated in v0.7 — it stays as a
 	// first-class command (auth-skipping refresh path).
 }

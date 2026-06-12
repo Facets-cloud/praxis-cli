@@ -41,6 +41,8 @@ const skillName = "praxis"
 func init() {
 	rootCmd.AddCommand(installSkillCmd)
 	rootCmd.AddCommand(uninstallSkillCmd)
+	listSkillsCmd.Flags().BoolVar(&listSkillsJSON, "json", false,
+		"JSON output (default when stdout is non-TTY)")
 	rootCmd.AddCommand(listSkillsCmd)
 	rootCmd.AddCommand(refreshSkillsCmd)
 }
@@ -193,27 +195,61 @@ var uninstallSkillCmd = &cobra.Command{
 	},
 }
 
+var listSkillsJSON bool
+
 var listSkillsCmd = &cobra.Command{
 	Use:   "list-skills",
 	Short: "Show installed skills and where they live",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
+		asJSON := render.UseJSON(listSkillsJSON, false, out)
+
 		entries, err := listInstalledSkill()
 		if err != nil {
 			return err
 		}
-		if len(entries) == 0 {
+		shaped := toSkillOutputShape(entries)
+		if asJSON {
+			// Always emit `[]` (never `null`) so AI host JSON parsers
+			// don't have to handle two empty shapes.
+			return render.JSON(out, shaped)
+		}
+		if len(shaped) == 0 {
 			fmt.Fprintln(out, "No skills installed. Try `praxis install-skill`.")
 			return nil
 		}
-		fmt.Fprintf(out, "%-20s  %-12s  PATH\n", "SKILL", "HARNESS")
-		fmt.Fprintln(out, "──────────────────────────────────────────────────────────────────────")
-		for _, e := range entries {
-			fmt.Fprintf(out, "%-20s  %-12s  %s\n", e.SkillName, e.Harness, e.Path)
-		}
+		printSkillsPretty(out, shaped)
 		return nil
 	},
+}
+
+func printSkillsPretty(out io.Writer, entries []skillEntryForOutput) {
+	fmt.Fprintf(out, "%-20s  %-12s  PATH\n", "SKILL", "HARNESS")
+	fmt.Fprintln(out, "──────────────────────────────────────────────────────────────────────")
+	for _, e := range entries {
+		fmt.Fprintf(out, "%-20s  %-12s  %s\n", e.SkillName, e.Harness, e.Path)
+	}
+}
+
+// skillEntryForOutput mirrors agentEntryForOutput: the stable JSON shape
+// for AI hosts, without the receipt-internal timestamp.
+type skillEntryForOutput struct {
+	SkillName string `json:"skill_name"`
+	Harness   string `json:"harness"`
+	Path      string `json:"path"`
+}
+
+func toSkillOutputShape(entries []skillinstall.Installation) []skillEntryForOutput {
+	out := make([]skillEntryForOutput, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, skillEntryForOutput{
+			SkillName: e.SkillName,
+			Harness:   e.Harness,
+			Path:      e.Path,
+		})
+	}
+	return out
 }
 
 var (

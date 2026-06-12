@@ -3,6 +3,7 @@ package cmd
 import (
 	"testing"
 
+	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/spf13/cobra"
 )
 
@@ -17,7 +18,6 @@ func TestDeprecatedCommands_Hidden(t *testing.T) {
 		"uninstall-skill": "praxis logout",
 		"whoami":          "praxis status --refresh",
 		"use":             "praxis login --profile",
-		"list-skills":     "praxis status",
 	}
 	for name := range deprecated {
 		cmd, _, err := rootCmd.Find([]string{name})
@@ -36,7 +36,7 @@ func TestDeprecatedCommands_Hidden(t *testing.T) {
 func TestVisibleCommands_NotHidden(t *testing.T) {
 	visible := []string{
 		"login", "logout", "status", "mcp", "refresh-skills",
-		"update", "version", "completion",
+		"list-skills", "agents", "update", "version", "completion",
 	}
 	for _, name := range visible {
 		cmd, _, err := rootCmd.Find([]string{name})
@@ -55,19 +55,23 @@ func TestVisibleCommands_NotHidden(t *testing.T) {
 // doesn't return an unexpected error for a no-op friendly command;
 // the deeper behavioral tests live next to each command.
 func TestDeprecatedCommandsCallable(t *testing.T) {
-	cmd, _, err := rootCmd.Find([]string{"list-skills"})
+	cmd, _, err := rootCmd.Find([]string{"use"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// list-skills with empty receipt is the safest cross-shell call —
-	// it doesn't touch credentials, doesn't network, just reads the
-	// receipt and prints. Should still work after the deprecate wrapper.
+	// `use` with a seeded profile is the safest cross-shell call — it
+	// doesn't network, just flips the active profile in config.json.
+	// Should still work after the deprecate wrapper.
 	t.Setenv("HOME", t.TempDir())
-	if cmd.RunE == nil {
-		t.Fatal("list-skills RunE should be set after deprecate()")
+	t.Setenv("PRAXIS_PROFILE", "")
+	if err := credentials.Put("default", credentials.Profile{URL: "https://x.test", Token: "t"}); err != nil {
+		t.Fatal(err)
 	}
-	if err := cmd.RunE(cmd, []string{}); err != nil {
-		t.Errorf("deprecated list-skills returned error: %v", err)
+	if cmd.RunE == nil {
+		t.Fatal("use RunE should be set after deprecate()")
+	}
+	if err := cmd.RunE(cmd, []string{"default"}); err != nil {
+		t.Errorf("deprecated use returned error: %v", err)
 	}
 	// Sanity: the cobra.Command type still has a Run field, but the
 	// deprecate() wrapper should have nilled it out so the wrapper's

@@ -49,7 +49,10 @@ Returns a small JSON snapshot:
   - ` + "`profile`" + `, ` + "`profile_source`" + ` — which profile is active and where it came from
   - ` + "`url`" + ` — Praxis deployment the active profile points at
   - ` + "`logged_in`" + ` — whether there's a usable token for that profile
-  - ` + "`username`" + `, ` + "`skills_installed`" + ` — context
+  - ` + "`username`" + ` — context
+  - ` + "`skills_installed`" + `, ` + "`agents_installed`" + ` — installed names only
+    (deduped); add ` + "`--full`" + ` for per-harness paths, or use
+    ` + "`praxis agents --json`" + ` / ` + "`praxis list-skills --json`" + `
 
 Branch on ` + "`logged_in`" + `.
 
@@ -102,14 +105,18 @@ the output is stable and machine-parseable.
 
 AI-callable (always pass --json):
 
-  - ` + "`praxis status [--refresh]`" + ` — local snapshot. ` + "`--refresh`" + ` adds a live
-    /auth/me call to verify the token isn't revoked.
+  - ` + "`praxis status [--refresh] [--full]`" + ` — local snapshot. ` + "`--refresh`" + `
+    adds a live /auth/me call to verify the token isn't revoked.
+    ` + "`--full`" + ` expands skills/agents to per-harness install detail.
   - ` + "`praxis mcp`" + ` — list available MCP tools (no args) or invoke one
     (` + "`praxis mcp <mcp> <fn> --arg k=v ...`" + `). See "Discovering MCP tools"
     below.
   - ` + "`praxis agents [--json]`" + ` — list every agent file the CLI has
     installed on this host (custom agents from /ai-api/custom-agents,
     prefixed ` + "`praxis-`" + `). Read-only, no network call.
+  - ` + "`praxis list-skills [--json]`" + ` — list every skill file the CLI
+    has installed on this host, with per-harness paths. Read-only,
+    no network call.
   - ` + "`praxis refresh-skills`" + ` — re-fetch this profile's catalog and
     rewrite skill files + MCP snapshot, without re-authenticating. Use
     when the org has published new skills or after ` + "`brew upgrade praxis`" + `.
