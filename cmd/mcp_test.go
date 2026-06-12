@@ -19,6 +19,7 @@ func resetMcpFlags() {
 	mcpJSON = false
 	mcpArgs = nil
 	mcpBody = ""
+	mcpEnvelope = false
 	mcpTimeout = 60 * time.Second
 }
 
@@ -163,15 +164,6 @@ func TestExtractDetail(t *testing.T) {
 	}
 }
 
-func TestEnvelopeIsError(t *testing.T) {
-	if !envelopeIsError([]byte(`{"isError":true,"content":[]}`)) {
-		t.Error("expected true")
-	}
-	if envelopeIsError([]byte(`{"ok":true}`)) {
-		t.Error("expected false")
-	}
-}
-
 func TestPrettyJSON(t *testing.T) {
 	out := prettyJSON([]byte(`{"a":1}`))
 	if !strings.Contains(out, "  ") {
@@ -297,9 +289,14 @@ func TestIsDomainOrSubdomain(t *testing.T) {
 // {"content":[{"type":"text","text":"<escaped JSON>"}]}. For human
 // (pretty) output the single text payload should be unwrapped and its
 // inner JSON pretty-printed, instead of showing double-encoded escapes.
-func TestPrettyMCPOutput_UnwrapsSingleTextEnvelope(t *testing.T) {
-	envelope := []byte(`{"content":[{"type":"text","text":"{\"projects\":[\"a\",\"b\"]}"}]}`)
-	out := prettyMCPOutput(envelope)
+// humanOutput parses raw and renders it the way the command's human
+// (non-JSON) path does.
+func humanOutput(raw string, forceEnvelope bool) string {
+	return mcpHumanOutput([]byte(raw), parseMCPResponse([]byte(raw)), forceEnvelope)
+}
+
+func TestMcpHumanOutput_UnwrapsSingleTextEnvelope(t *testing.T) {
+	out := humanOutput(`{"content":[{"type":"text","text":"{\"projects\":[\"a\",\"b\"]}"}]}`, false)
 	if strings.Contains(out, `\"`) {
 		t.Errorf("output still double-encoded: %q", out)
 	}
@@ -312,17 +309,16 @@ func TestPrettyMCPOutput_UnwrapsSingleTextEnvelope(t *testing.T) {
 }
 
 // Inner text that isn't JSON should be surfaced verbatim, not wrapped.
-func TestPrettyMCPOutput_UnwrapsPlainTextEnvelope(t *testing.T) {
-	envelope := []byte(`{"content":[{"type":"text","text":"only for Kubernetes-based environments"}]}`)
-	out := prettyMCPOutput(envelope)
+func TestMcpHumanOutput_UnwrapsPlainTextEnvelope(t *testing.T) {
+	out := humanOutput(`{"content":[{"type":"text","text":"only for Kubernetes-based environments"}]}`, false)
 	if out != "only for Kubernetes-based environments" {
 		t.Errorf("plain-text payload = %q, want unwrapped verbatim", out)
 	}
 }
 
 // A non-envelope payload falls through to ordinary pretty-printing.
-func TestPrettyMCPOutput_NonEnvelopeFallsThrough(t *testing.T) {
-	out := prettyMCPOutput([]byte(`{"integrations":["aws-prod"]}`))
+func TestMcpHumanOutput_NonEnvelopeFallsThrough(t *testing.T) {
+	out := humanOutput(`{"integrations":["aws-prod"]}`, false)
 	if !strings.Contains(out, "  ") {
 		t.Errorf("expected indented JSON, got %q", out)
 	}
@@ -333,11 +329,125 @@ func TestPrettyMCPOutput_NonEnvelopeFallsThrough(t *testing.T) {
 
 // A multi-item content array is not the single-text shape, so it should
 // be left as the raw (pretty-printed) envelope rather than guessing.
-func TestPrettyMCPOutput_MultiContentNotUnwrapped(t *testing.T) {
-	envelope := []byte(`{"content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}`)
-	out := prettyMCPOutput(envelope)
+func TestMcpHumanOutput_MultiContentNotUnwrapped(t *testing.T) {
+	out := humanOutput(`{"content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}`, false)
 	if !strings.Contains(out, "content") {
 		t.Errorf("multi-item envelope should fall through to raw pretty, got %q", out)
+	}
+}
+
+// --envelope means "never unwrap" in human mode too.
+func TestMcpHumanOutput_EnvelopeFlag(t *testing.T) {
+	envelope := `{"content":[{"type":"text","text":"{\"a\":1}"}]}`
+	if out := humanOutput(envelope, true); !strings.Contains(out, "content") {
+		t.Errorf("forceEnvelope should preserve the envelope, got %q", out)
+	}
+	if out := humanOutput(envelope, false); strings.Contains(out, "content") {
+		t.Errorf("default human output should unwrap, got %q", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// JSON-mode envelope unwrapping
+// ---------------------------------------------------------------------------
+
+func TestParseMCPResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      string
+		wantText string
+		isSingle bool
+		isError  bool
+	}{
+		{"json inner", `{"content":[{"type":"text","text":"{\"a\":1}"}]}`, `{"a":1}`, true, false},
+		{"plain text inner", `{"content":[{"type":"text","text":"all good"}]}`, "all good", true, false},
+		{"error envelope", `{"isError":true,"content":[{"type":"text","text":"boom"}]}`, "boom", true, true},
+		{"multi item", `{"content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}`, "", false, false},
+		{"empty content", `{"content":[]}`, "", false, false},
+		{"missing content", `{"isError":false}`, "", false, false},
+		{"non-text item", `{"content":[{"type":"image","text":"x"}]}`, "", false, false},
+		{"empty text", `{"content":[{"type":"text","text":""}]}`, "", false, false},
+		{"non-envelope", `{"integrations":["aws-prod"]}`, "", false, false},
+		{"malformed", `not json`, "", false, false},
+		{"non-string text", `{"content":[{"type":"text","text":42}]}`, "", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseMCPResponse([]byte(tt.raw))
+			if got.isSingle != tt.isSingle || got.singleText != tt.wantText || got.isError != tt.isError {
+				t.Errorf("parseMCPResponse(%s) = %+v, want {singleText:%q isSingle:%v isError:%v}",
+					tt.raw, got, tt.wantText, tt.isSingle, tt.isError)
+			}
+		})
+	}
+}
+
+func TestMCPJSONOutput(t *testing.T) {
+	jsonEnvelope := `{"content":[{"type":"text","text":"{\"projects\":[\"a\"]}"}]}`
+	proseEnvelope := `{"content":[{"type":"text","text":"deployment succeeded"}]}`
+	errorEnvelope := `{"isError":true,"content":[{"type":"text","text":"{\"detail\":\"boom\"}"}]}`
+	tests := []struct {
+		name          string
+		raw           string
+		forceEnvelope bool
+		want          string
+	}{
+		{"object inner unwrapped", jsonEnvelope, false, `{"projects":["a"]}`},
+		{"bare scalar inner unwrapped", `{"content":[{"type":"text","text":"42"}]}`, false, `42`},
+		{"padded inner trimmed", `{"content":[{"type":"text","text":"\n{\"a\":1}\n"}]}`, false, `{"a":1}`},
+		{"prose inner keeps envelope", proseEnvelope, false, proseEnvelope},
+		{"non-single-text shape passes through", `{"integrations":["aws-prod"]}`, false, `{"integrations":["aws-prod"]}`},
+		{"trailing newline stripped from envelope", proseEnvelope + "\n", false, proseEnvelope},
+		{"isError keeps envelope", errorEnvelope, false, errorEnvelope},
+		{"forceEnvelope keeps envelope", jsonEnvelope, true, jsonEnvelope},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := []byte(tt.raw)
+			got := string(mcpJSONOutput(raw, parseMCPResponse(raw), tt.forceEnvelope))
+			if got != tt.want {
+				t.Errorf("mcpJSONOutput() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Wiring test: RunE routes the response through mcpJSONOutput with the
+// mcpEnvelope flag (shape rules themselves are pinned by TestMCPJSONOutput).
+func TestMcpCmd_JsonOutputWiring(t *testing.T) {
+	envelope := `{"content":[{"type":"text","text":"{\"projects\":[\"a\"]}"}]}`
+	tests := []struct {
+		name          string
+		forceEnvelope bool
+		want          string
+	}{
+		{"unwraps by default", false, `{"projects":["a"]}` + "\n"},
+		{"--envelope passes through", true, envelope + "\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetMcpFlags()
+			defer resetMcpFlags()
+			mcpJSON = true
+			mcpEnvelope = tt.forceEnvelope
+
+			seedDefaultProfile(t)
+			orig := callMCP
+			callMCP = func(_, _, _, _ string, _ []byte, _ time.Duration) ([]byte, int, error) {
+				return []byte(envelope), http.StatusOK, nil
+			}
+			defer func() { callMCP = orig }()
+
+			var buf bytes.Buffer
+			mcpCmd.SetOut(&buf)
+			mcpCmd.SetErr(&buf)
+			if err := mcpCmd.RunE(mcpCmd, []string{"cloud_cli", "list_cloud_integrations"}); err != nil {
+				t.Fatalf("RunE err = %v", err)
+			}
+			if got := buf.String(); got != tt.want {
+				t.Errorf("output = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -19,10 +19,11 @@ import (
 )
 
 var (
-	mcpJSON    bool
-	mcpArgs    []string
-	mcpBody    string
-	mcpTimeout time.Duration
+	mcpJSON     bool
+	mcpArgs     []string
+	mcpBody     string
+	mcpEnvelope bool
+	mcpTimeout  time.Duration
 )
 
 func init() {
@@ -33,6 +34,7 @@ func init() {
 	// tests covering raptor commands like `--arg command='... "quoted" ...'`.
 	mcpCmd.Flags().StringArrayVar(&mcpArgs, "arg", nil, "key=value pair (repeatable); merged into request body")
 	mcpCmd.Flags().StringVar(&mcpBody, "body", "", "raw JSON body (use '-' for stdin); overrides --arg")
+	mcpCmd.Flags().BoolVar(&mcpEnvelope, "envelope", false, "always print the raw MCP envelope ({content:[...],isError?}) instead of unwrapping JSON tool output")
 	mcpCmd.Flags().DurationVar(&mcpTimeout, "timeout", 60*time.Second, "request timeout")
 	rootCmd.AddCommand(mcpCmd)
 }
@@ -128,18 +130,18 @@ Examples:
 			os.Exit(exitcode.Usage)
 		}
 
-		// HTTP 200 — print the body verbatim (pass-through MCP envelope).
-		// If isError is true on a dict-shape response, exit 1 so callers
-		// can detect tool-level failure even with JSON output.
-		exitWithToolError := envelopeIsError(resp)
+		// HTTP 200 — render the body (see parseMCPResponse for the unwrap
+		// contract). If isError is true on a dict-shape response, exit 1
+		// so callers can detect tool-level failure even with JSON output.
+		res := parseMCPResponse(resp)
 
 		if asJSON {
-			_, _ = out.Write(append(bytes.TrimRight(resp, "\n"), '\n'))
+			_, _ = out.Write(append(mcpJSONOutput(resp, res, mcpEnvelope), '\n'))
 		} else {
-			fmt.Fprintln(out, prettyMCPOutput(resp))
+			fmt.Fprintln(out, mcpHumanOutput(resp, res, mcpEnvelope))
 		}
 
-		if exitWithToolError {
+		if res.isError {
 			os.Exit(exitcode.Error)
 		}
 		return nil
@@ -395,16 +397,6 @@ func extractDetail(raw []byte, fallback string) string {
 	return fallback
 }
 
-// envelopeIsError detects the MCP `{isError: true, ...}` envelope so the
-// process can exit non-zero even though the HTTP call succeeded.
-func envelopeIsError(raw []byte) bool {
-	var probe struct {
-		IsError bool `json:"isError"`
-	}
-	_ = json.Unmarshal(raw, &probe)
-	return probe.IsError
-}
-
 func prettyJSON(raw []byte) string {
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
@@ -417,32 +409,69 @@ func prettyJSON(raw []byte) string {
 	return string(out)
 }
 
-// prettyMCPOutput renders an MCP response for human (non-JSON) output.
 // The gateway wraps tool output as
 //
-//	{"content":[{"type":"text","text":"<payload>"}]}
+//	{"content":[{"type":"text","text":"<payload>"}],"isError"?:bool}
 //
-// where the payload is itself usually escaped JSON. When the envelope
-// carries exactly one text item, unwrap it: pretty-print the inner JSON
-// if it parses, otherwise surface the text verbatim. Anything that
-// isn't this single-text shape (plain responses, multi-item content,
-// non-text items) falls through to ordinary pretty-printing so we never
-// hide structure by guessing. JSON output (`--json`) is unaffected — it
-// still passes the canonical envelope through untouched.
-func prettyMCPOutput(raw []byte) string {
+// where the payload is itself usually escaped JSON. parseMCPResponse is
+// the one place that knows this shape; its single parse feeds the
+// exit-code decision and both output modes. Either mode unwraps only
+// the single-text shape — anything else (multi-item content, non-text
+// items, non-envelope bodies) is passed through so we never hide
+// structure by guessing — with one asymmetry: JSON mode keeps the
+// envelope on tool errors so the isError shape survives for scripted
+// callers, while human mode unwraps them for readability. `--envelope`
+// disables unwrapping in both modes.
+
+type mcpResponse struct {
+	isError    bool
+	singleText string // payload when content is exactly one non-empty text item
+	isSingle   bool
+}
+
+func parseMCPResponse(raw []byte) mcpResponse {
 	var env struct {
+		IsError bool `json:"isError"`
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
 	}
-	if err := json.Unmarshal(raw, &env); err == nil &&
-		len(env.Content) == 1 && env.Content[0].Type == "text" && env.Content[0].Text != "" {
-		inner := env.Content[0].Text
-		if json.Valid([]byte(inner)) {
-			return prettyJSON([]byte(inner))
-		}
-		return inner
+	var res mcpResponse
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return res
 	}
-	return prettyJSON(raw)
+	res.isError = env.IsError
+	if len(env.Content) == 1 && env.Content[0].Type == "text" && env.Content[0].Text != "" {
+		res.singleText = env.Content[0].Text
+		res.isSingle = true
+	}
+	return res
+}
+
+// mcpJSONOutput picks the bytes to emit in JSON mode (no trailing
+// newline). On success, a single-text envelope whose payload is valid
+// JSON unwraps to that payload, so callers can consume the tool result
+// directly instead of double-parsing `.content[0].text`. Everything
+// else — plain-text payloads (output must stay valid JSON), tool
+// errors, non-single-text shapes, or --envelope — emits the canonical
+// envelope untouched.
+func mcpJSONOutput(raw []byte, res mcpResponse, forceEnvelope bool) []byte {
+	if res.isSingle && !res.isError && !forceEnvelope {
+		if inner := bytes.TrimSpace([]byte(res.singleText)); json.Valid(inner) {
+			return inner
+		}
+	}
+	return bytes.TrimRight(raw, "\n")
+}
+
+// mcpHumanOutput renders for human (non-JSON) output: pretty-print the
+// unwrapped payload of a single-text envelope (prettyJSON surfaces
+// non-JSON payloads verbatim), otherwise pretty-print the raw body.
+// forceEnvelope (--envelope) skips unwrapping entirely.
+func mcpHumanOutput(raw []byte, res mcpResponse, forceEnvelope bool) string {
+	if forceEnvelope || !res.isSingle {
+		return prettyJSON(raw)
+	}
+	return prettyJSON([]byte(res.singleText))
 }
