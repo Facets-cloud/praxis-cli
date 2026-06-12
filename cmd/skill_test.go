@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -172,6 +173,10 @@ func TestUninstallSkill_RemovesAndReports(t *testing.T) {
 	}
 }
 
+// TestListSkills_Empty covers the AI-host path: stdout is non-TTY
+// (bytes.Buffer) so UseJSON auto-resolves to true, and an empty receipt
+// produces `[]` not English text — preserving the parseable-JSON
+// contract every AI-callable command holds.
 func TestListSkills_Empty(t *testing.T) {
 	withSeams(t, nil, nil, nil,
 		func() ([]skillinstall.Installation, error) { return nil, nil })
@@ -181,8 +186,37 @@ func TestListSkills_Empty(t *testing.T) {
 	if err := listSkillsCmd.RunE(listSkillsCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
-	if !strings.Contains(buf.String(), "No skills installed") {
-		t.Errorf("output = %q, want substring 'No skills installed'", buf.String())
+	if strings.TrimSpace(buf.String()) != "[]" {
+		t.Errorf("empty non-TTY output = %q, want []", buf.String())
+	}
+}
+
+func TestListSkills_JSON(t *testing.T) {
+	withSeams(t, nil, nil, nil,
+		func() ([]skillinstall.Installation, error) {
+			return []skillinstall.Installation{
+				{SkillName: "praxis", Harness: "claude-code", Path: "/c/praxis/SKILL.md", InstalledAt: time.Now()},
+				{SkillName: "praxis", Harness: "codex", Path: "/x/praxis/SKILL.md", InstalledAt: time.Now()},
+			}, nil
+		})
+	listSkillsJSON = true
+	t.Cleanup(func() { listSkillsJSON = false })
+
+	var buf bytes.Buffer
+	listSkillsCmd.SetOut(&buf)
+	if err := listSkillsCmd.RunE(listSkillsCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	var out []struct {
+		SkillName string `json:"skill_name"`
+		Harness   string `json:"harness"`
+		Path      string `json:"path"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("--json output should be a JSON array: %v\noutput:\n%s", err, buf.String())
+	}
+	if len(out) != 2 || out[0].SkillName != "praxis" || out[1].Path != "/x/praxis/SKILL.md" {
+		t.Errorf("unexpected entries: %+v", out)
 	}
 }
 
@@ -444,20 +478,17 @@ func TestInstallSkill_NotLoggedIn_SoftSkipsCatalog(t *testing.T) {
 	}
 }
 
+// TestListSkills_Populated exercises the pretty formatter directly,
+// bypassing the cobra RunE + UseJSON TTY-detection path (which would
+// auto-resolve to JSON when stdout is a bytes.Buffer).
 func TestListSkills_Populated(t *testing.T) {
-	withSeams(t, nil, nil, nil,
-		func() ([]skillinstall.Installation, error) {
-			return []skillinstall.Installation{
-				{SkillName: "praxis", Harness: "claude-code", Path: "/p1"},
-				{SkillName: "praxis", Harness: "codex", Path: "/p2"},
-			}, nil
-		})
+	entries := []skillEntryForOutput{
+		{SkillName: "praxis", Harness: "claude-code", Path: "/p1"},
+		{SkillName: "praxis", Harness: "codex", Path: "/p2"},
+	}
 
 	var buf bytes.Buffer
-	listSkillsCmd.SetOut(&buf)
-	if err := listSkillsCmd.RunE(listSkillsCmd, nil); err != nil {
-		t.Fatalf("RunE err = %v", err)
-	}
+	printSkillsPretty(&buf, entries)
 	out := buf.String()
 	for _, want := range []string{"SKILL", "HARNESS", "PATH", "praxis", "claude-code", "codex", "/p1", "/p2"} {
 		if !strings.Contains(out, want) {

@@ -6,7 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(Empty — see 0.10.0 below.)
+### Changed
+
+- `praxis status --json` now lives up to "small JSON snapshot":
+  `skills_installed` / `agents_installed` are deduped, sorted name
+  arrays instead of per-(name, harness) objects with paths and
+  timestamps (~65 objects → ~25 lines for a typical install). Pass
+  `--full` for per-harness detail, emitted in the same shaped schema
+  as `praxis agents --json` / `list-skills --json`.
+
+### Added
+
+- `list-skills --json` — machine-readable skill list
+  (`skill_name`/`harness`/`path`), mirroring `praxis agents --json`.
+  Auto-enabled when stdout is non-TTY; empty result is `[]`.
+  `list-skills` is un-deprecated (and visible in `--help` again): its
+  v0.7 replacement was `praxis status`, which no longer carries
+  per-skill paths.
 
 ## [0.10.0] — 2026-05-21
 

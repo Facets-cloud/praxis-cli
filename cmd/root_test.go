@@ -19,10 +19,10 @@ func TestRoot_HelpListsAllShippedCommands(t *testing.T) {
 		t.Fatalf("Execute --help err = %v", err)
 	}
 	out := buf.String()
-	// User-facing surface: 9 commands.
+	// User-facing surface: 10 commands.
 	for _, want := range []string{
 		"login", "logout", "status", "profiles", "mcp", "refresh-skills",
-		"update", "version", "completion",
+		"list-skills", "update", "version", "completion",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("--help output missing %q\nfull output:\n%s", want, out)
@@ -33,7 +33,7 @@ func TestRoot_HelpListsAllShippedCommands(t *testing.T) {
 	// surface must stay small.
 	for _, mustNot := range []string{
 		"init", "install-skill", "uninstall-skill",
-		"list-skills", "whoami", "use",
+		"whoami", "use",
 		// Stubs from earlier releases that haven't been reimplemented
 		"doctor", "configure",
 	} {
