@@ -64,9 +64,14 @@ Makefile              build (with ldflags), install, test, lint, clean
 
 **Don't add stub commands.** A cobra command that prints "not yet
 implemented" is worse than no command — it lies to users and to
-`--help`. Phase 2 will add `skill *` commands when skill sourcing
-actually works; Phase 3 will add `login`, `whoami`, `mcp` when the
-server gateway exists.
+`--help`. Skill sourcing and the server gateway are now live:
+`login`, `whoami`, `mcp`, `install-skill`, `uninstall-skill`,
+`list-skills`, and `refresh-skills` are all implemented. Skills are
+fetched from the server, name-prefixed (`praxis-*`), and have the
+`render.ExecutionPreamble` inserted after their frontmatter so any
+in-process MCP reference (`run_cloud_cli(...)`) is rewritten to a
+`praxis mcp <mcp> <fn> --arg …` shell-out — see
+`internal/skillcatalog` and `internal/render/preamble.go`.
 
 ## Build & run
 
