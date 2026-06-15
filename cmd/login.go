@@ -114,8 +114,8 @@ separate refresh command in v0.7.`,
 		// for this URL, refresh skills + manifest without a browser hop.
 		// --force opts out and always re-authenticates via the browser.
 		if !loginForce {
-			reused, rerr := tryReuseStoredToken(out, asJSON, profileName, baseURL)
-			if reused {
+			handled, rerr := tryReuseStoredToken(out, asJSON, profileName, baseURL)
+			if handled {
 				return rerr
 			}
 		}
@@ -154,15 +154,19 @@ func normalizeBaseURL(raw string) string {
 // tryReuseStoredToken attempts a no-browser login using the token already
 // stored for profileName.
 //
-// It returns reused=true only when it has TAKEN OWNERSHIP of the login —
-// the stored token verified and the persist+setup tail ran (the returned
-// error is that tail's result, nil on success). The caller must NOT fall
-// back to the browser in that case.
+// It returns handled=true when it has TAKEN OWNERSHIP of the login and the
+// caller must NOT fall back to the browser. That covers two cases:
+//   - success: the stored token verified and the persist+setup tail ran
+//     (the returned error is that tail's result, nil on success).
+//   - hard stop: the server was unreachable, so the token could be neither
+//     confirmed nor refuted. We refuse to clobber a possibly-valid token
+//     with a browser re-login over a transient blip — the returned error
+//     aborts the command (after a printed diagnostic) so the user can retry.
 //
-// reused=false means no reuse was possible — no stored token, the profile
-// is being re-targeted at a different URL, or the stored token failed
-// verification (expired/revoked). The error is always nil here; the caller
-// should proceed to the browser flow. A verification failure is reported
+// handled=false means no reuse was possible and the caller should proceed to
+// the browser flow — no stored token, the profile is being re-targeted at a
+// different URL, or the server actively REJECTED the token (expired/revoked,
+// HTTP 401/403). The error is always nil here. A rejected token is reported
 // as a one-line notice on stderr, not an error, so the fallback is smooth.
 func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string) (bool, error) {
 	store, err := credentials.Load()
@@ -181,12 +185,25 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 
 	user, err := fetchAuthMe(baseURL, prof.Token)
 	if err != nil {
-		if !asJSON {
-			fmt.Fprintf(os.Stderr,
-				"Stored token for profile %q is no longer valid (%v); opening browser…\n",
-				profileName, err)
+		if errors.Is(err, errTokenRejected) {
+			// The server gave a verdict: this token is dead. Falling back to
+			// the browser to mint a fresh one is exactly right.
+			if !asJSON {
+				fmt.Fprintf(os.Stderr,
+					"Stored token for profile %q is no longer valid (%v); opening browser…\n",
+					profileName, err)
+			}
+			return false, nil // graceful fallback to the browser
 		}
-		return false, nil // graceful fallback to the browser
+		// Transient: timeout, connection refused, 5xx — the token's validity
+		// is unknown. Do NOT mislabel it "no longer valid" or force a browser
+		// re-login over a flaky network. Leave the stored token untouched and
+		// abort so this is just a retry.
+		render.PrintError(out, asJSON,
+			fmt.Sprintf("couldn't reach %s to verify the stored token for profile %q: %v", baseURL, profileName, err),
+			"the server was unreachable — your stored token was left intact; check your connection and re-run `praxis login`",
+			exitcode.Network)
+		return true, err
 	}
 	// Persist the canonical (post-redirect) host so a stale stored URL
 	// self-heals on the next login (issue #19-A).
@@ -430,6 +447,15 @@ type authMeResponse struct {
 	canonicalBaseURL string
 }
 
+// errTokenRejected signals that the server actively rejected the stored
+// token — HTTP 401/403, i.e. the token is genuinely expired or revoked.
+// It is deliberately distinct from a transient failure (timeout,
+// connection refused, 5xx), where the token's validity is simply unknown
+// because the server never got a chance to vouch for it. The login reuse
+// path treats the two very differently: a rejected token falls back to the
+// browser, an unreachable server aborts and leaves the token intact.
+var errTokenRejected = errors.New("token rejected by server")
+
 // fetchAuthMe is the seam: tests swap it to avoid hitting a real server.
 var fetchAuthMe = func(baseURL, token string) (*authMeResponse, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -443,7 +469,14 @@ var fetchAuthMe = func(baseURL, token string) (*authMeResponse, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// The server reached a verdict: this token is no good. Wrap the
+		// sentinel so callers can errors.Is it apart from transient noise.
+		return nil, fmt.Errorf("%w (HTTP %d from %s/ai-api/auth/me)", errTokenRejected, resp.StatusCode, baseURL)
+	}
 	if resp.StatusCode != http.StatusOK {
+		// 5xx and other unexpected statuses are server-side trouble, not a
+		// verdict on the token — left unwrapped so they read as transient.
 		return nil, fmt.Errorf("HTTP %d from %s/ai-api/auth/me", resp.StatusCode, baseURL)
 	}
 	var me authMeResponse

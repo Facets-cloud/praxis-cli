@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -161,6 +163,8 @@ func TestTryReuseStoredToken(t *testing.T) {
 		targetURL        string
 		authMeErr        error
 		wantReused       bool
+		wantErr          bool // tryReuseStoredToken returns a non-nil error
+		wantTokenIntact  bool // stored token must survive untouched
 		wantPostAuth     bool
 		wantAuthMeCalled bool
 		wantActive       string // "" → don't assert active pointer
@@ -187,11 +191,23 @@ func TestTryReuseStoredToken(t *testing.T) {
 			wantActive:       "default",
 		},
 		{
-			name:      "invalid token falls back gracefully",
+			name:      "rejected token (401/403) falls back to browser gracefully",
 			seed:      true,
 			storedURL: "https://stored.test", storedToken: "expired",
 			targetURL:        "https://stored.test",
-			authMeErr:        io.ErrUnexpectedEOF,
+			authMeErr:        fmt.Errorf("%w (HTTP 401)", errTokenRejected),
+			wantReused:       false, // browser fallback, not owned
+			wantAuthMeCalled: true,
+		},
+		{
+			name:      "transient error aborts without browser and keeps the token",
+			seed:      true,
+			storedURL: "https://stored.test", storedToken: "still-good",
+			targetURL:        "https://stored.test",
+			authMeErr:        context.DeadlineExceeded,
+			wantReused:       true, // owned: caller must NOT open the browser
+			wantErr:          true,
+			wantTokenIntact:  true,
 			wantAuthMeCalled: true,
 		},
 	}
@@ -215,11 +231,21 @@ func TestTryReuseStoredToken(t *testing.T) {
 			})
 
 			reused, err := tryReuseStoredToken(io.Discard, true, "default", tt.targetURL)
-			if err != nil {
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("tryReuseStoredToken returned nil error, want non-nil (transient failure must abort)")
+				}
+			} else if err != nil {
 				t.Fatalf("tryReuseStoredToken returned err = %v, want nil (fallback is non-fatal)", err)
 			}
 			if reused != tt.wantReused {
 				t.Errorf("reused = %v, want %v", reused, tt.wantReused)
+			}
+			if tt.wantTokenIntact {
+				store, _ := credentials.Load()
+				if got := store["default"].Token; got != tt.storedToken {
+					t.Errorf("stored token = %q, want it left intact as %q", got, tt.storedToken)
+				}
 			}
 			if *post != tt.wantPostAuth {
 				t.Errorf("post-auth setup ran = %v, want %v", *post, tt.wantPostAuth)
@@ -258,6 +284,45 @@ func TestLoginRunE_ValidStoredTokenSkipsBrowser(t *testing.T) {
 	}
 	if *browser {
 		t.Error("browser flow ran even though a valid token was stored")
+	}
+}
+
+func TestLoginRunE_TransientErrorDoesNotOpenBrowser(t *testing.T) {
+	isolateHome(t)
+	resetLoginFlags(t)
+	seedProfile(t, "default", "https://stored.test", "still-good")
+	browser := stubBrowserLogin(t)
+	stubPostAuth(t)
+	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
+		return nil, context.DeadlineExceeded // server unreachable, not a rejection
+	})
+	if _, err := runLoginRunE(t); err == nil {
+		t.Fatal("expected a non-nil error when the server is unreachable")
+	}
+	if *browser {
+		t.Error("browser flow ran on a transient failure — a flaky network must not force re-login")
+	}
+	// The possibly-valid token must survive the failed verification attempt.
+	store, _ := credentials.Load()
+	if got := store["default"].Token; got != "still-good" {
+		t.Errorf("stored token = %q, want it left intact", got)
+	}
+}
+
+func TestLoginRunE_RejectedTokenOpensBrowser(t *testing.T) {
+	isolateHome(t)
+	resetLoginFlags(t)
+	seedProfile(t, "default", "https://stored.test", "expired")
+	browser := stubBrowserLogin(t)
+	stubPostAuth(t)
+	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
+		return nil, fmt.Errorf("%w (HTTP 401)", errTokenRejected)
+	})
+	if _, err := runLoginRunE(t); err != nil {
+		t.Fatalf("login err: %v", err)
+	}
+	if !*browser {
+		t.Error("a server-rejected token should fall back to the browser")
 	}
 }
 
