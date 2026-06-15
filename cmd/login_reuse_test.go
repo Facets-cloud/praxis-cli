@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 )
 
 // ─── test helpers ────────────────────────────────────────────────────────
@@ -68,6 +70,18 @@ func stubBrowserLogin(t *testing.T) *bool {
 	}
 	t.Cleanup(func() { browserLoginFn = orig })
 	return &called
+}
+
+// stubOsExit swaps osExit with a recorder so a fatal-exit path can be
+// asserted without terminating the test binary. The returned *int is -1
+// until osExit is called, then holds the exit code it was called with.
+func stubOsExit(t *testing.T) *int {
+	t.Helper()
+	code := -1
+	orig := osExit
+	osExit = func(c int) { code = c }
+	t.Cleanup(func() { osExit = orig })
+	return &code
 }
 
 func resetLoginFlags(t *testing.T) {
@@ -164,6 +178,7 @@ func TestTryReuseStoredToken(t *testing.T) {
 		authMeErr        error
 		wantReused       bool
 		wantErr          bool // tryReuseStoredToken returns a non-nil error
+		wantExit         int  // exit code osExit must be called with (0 → not called)
 		wantTokenIntact  bool // stored token must survive untouched
 		wantPostAuth     bool
 		wantAuthMeCalled bool
@@ -207,6 +222,7 @@ func TestTryReuseStoredToken(t *testing.T) {
 			authMeErr:        context.DeadlineExceeded,
 			wantReused:       true, // owned: caller must NOT open the browser
 			wantErr:          true,
+			wantExit:         exitcode.Network,
 			wantTokenIntact:  true,
 			wantAuthMeCalled: true,
 		},
@@ -218,6 +234,7 @@ func TestTryReuseStoredToken(t *testing.T) {
 				seedProfile(t, "default", tt.storedURL, tt.storedToken)
 			}
 			post := stubPostAuth(t)
+			exitCode := stubOsExit(t)
 			authMeCalled := false
 			stubAuthMe(t, func(baseURL, token string) (*authMeResponse, error) {
 				authMeCalled = true
@@ -232,8 +249,11 @@ func TestTryReuseStoredToken(t *testing.T) {
 
 			reused, err := tryReuseStoredToken(io.Discard, true, "default", tt.targetURL)
 			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("tryReuseStoredToken returned nil error, want non-nil (transient failure must abort)")
+				// The transient failure must surface the underlying cause
+				// verbatim, not a generic wrapper — that's what lets the
+				// caller distinguish it from errTokenRejected.
+				if !errors.Is(err, tt.authMeErr) {
+					t.Fatalf("err = %v, want it to wrap %v", err, tt.authMeErr)
 				}
 			} else if err != nil {
 				t.Fatalf("tryReuseStoredToken returned err = %v, want nil (fallback is non-fatal)", err)
@@ -241,8 +261,18 @@ func TestTryReuseStoredToken(t *testing.T) {
 			if reused != tt.wantReused {
 				t.Errorf("reused = %v, want %v", reused, tt.wantReused)
 			}
+			if tt.wantExit != 0 {
+				if *exitCode != tt.wantExit {
+					t.Errorf("osExit code = %d, want %d", *exitCode, tt.wantExit)
+				}
+			} else if *exitCode != -1 {
+				t.Errorf("osExit called with %d, want never called", *exitCode)
+			}
 			if tt.wantTokenIntact {
-				store, _ := credentials.Load()
+				store, lerr := credentials.Load()
+				if lerr != nil {
+					t.Fatalf("credentials.Load() after reuse: %v", lerr)
+				}
 				if got := store["default"].Token; got != tt.storedToken {
 					t.Errorf("stored token = %q, want it left intact as %q", got, tt.storedToken)
 				}
@@ -293,17 +323,25 @@ func TestLoginRunE_TransientErrorDoesNotOpenBrowser(t *testing.T) {
 	seedProfile(t, "default", "https://stored.test", "still-good")
 	browser := stubBrowserLogin(t)
 	stubPostAuth(t)
+	exitCode := stubOsExit(t) // production exits here; stub keeps the test alive
 	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
 		return nil, context.DeadlineExceeded // server unreachable, not a rejection
 	})
-	if _, err := runLoginRunE(t); err == nil {
-		t.Fatal("expected a non-nil error when the server is unreachable")
+	_, err := runLoginRunE(t)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want it to wrap context.DeadlineExceeded", err)
+	}
+	if *exitCode != exitcode.Network {
+		t.Errorf("osExit code = %d, want %d (Network)", *exitCode, exitcode.Network)
 	}
 	if *browser {
 		t.Error("browser flow ran on a transient failure — a flaky network must not force re-login")
 	}
 	// The possibly-valid token must survive the failed verification attempt.
-	store, _ := credentials.Load()
+	store, lerr := credentials.Load()
+	if lerr != nil {
+		t.Fatalf("credentials.Load(): %v", lerr)
+	}
 	if got := store["default"].Token; got != "still-good" {
 		t.Errorf("stored token = %q, want it left intact", got)
 	}

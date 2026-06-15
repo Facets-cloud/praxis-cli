@@ -50,6 +50,11 @@ var (
 	postAuthSetup  = runPostAuthSetup
 )
 
+// osExit is a seam over os.Exit so tests can exercise the fatal-exit paths
+// (which must terminate with a specific exit code, not bubble an error up
+// to Execute and exit 1) without killing the test binary.
+var osExit = os.Exit
+
 func init() {
 	loginCmd.Flags().StringVar(&loginProfile, "profile", "", "save under this profile name (default: \"default\")")
 	loginCmd.Flags().StringVar(&loginURL, "url", "", "Praxis deployment URL (default: existing profile URL or "+credentials.DefaultURL+")")
@@ -160,8 +165,9 @@ func normalizeBaseURL(raw string) string {
 //     (the returned error is that tail's result, nil on success).
 //   - hard stop: the server was unreachable, so the token could be neither
 //     confirmed nor refuted. We refuse to clobber a possibly-valid token
-//     with a browser re-login over a transient blip — the returned error
-//     aborts the command (after a printed diagnostic) so the user can retry.
+//     with a browser re-login over a transient blip, so it prints a
+//     diagnostic and exits via osExit(exitcode.Network). (It still returns
+//     handled=true for the stubbed-osExit test path.)
 //
 // handled=false means no reuse was possible and the caller should proceed to
 // the browser flow — no stored token, the profile is being re-targeted at a
@@ -198,11 +204,15 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 		// Transient: timeout, connection refused, 5xx — the token's validity
 		// is unknown. Do NOT mislabel it "no longer valid" or force a browser
 		// re-login over a flaky network. Leave the stored token untouched and
-		// abort so this is just a retry.
+		// abort with the network exit code so this is just a retry.
 		render.PrintError(out, asJSON,
 			fmt.Sprintf("couldn't reach %s to verify the stored token for profile %q: %v", baseURL, profileName, err),
 			"the server was unreachable — your stored token was left intact; check your connection and re-run `praxis login`",
 			exitcode.Network)
+		osExit(exitcode.Network)
+		// Reached only under test (osExit stubbed). Report handled=true so the
+		// caller never falls through to the browser, mirroring production where
+		// the process has already exited.
 		return true, err
 	}
 	// Persist the canonical (post-redirect) host so a stale stored URL
