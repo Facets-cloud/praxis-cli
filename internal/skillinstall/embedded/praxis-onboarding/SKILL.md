@@ -9,33 +9,37 @@ icon: "🚀"
 version: "1.0"
 ---
 
-> **Execution context — two gateways.** Everything runs by shelling out to
-> `praxis`. There are exactly two layers; do not confuse them:
+> **Execution context — two distinct surfaces.** Everything runs by shelling
+> out from your local AI host. Do not confuse the two:
 >
-> - **MCP tools = the gateway to Praxis.** Four servers — `catalog_ops`,
->   `cloud_cli`, `k8s_cli`, `raptor_cli` — each with named functions. Call
->   them as `praxis mcp <server> <function> --arg k=v` (or `--body '<json>'`).
->   List them with `praxis mcp --json` (snapshot: `~/.praxis/mcp-tools.json`).
+> - **MCP tools = the gateway to Praxis.** Three servers — `catalog_ops`,
+>   `cloud_cli`, `k8s_cli` — each with named functions. Call them as
+>   `praxis mcp <server> <function> --arg k=v` (or `--body '<json>'`). List
+>   them with `praxis mcp --json` (snapshot: `~/.praxis/mcp-tools.json`).
 >
 >   ```
 >   praxis mcp catalog_ops get_existing_catalog
->   praxis mcp raptor_cli list_facets_integrations
 >   ```
 >
-> - **raptor = the gateway to the Facets control plane.** Reached through one
->   function on the `raptor_cli` server — `run_raptor_cli` — which runs any
->   raptor command against the linked CP (auth is the org/user PAT, set up at
->   `praxis login`; once a CP is PAT-linked this just works). Everything
+> - **raptor = a local CLI for the Facets control plane.** You run `raptor`
+>   commands DIRECTLY in Bash. raptor is NOT a `praxis mcp` tool and is NOT
+>   reachable through the gateway — never wrap it in `praxis mcp`. Everything
 >   inside Facets — projects, resources, environments, releases, **and
->   cloud-account linking** — is a raptor command:
+>   cloud-account linking** — is a raptor command run locally:
 >
 >   ```
->   praxis mcp raptor_cli run_raptor_cli --arg command='get projects'
->   praxis mcp raptor_cli run_raptor_cli --arg command='get accounts'
+>   raptor get projects
+>   raptor get accounts
 >   ```
 >
->   In this flow, raptor steps are written as the bare raptor command (e.g.
->   `raptor get projects`); always run it through the wrapper above.
+>   **raptor preflight — once per session, before the first raptor command:**
+>   1. **Installed?** `command -v raptor` — if missing, ask the user to install
+>      it from the [raptor releases](https://github.com/Facets-cloud/raptor-releases/releases).
+>      Do not install it yourself.
+>   2. **Logged in?** `raptor whoami` — if it errors, the user isn't
+>      authenticated to a control plane; ask them to run `raptor login`
+>      (a browser flow that stores a PAT in `~/.facets/credentials`). Never ask
+>      for a token in chat and never write credentials yourself.
 >
 > **Layer pitfall:** `praxis mcp cloud_cli list_cloud_integrations` lists
 > *Praxis* cloud integrations (for running aws/gcloud CLI) — it is NOT where
@@ -118,7 +122,7 @@ models the user already accepted at an earlier gate; reference them in a
 single phrase ("same cost story as launch") and ask for the yes.
 
 Four rules that hold in both tiers:
-- **`run_raptor_cli` is general-purpose.** Issue only the specific documented
+- **`raptor` is general-purpose.** Issue only the specific documented
   command the current stop calls for. Never improvise extra mutations.
 - **Always offer teardown** at the end of any flow that deployed real
   resources — even if the user is in a hurry. The destroy itself is a HARD
@@ -202,5 +206,5 @@ When a stop reaches a topic another skill owns, name it and defer:
   their own control plane.
 - **Safe by default.** Confirm mutations per the tiers, name costs, always
   offer teardown.
-- **Discover, don't invent.** Precede an unfamiliar `run_raptor_cli` verb with
-  `<noun> --help` to get real flags rather than guessing.
+- **Discover, don't invent.** Precede an unfamiliar `raptor` verb with
+  `raptor <noun> --help` to get real flags rather than guessing.

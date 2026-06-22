@@ -31,6 +31,12 @@ const ExecutionPreamble = "" +
 	"> If `praxis mcp <mcp> <fn>` returns 404, that tool isn't yet exposed\n" +
 	"> by the gateway; fall back to whatever non-MCP path the body suggests.\n" +
 	">\n" +
+	"> **`raptor` is the exception — it is a LOCAL CLI, not a gateway tool.**\n" +
+	"> Run `raptor …` commands directly in your shell; never route them\n" +
+	"> through `praxis mcp` (there is no `raptor_cli` gateway tool). If\n" +
+	"> `command -v raptor` finds nothing, ask the user to install it; if\n" +
+	"> `raptor whoami` fails, ask the user to run `raptor login` first.\n" +
+	">\n" +
 	"> **Discovering what's available** — to see every MCP and function the\n" +
 	"> gateway exposes, run `praxis mcp --json` (live fetch). A snapshot\n" +
 	"> from your last `praxis login` lives at `~/.praxis/mcp-tools.json` —\n" +

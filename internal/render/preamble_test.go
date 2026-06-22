@@ -20,6 +20,11 @@ func TestExecutionPreambleShape(t *testing.T) {
 	if !strings.Contains(p, "~/.praxis/mcp-tools.json") {
 		t.Fatal("preamble should reference the manifest snapshot path")
 	}
+	// raptor is a local CLI, not a gateway tool — the preamble must say so
+	// (and never route raptor through `praxis mcp`).
+	if !strings.Contains(p, "raptor") || !strings.Contains(p, "raptor login") {
+		t.Fatal("preamble should explain raptor is a local CLI run directly (with install/login fallback)")
+	}
 	if !strings.HasSuffix(p, "\n") {
 		t.Fatal("preamble should end with a trailing newline so callers can concatenate cleanly")
 	}
