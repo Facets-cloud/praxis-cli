@@ -26,7 +26,7 @@ func TestUseCmd_SetsActiveProfile(t *testing.T) {
 		t.Errorf("expected JSON active_profile: acme, got %q", buf.String())
 	}
 
-	// Verify ResolveActive now returns acme via SourceConfig.
+	// Verify ResolveActive now returns acme via SourceConfig (global pointer).
 	a, _ := credentials.ResolveActive("")
 	if a.Name != "acme" || a.Source != credentials.SourceConfig {
 		t.Errorf("after `use acme`, ResolveActive = %+v, want acme/config", a)

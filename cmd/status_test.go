@@ -10,11 +10,43 @@ import (
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
 func resetStatusFlags() {
 	statusJSON = false
 	statusFull = false
+}
+
+func TestStatusCmd_LocalMode_ReportsProjectRootAndSource(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PRAXIS_PROFILE", "")
+	resetStatusFlags()
+
+	if err := credentials.Put("acme", credentials.Profile{URL: "https://acme.test", Username: "u@acme", Token: "tok"}); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return repo, nil }))
+	if _, err := credentials.SetActiveLocal("acme"); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	statusCmd.SetOut(&buf)
+	if err := statusCmd.RunE(statusCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{`"profile": "acme"`, `"profile_source": "project"`, `"project_root"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status in local mode missing %q\nfull: %s", want, out)
+		}
+	}
 }
 
 func TestStatusCmd_NotLoggedIn_DefaultProfile(t *testing.T) {

@@ -42,6 +42,16 @@ there's no way (and no need) to target a non-active profile directly.`,
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(logoutJSON, false, out)
 
+		// logout is a GLOBAL lifecycle operation, mirroring login: pin the
+		// active root to home so the org-skill wipe and snapshot removal
+		// always target the user-level state, never a project root that
+		// happens to be in the current directory's ancestry. To leave local
+		// mode, delete the repo's .praxis dir instead.
+		if home, herr := paths.Dir(); herr == nil {
+			restore := paths.OverrideActiveRoot(home)
+			defer restore()
+		}
+
 		if logoutAll {
 			if err := credentials.DeleteAll(); err != nil {
 				return err
@@ -88,10 +98,12 @@ there's no way (and no need) to target a non-active profile directly.`,
 			return nil
 		}
 
-		// Target the active profile only — v0.7 dropped --profile from
-		// logout (see Long). To remove a non-active profile, login to
-		// it first.
-		active, _ := credentials.ResolveActive("")
+		// Target the GLOBAL active profile only — logout is global (see the
+		// home pin above), so it removes the globally-active profile's
+		// credentials regardless of any project pointer in the cwd. v0.7
+		// dropped --profile from logout (see Long). To remove a non-active
+		// profile, login to it first.
+		active, _ := credentials.ResolveActiveGlobal()
 		store, _ := credentials.Load()
 		credsPresent := false
 		if _, ok := store[active.Name]; ok {

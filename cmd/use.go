@@ -2,12 +2,12 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
-	"os"
 )
 
 var useJSON bool
@@ -20,8 +20,11 @@ func init() {
 var useCmd = &cobra.Command{
 	Use:   "use <profile>",
 	Short: "Set the active profile (kubectl-style)",
-	Long: `Persist the active profile in ~/.praxis/config.json so all subsequent
-commands use it without --profile or PRAXIS_PROFILE.
+	Long: `Persist the GLOBAL active profile in ~/.praxis/config.json so all
+subsequent commands use it without --profile or PRAXIS_PROFILE.
+
+To pin a profile to a single directory tree instead of switching it
+globally, use ` + "`praxis login --profile <name> --local`" + ` (local mode).
 
 The profile must exist in ~/.praxis/credentials (created by
 ` + "`praxis login --profile <name>`" + `).`,
@@ -48,7 +51,7 @@ The profile must exist in ~/.praxis/credentials (created by
 		}
 
 		if asJSON {
-			return render.JSON(out, map[string]any{"active_profile": name})
+			return render.JSON(out, map[string]any{"active_profile": name, "scope": "global"})
 		}
 		fmt.Fprintf(out, "✓ Active profile set to %q\n", name)
 		return nil

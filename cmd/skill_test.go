@@ -12,7 +12,9 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/agentcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
@@ -53,6 +55,10 @@ func withSeams(t *testing.T,
 }
 
 func TestInstallSkill_PassesPraxisName(t *testing.T) {
+	// Isolate HOME so the catalog step resolves a not-logged-in profile and
+	// soft-skips (no real network call against the developer's live profile).
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PRAXIS_PROFILE", "")
 	var capturedName string
 	withSeams(t,
 		func() []harness.Harness { return []harness.Harness{{Name: "claude-code", Detected: true}} },
@@ -313,10 +319,13 @@ func TestRefreshSkills_ProjectFlag_ScopesToProjectDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	proj := t.TempDir()
-	origGetwd := getwd
-	getwd = func() (string, error) { return proj, nil }
-	t.Cleanup(func() { getwd = origGetwd })
+	// Project dir under the faked home (ProjectRoot discovery is bounded to
+	// the home subtree).
+	proj := filepath.Join(home, "repo")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatalf("mkdir proj: %v", err)
+	}
+	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return proj, nil }))
 
 	withSeams(t,
 		func() []harness.Harness {
@@ -366,12 +375,12 @@ func TestRefreshSkills_ProjectFlag_ScopesToProjectDir(t *testing.T) {
 	}
 }
 
-// TestRefreshSkills_ProjectFlag_GetwdError_ReportsUserScope pins the
-// scope-reporting half of CodeRabbit PR #23 actionable #2: when --project
-// is requested but the working directory can't be resolved, the install
-// silently falls back to user-level, so the reported scope (JSON + text)
-// must say "user", not the requested "project".
-func TestRefreshSkills_ProjectFlag_GetwdError_ReportsUserScope(t *testing.T) {
+// TestRefreshSkills_ProjectFlag_Unresolvable_ExitsUsage pins the new
+// contract: `--project` pins the cwd to the active profile, so if the cwd
+// can't be made a project root (e.g. it's outside home, or getwd fails) the
+// command fails fast with a Usage exit rather than silently installing
+// user-level under a "project" request.
+func TestRefreshSkills_ProjectFlag_Unresolvable_ExitsUsage(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PRAXIS_PROFILE", "")
@@ -381,10 +390,9 @@ func TestRefreshSkills_ProjectFlag_GetwdError_ReportsUserScope(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// getwd fails — forces the user-level fallback.
-	origGetwd := getwd
-	getwd = func() (string, error) { return "", errors.New("no cwd") }
-	t.Cleanup(func() { getwd = origGetwd })
+	// getwd fails — the cwd can't be resolved to a project root.
+	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return "", errors.New("no cwd") }))
+	exitCode := stubOsExit(t)
 
 	withSeams(t,
 		func() []harness.Harness {
@@ -395,13 +403,6 @@ func TestRefreshSkills_ProjectFlag_GetwdError_ReportsUserScope(t *testing.T) {
 				AgentDir: filepath.Join(home, ".claude", "agents"),
 			}}
 		}, nil, nil, nil)
-
-	origFetchSk := fetchCatalog
-	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
-	t.Cleanup(func() { fetchCatalog = origFetchSk })
-	origFetchAg := fetchAgents
-	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) { return nil, nil }
-	t.Cleanup(func() { fetchAgents = origFetchAg })
 
 	if err := refreshSkillsCmd.Flags().Set("project", "true"); err != nil {
 		t.Fatalf("set --project: %v", err)
@@ -420,8 +421,8 @@ func TestRefreshSkills_ProjectFlag_GetwdError_ReportsUserScope(t *testing.T) {
 		t.Fatalf("RunE err = %v", err)
 	}
 
-	if !strings.Contains(buf.String(), `"scope": "user"`) {
-		t.Errorf("getwd-failure fallback must report user scope, not project; got:\n%s", buf.String())
+	if *exitCode != exitcode.Usage {
+		t.Errorf("expected Usage exit (%d) when --project cwd is unresolvable, got %d", exitcode.Usage, *exitCode)
 	}
 }
 

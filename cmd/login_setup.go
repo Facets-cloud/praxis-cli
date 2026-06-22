@@ -3,18 +3,15 @@ package cmd
 import (
 	"fmt"
 	"io"
-	"os"
+	"path/filepath"
 
 	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
-
-// getwd is a seam for the current working directory so project-scoped
-// installs can be tested without chdir'ing the test process.
-var getwd = os.Getwd
 
 // postAuthState captures what runPostAuthSetup did, for inclusion in
 // the JSON output of `praxis login --json`. AI hosts read this to know
@@ -29,9 +26,10 @@ type postAuthState struct {
 	snapshotPath    string
 	snapshotWarning string
 	// projectScoped is the *effective* install scope after resolving the
-	// working directory — not the requested flag. It's false when
-	// --project was requested but getwd() failed and the install fell
-	// back to user-level, so callers report where files actually landed.
+	// active root — not the requested flag. It's false when a forced
+	// project scope couldn't be enabled (e.g. cwd unresolvable or outside
+	// home) and the install fell back to user-level, so callers report
+	// where files actually landed.
 	projectScoped bool
 }
 
@@ -64,44 +62,39 @@ type agentInstallationLite struct {
 // Each step is best-effort: a failure logs a warning to `out` but does
 // not roll back the credentials save. The user can re-run login any
 // time to retry the steps that failed (login is idempotent).
-// runPostAuthSetup installs the meta-skill + org catalog + agents into
-// the detected hosts and refreshes the MCP snapshot. When projectScoped
-// is true the install targets are rebased from the user-level home dirs
-// (~/.claude/skills, ...) onto the current working directory
-// (<repo>/.claude/skills, ...), so `praxis refresh-skills --project`
-// scopes skills to a single repo instead of applying them globally.
 //
-// Project scope also SKIPS the receipt-based "wipe previous profile"
-// step (UninstallByPrefix), which operates off the shared user-level
-// receipt and would otherwise delete the user's global install while
-// doing a repo-local refresh. The disk-scoped orphan sweep still runs —
-// it only touches the (project-scoped) host dirs, so it stays safe.
-func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string, projectScoped bool) postAuthState {
+// Install scope follows paths.ActiveRoot — the single source of truth, set up
+// by the caller before calling this:
+//
+//   - `praxis login --local` and `praxis refresh-skills --project` pin the
+//     active root to a project (<repo>/.praxis), so the install is
+//     project-scoped: host skill dirs are rebased onto the project
+//     (<repo>/.claude/skills, ...) and the receipt + MCP snapshot land in
+//     <repo>/.praxis.
+//   - `praxis login` (global) pins the active root to home, and a plain
+//     `praxis refresh-skills` inside an active local-mode tree resolves to the
+//     project automatically — both via ActiveRoot.
+//   - Otherwise the install is user-level (~/.claude/skills, ~/.praxis).
+//
+// Because the receipt follows the same root as the install location, the
+// "wipe previous profile" step (UninstallByPrefix) only ever touches the
+// active root's receipt + that root's host dirs — so it runs unconditionally
+// and stays safe in both scopes (a project refresh can't delete the user's
+// global skills, and vice versa).
+func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAuthState {
 	state := postAuthState{}
 	hosts := detectHarnesses()
-	// effectiveProjectScoped tracks the scope we actually install at. It
-	// starts from the requested flag but drops to false if getwd() fails,
-	// because we then fall back to a genuine user-level install — which
-	// must run the user-level wipes and be reported as user scope.
-	effectiveProjectScoped := projectScoped
-	if projectScoped && len(hosts) > 0 {
-		dir, err := getwd()
-		if err != nil {
-			effectiveProjectScoped = false
-			if !asJSON {
-				fmt.Fprintf(out, "Warning: cannot resolve working directory for project-scoped install: %v\n", err)
-				fmt.Fprintln(out, "Falling back to user-level install.")
-			}
-		} else {
-			for i := range hosts {
-				hosts[i] = hosts[i].ProjectScoped(dir)
-			}
-			if !asJSON {
-				fmt.Fprintf(out, "Installing project-scoped under %s\n", dir)
-			}
+
+	projectDir, inProject := resolveProjectScope()
+	if inProject {
+		for i := range hosts {
+			hosts[i] = hosts[i].ProjectScoped(projectDir)
+		}
+		if !asJSON {
+			fmt.Fprintf(out, "Installing project-scoped under %s\n", projectDir)
 		}
 	}
-	state.projectScoped = effectiveProjectScoped
+	state.projectScoped = inProject
 	noHosts := len(hosts) == 0
 	if noHosts && !asJSON {
 		fmt.Fprintln(out, "No supported AI hosts detected on this machine.")
@@ -148,23 +141,21 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string, project
 			}
 		case len(skills) == 0:
 			// Empty catalog is a definitive answer — wipe stale entries.
-			// The receipt-based wipe is user-level only (see func doc).
-			if !effectiveProjectScoped {
-				removed := wipePrevProfileSkills(out, asJSON)
-				state.removedSkills = liteResults(removed)
-			}
+			// The wipe targets the active root's receipt only (see func doc),
+			// so it's safe in both user and project scope.
+			removed := wipePrevProfileSkills(out, asJSON)
+			state.removedSkills = liteResults(removed)
 			orphaned := removeOrphanedProfileSkills(out, asJSON, nil, hosts)
 			state.removedSkills = append(state.removedSkills, liteResults(orphaned)...)
 			if !asJSON {
 				fmt.Fprintln(out, "\nCatalog is empty for this org — nothing to install.")
 			}
 		default:
-			// Catalog in hand. Now wipe and install. The receipt-based
-			// wipe is user-level only (see func doc).
-			if !effectiveProjectScoped {
-				removed := wipePrevProfileSkills(out, asJSON)
-				state.removedSkills = liteResults(removed)
-			}
+			// Catalog in hand. Now wipe and install. The wipe targets the
+			// active root's receipt only (see func doc), so it's safe in
+			// both user and project scope.
+			removed := wipePrevProfileSkills(out, asJSON)
+			state.removedSkills = liteResults(removed)
 			orphaned := removeOrphanedProfileSkills(out, asJSON, skills, hosts)
 			state.removedSkills = append(state.removedSkills, liteResults(orphaned)...)
 			state.catalogSkills = installFetchedCatalog(out, asJSON, skills, hosts)
@@ -182,19 +173,17 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string, project
 				fmt.Fprintln(out, "Existing agents left in place. Re-run `praxis login` once the gateway is reachable.")
 			}
 		default:
-			// Receipt-based agent wipe is user-level only — same
+			// Agent wipe targets the active root's receipt only — same
 			// reasoning as the skill wipe above (see func doc).
-			if !effectiveProjectScoped {
-				removed, err := uninstallAgentsByPrefix("praxis-")
-				if err != nil {
-					if !asJSON {
-						fmt.Fprintf(out, "Warning: removing previous profile's agents failed: %v\n", err)
-					}
+			removed, err := uninstallAgentsByPrefix("praxis-")
+			if err != nil {
+				if !asJSON {
+					fmt.Fprintf(out, "Warning: removing previous profile's agents failed: %v\n", err)
 				}
-				state.removedAgents = agentLiteResults(removed)
-				if !asJSON && len(removed) > 0 {
-					fmt.Fprintf(out, "\nRemoved %d agent file(s) from previous profile.\n", len(removed))
-				}
+			}
+			state.removedAgents = agentLiteResults(removed)
+			if !asJSON && len(removed) > 0 {
+				fmt.Fprintf(out, "\nRemoved %d agent file(s) from previous profile.\n", len(removed))
 			}
 
 			if len(agents) == 0 {
@@ -245,6 +234,25 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string, project
 	state.snapshotPath, state.snapshotWarning = refreshMCPSnapshot(out, asJSON, baseURL, token)
 
 	return state
+}
+
+// resolveProjectScope reads the already-resolved active root and reports the
+// install scope. The active root is the single source of truth: a project
+// root means project scope (host skill dirs rebased onto the dir containing
+// .praxis); the home root means user scope. Callers (login --local,
+// refresh-skills --project, or an active local-mode cwd) set the active root
+// up front, so this never makes a scope decision on its own — keeping the
+// receipt location (ActiveRoot) and the install location in lockstep.
+func resolveProjectScope() (string, bool) {
+	root, err := paths.ActiveRoot()
+	if err != nil {
+		return "", false
+	}
+	home, err := paths.Dir()
+	if err != nil || root == home {
+		return "", false
+	}
+	return filepath.Dir(root), true
 }
 
 // wipePrevProfileSkills removes every praxis-* skill from disk and the
