@@ -15,14 +15,17 @@
 // Active-profile resolution (highest priority first):
 //
 //  1. --profile flag passed to a command (where it exists)
-//  2. ~/.praxis/config.json "default profile" pointer (set by `praxis use`)
-//  3. PRAXIS_PROFILE environment variable
-//  4. literal "default" section
+//  2. <cwd>/.praxis/config.json project pointer (set by `praxis use --local`),
+//     discovered by walking up from the working directory to home
+//  3. ~/.praxis/config.json "default profile" pointer (set by `praxis use`)
+//  4. PRAXIS_PROFILE environment variable
+//  5. literal "default" section
 //
-// Rationale: `praxis use X` is an explicit, persistent choice the user
-// made; it should be sticky. PRAXIS_PROFILE is the fallback when no
-// `use` has been called (and the rare per-shell override) — it does
-// NOT silently override an explicit `use` decision in the next shell.
+// Rationale: a project pointer is the most specific, explicit choice — being
+// inside that directory tree IS the intent — so it wins. `praxis use X` is an
+// explicit, persistent global choice; it's next. PRAXIS_PROFILE is the
+// fallback when no `use` has been called (and the rare per-shell override) —
+// it does NOT silently override an explicit `use` decision in the next shell.
 //
 // Single-profile users never see steps 1–3 — everything resolves to
 // "default" automatically.
@@ -81,6 +84,7 @@ type Source string
 
 const (
 	SourceFlag    Source = "flag"
+	SourceProject Source = "project"
 	SourceEnv     Source = "env"
 	SourceConfig  Source = "config"
 	SourceDefault Source = "default"
@@ -100,10 +104,20 @@ type Active struct {
 // The Profile field is zeroed if the named section doesn't exist; callers
 // should check Loaded before using URL/Token.
 func ResolveActive(flagProfile string) (Active, error) {
-	name, src := resolveName(flagProfile)
 	store, err := Load()
 	if err != nil {
 		return Active{}, err
+	}
+	name, src := resolveName(flagProfile)
+	if src == SourceProject {
+		if _, ok := store[name]; !ok {
+			// The project pointer names a profile this machine doesn't have
+			// — e.g. a <repo>/.praxis committed by a teammate, or a stale
+			// pointer left after `logout`. Don't hijack the user into a
+			// profile they never created (which would just hard-fail every
+			// command); fall back to the global resolution.
+			name, src = resolveGlobalName(flagProfile)
+		}
 	}
 	p, ok := store[name]
 	return Active{
@@ -114,7 +128,33 @@ func ResolveActive(flagProfile string) (Active, error) {
 	}, nil
 }
 
+// ResolveActiveGlobal resolves the active profile IGNORING any project-local
+// pointer — flag → global config → PRAXIS_PROFILE → "default". Lifecycle
+// commands that are global by definition (e.g. `praxis logout`, mirroring
+// `praxis login`) use this so a stray/leftover <cwd>/.praxis can't redirect a
+// destructive operation at a profile the user didn't mean.
+func ResolveActiveGlobal() (Active, error) {
+	store, err := Load()
+	if err != nil {
+		return Active{}, err
+	}
+	name, src := resolveGlobalName("")
+	p, ok := store[name]
+	return Active{Name: name, Source: src, Profile: p, Loaded: ok}, nil
+}
+
 func resolveName(flagProfile string) (string, Source) {
+	if flagProfile != "" {
+		return flagProfile, SourceFlag
+	}
+	if name := projectProfile(); name != "" {
+		return name, SourceProject
+	}
+	return resolveGlobalName(flagProfile)
+}
+
+// resolveGlobalName is resolveName without the project-pointer step.
+func resolveGlobalName(flagProfile string) (string, Source) {
 	if flagProfile != "" {
 		return flagProfile, SourceFlag
 	}
@@ -125,6 +165,21 @@ func resolveName(flagProfile string) (string, Source) {
 		return env, SourceEnv
 	}
 	return DefaultProfileName, SourceDefault
+}
+
+// projectProfile returns the profile named in the project-local pointer
+// (<projectRoot>/.praxis/config.json), or "" when there's no project root or
+// no profile recorded there.
+func projectProfile() string {
+	path, ok, err := paths.ProjectConfig()
+	if err != nil || !ok {
+		return ""
+	}
+	cfg, err := readConfigFile(path)
+	if err != nil {
+		return ""
+	}
+	return cfg.Profile
 }
 
 // Load reads ~/.praxis/credentials. Missing file returns an empty store
@@ -251,7 +306,7 @@ type configFile struct {
 	Profile string
 }
 
-// SetActive writes the active-profile pointer (kubectl-style "use").
+// SetActive writes the GLOBAL active-profile pointer (kubectl-style "use").
 func SetActive(name string) error {
 	if err := validateProfileName(name); err != nil {
 		return err
@@ -260,6 +315,37 @@ func SetActive(name string) error {
 	if err != nil {
 		return err
 	}
+	return writeConfigPointer(path, name)
+}
+
+// SetActiveLocal pins the active profile to the current working-directory
+// tree by writing a project-local pointer. If a project root (a .praxis dir)
+// already exists at or above the working directory it is reused; otherwise
+// <cwd>/.praxis is created. Returns the project root written to. Credentials
+// are NOT touched — they stay global in ~/.praxis/credentials.
+func SetActiveLocal(name string) (string, error) {
+	if err := validateProfileName(name); err != nil {
+		return "", err
+	}
+	root, ok, err := paths.ProjectRoot()
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		root, err = paths.EnsureProjectRoot()
+		if err != nil {
+			return "", err
+		}
+	}
+	if err := writeConfigPointer(filepath.Join(root, "config.json"), name); err != nil {
+		return "", err
+	}
+	return root, nil
+}
+
+// writeConfigPointer atomically writes a "[default]\nprofile = <name>"
+// pointer file at path (temp + rename, chmod 0600).
+func writeConfigPointer(path, name string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -299,6 +385,12 @@ func loadConfig() (configFile, error) {
 	if err != nil {
 		return configFile{}, err
 	}
+	return readConfigFile(path)
+}
+
+// readConfigFile parses a pointer file (the [default] profile = <name>
+// shape). A missing file is not an error — it yields a zero configFile.
+func readConfigFile(path string) (configFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
 func withHome(t *testing.T) string {
@@ -323,5 +325,191 @@ func TestDefaultURL_IsCanonicalHost(t *testing.T) {
 	const want = "https://www.askpraxis.ai"
 	if DefaultURL != want {
 		t.Errorf("DefaultURL = %q, want %q (canonical host, no 301 redirect)", DefaultURL, want)
+	}
+}
+
+// ─── Project-local (local mode) resolution ──────────────────────────────
+
+// setCwd is a helper to point project-root discovery at dir for the test.
+func setCwd(t *testing.T, dir string) {
+	t.Helper()
+	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return dir, nil }))
+}
+
+func TestResolveActive_ProjectBeatsConfigAndEnv(t *testing.T) {
+	home := withHome(t)
+	t.Setenv("PRAXIS_PROFILE", "from-env")
+	if err := SetActive("from-config"); err != nil {
+		t.Fatal(err)
+	}
+	// The project profile must EXIST in the store for the pointer to win
+	// (an unknown profile gracefully falls back to global — see
+	// TestResolveActive_ProjectPointerToMissingProfile_FallsBack).
+	if err := Put("from-project", Profile{URL: "https://p.test", Token: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setCwd(t, repo)
+	if _, err := SetActiveLocal("from-project"); err != nil {
+		t.Fatalf("SetActiveLocal: %v", err)
+	}
+
+	a, err := ResolveActive("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Name != "from-project" || a.Source != SourceProject {
+		t.Errorf("project pointer should win, got name=%q source=%s", a.Name, a.Source)
+	}
+}
+
+// TestResolveActive_ProjectPointerToMissingProfile_FallsBack is the
+// regression test for the teammate-hijack fix: a project pointer naming a
+// profile this machine doesn't have (e.g. a committed <repo>/.praxis) must
+// NOT win — it falls back to the global resolution so a normal user isn't
+// locked into a profile they never created.
+func TestResolveActive_ProjectPointerToMissingProfile_FallsBack(t *testing.T) {
+	home := withHome(t)
+	if err := SetActive("from-config"); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setCwd(t, repo)
+	// Pointer to "ghost" — but no such profile is ever Put into the store.
+	if _, err := SetActiveLocal("ghost"); err != nil {
+		t.Fatalf("SetActiveLocal: %v", err)
+	}
+
+	a, err := ResolveActive("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Name != "from-config" || a.Source != SourceConfig {
+		t.Errorf("missing project profile should fall back to global config, got name=%q source=%s", a.Name, a.Source)
+	}
+}
+
+// TestResolveActiveGlobal_IgnoresProjectPointer pins that the global resolver
+// (used by `praxis logout`) never honors a project pointer, even one naming a
+// real profile.
+func TestResolveActiveGlobal_IgnoresProjectPointer(t *testing.T) {
+	home := withHome(t)
+	if err := SetActive("from-config"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Put("from-project", Profile{URL: "https://p.test", Token: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setCwd(t, repo)
+	if _, err := SetActiveLocal("from-project"); err != nil {
+		t.Fatal(err)
+	}
+
+	// ResolveActive honors the project pointer...
+	if a, _ := ResolveActive(""); a.Name != "from-project" {
+		t.Errorf("ResolveActive should see project profile, got %q", a.Name)
+	}
+	// ...but the global resolver ignores it.
+	g, err := ResolveActiveGlobal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Name != "from-config" || g.Source != SourceConfig {
+		t.Errorf("ResolveActiveGlobal must ignore project pointer, got name=%q source=%s", g.Name, g.Source)
+	}
+}
+
+func TestResolveActive_FlagStillBeatsProject(t *testing.T) {
+	home := withHome(t)
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setCwd(t, repo)
+	if _, err := SetActiveLocal("from-project"); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := ResolveActive("from-flag")
+	if a.Name != "from-flag" || a.Source != SourceFlag {
+		t.Errorf("--profile flag must beat project pointer, got %+v", a)
+	}
+}
+
+func TestSetActiveLocal_CreatesMarkerAndConfig(t *testing.T) {
+	home := withHome(t)
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setCwd(t, repo)
+
+	root, err := SetActiveLocal("acme")
+	if err != nil {
+		t.Fatalf("SetActiveLocal: %v", err)
+	}
+	if want := filepath.Join(repo, ".praxis"); root != want {
+		t.Errorf("root = %q, want %q", root, want)
+	}
+	cfgPath := filepath.Join(root, "config.json")
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read project config: %v", err)
+	}
+	if !strings.Contains(string(data), "profile = acme") {
+		t.Errorf("project config missing pointer; got %q", string(data))
+	}
+	// Credentials file must NOT have been created by a local use.
+	credPath, _ := paths.Credentials()
+	if _, err := os.Stat(credPath); !os.IsNotExist(err) {
+		t.Errorf("SetActiveLocal must not touch the global credentials file (err=%v)", err)
+	}
+}
+
+func TestSetActiveLocal_ReusesAncestorRoot(t *testing.T) {
+	home := withHome(t)
+	repo := filepath.Join(home, "repo")
+	sub := filepath.Join(repo, "deep", "nested")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-existing project root at the repo level.
+	if err := os.MkdirAll(filepath.Join(repo, ".praxis"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	setCwd(t, sub)
+
+	root, err := SetActiveLocal("acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Must reuse the ancestor's .praxis, not create one in the nested cwd.
+	if want := filepath.Join(repo, ".praxis"); root != want {
+		t.Errorf("root = %q, want ancestor %q (no nested marker)", root, want)
+	}
+	if _, err := os.Stat(filepath.Join(sub, ".praxis")); !os.IsNotExist(err) {
+		t.Errorf("must not create a nested .praxis in cwd (err=%v)", err)
+	}
+}
+
+func TestSetActiveLocal_OutsideHome_Errors(t *testing.T) {
+	withHome(t)
+	outside := t.TempDir()
+	setCwd(t, outside)
+	_, err := SetActiveLocal("acme")
+	if err == nil {
+		t.Fatal("SetActiveLocal outside home should error, got nil")
+	}
+	if !strings.Contains(err.Error(), "under your home directory") {
+		t.Errorf("error should explain the home-subtree requirement; got %q", err.Error())
 	}
 }

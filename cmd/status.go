@@ -6,6 +6,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"github.com/spf13/cobra"
@@ -53,6 +54,18 @@ verification result.`,
 			"logged_in":      loggedIn,
 			"username":       active.Profile.Username,
 		}
+		// Surface project (local) mode so AI hosts and users can see that
+		// skills/receipt are scoped to this directory tree, not global.
+		// Only when the active profile actually RESOLVED from the project
+		// pointer — a bare/stray .praxis dir (or one whose pointer named a
+		// profile we don't have) must not masquerade as local mode.
+		projectRoot := ""
+		if active.Source == credentials.SourceProject {
+			if root, ok, _ := paths.ProjectRoot(); ok {
+				projectRoot = root
+				state["project_root"] = root
+			}
+		}
 		if asJSON {
 			if statusFull {
 				// Same shaped schema as `list-skills --json` and
@@ -98,6 +111,9 @@ verification result.`,
 		}
 
 		fmt.Fprintf(out, "profile:    %s (source: %s)\n", active.Name, active.Source)
+		if projectRoot != "" {
+			fmt.Fprintf(out, "local mode: %s\n", projectRoot)
+		}
 		fmt.Fprintf(out, "url:        %s\n", active.Profile.URL)
 		if loggedIn {
 			fmt.Fprintf(out, "logged in:  yes (%s)\n", active.Profile.Username)

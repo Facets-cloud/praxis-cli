@@ -14,6 +14,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
@@ -146,10 +147,13 @@ func TestRunPostAuthSetup_ProjectScope_WritesIntoProjectDir(t *testing.T) {
 	t.Setenv("PRAXIS_PROFILE", "")
 	stubMCPManifestFetch(t)
 
-	proj := t.TempDir()
-	origGetwd := getwd
-	getwd = func() (string, error) { return proj, nil }
-	t.Cleanup(func() { getwd = origGetwd })
+	// Project dir must be UNDER the (faked) home: project-root discovery is
+	// bounded to the home subtree (see internal/paths.ProjectRoot).
+	proj := filepath.Join(home, "repo")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatalf("mkdir proj: %v", err)
+	}
+	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return proj, nil }))
 
 	origDetect := detectHarnesses
 	detectHarnesses = func() []harness.Harness {
@@ -207,10 +211,12 @@ func TestRunPostAuthSetup_ProjectScope_DoesNotWipeUserLevelInstall(t *testing.T)
 	}
 	seededPath := seeded[0].Path
 
-	proj := t.TempDir()
-	origGetwd := getwd
-	getwd = func() (string, error) { return proj, nil }
-	t.Cleanup(func() { getwd = origGetwd })
+	// Project dir under the faked home (see ProjectRoot's home-subtree bound).
+	proj := filepath.Join(home, "repo")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatalf("mkdir proj: %v", err)
+	}
+	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return proj, nil }))
 
 	origDetect := detectHarnesses
 	detectHarnesses = func() []harness.Harness {
@@ -263,9 +269,7 @@ func TestRunPostAuthSetup_ProjectScope_GetwdError_FallsBackToUserLevel(t *testin
 	}
 
 	// getwd fails — this is the fallback trigger.
-	origGetwd := getwd
-	getwd = func() (string, error) { return "", errors.New("simulated getwd failure") }
-	t.Cleanup(func() { getwd = origGetwd })
+	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return "", errors.New("simulated getwd failure") }))
 
 	origDetect := detectHarnesses
 	detectHarnesses = func() []harness.Harness {

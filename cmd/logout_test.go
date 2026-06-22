@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
 // resetLogoutFlags clears flag state between tests since cobra commands
@@ -94,6 +97,49 @@ func TestLogoutCmd_LeavesOtherProfilesAlone(t *testing.T) {
 	}
 	if _, ok := store["default"]; !ok {
 		t.Errorf("default should remain")
+	}
+}
+
+// TestLogoutCmd_InProjectDir_RemovesGlobalNotProjectProfile is the
+// regression test for the local-mode logout fix: logout is a GLOBAL
+// operation, so run from inside a local-mode repo it must remove the
+// globally-active profile — never the project-pinned one — so a stray or
+// teammate-committed <repo>/.praxis can't redirect a destructive logout.
+func TestLogoutCmd_InProjectDir_RemovesGlobalNotProjectProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PRAXIS_PROFILE", "")
+	resetLogoutFlags()
+	defer resetLogoutFlags()
+
+	_ = credentials.Put("default", credentials.Profile{URL: "x", Token: "t1"})
+	_ = credentials.Put("acme", credentials.Profile{URL: "y", Token: "t2"})
+	_ = credentials.SetActive("default") // global active = default
+
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return repo, nil }))
+	if _, err := credentials.SetActiveLocal("acme"); err != nil { // project pinned to acme
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	logoutCmd.SetOut(&buf)
+	if err := logoutCmd.RunE(logoutCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	// Must remove the GLOBAL profile (default), not the project pointer (acme).
+	if !strings.Contains(buf.String(), `"removed": "default"`) {
+		t.Errorf("logout in a project dir must remove the global profile; got %q", buf.String())
+	}
+	store, _ := credentials.Load()
+	if _, ok := store["default"]; ok {
+		t.Error("global profile 'default' should have been removed")
+	}
+	if _, ok := store["acme"]; !ok {
+		t.Error("project-pinned profile 'acme' must NOT be removed by a global logout")
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
 )
@@ -418,6 +419,16 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, em
 	}
 	if err := credentials.SetActive(profileName); err != nil {
 		return fmt.Errorf("set active profile: %w", err)
+	}
+
+	// Login is always a GLOBAL operation: pin the active root to home so the
+	// meta-skill, catalog, and MCP snapshot install user-level even when the
+	// command is run from inside a project tree (where they'd otherwise be
+	// scoped to <repo>/.praxis). Local mode is managed via `praxis use
+	// --local` / `praxis refresh-skills`, not login.
+	if home, herr := paths.Dir(); herr == nil {
+		restore := paths.OverrideActiveRoot(home)
+		defer restore()
 	}
 
 	// Post-auth: install meta-skill, wipe previous org skills, install

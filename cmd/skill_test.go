@@ -13,6 +13,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/agentcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
@@ -313,10 +314,13 @@ func TestRefreshSkills_ProjectFlag_ScopesToProjectDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	proj := t.TempDir()
-	origGetwd := getwd
-	getwd = func() (string, error) { return proj, nil }
-	t.Cleanup(func() { getwd = origGetwd })
+	// Project dir under the faked home (ProjectRoot discovery is bounded to
+	// the home subtree).
+	proj := filepath.Join(home, "repo")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatalf("mkdir proj: %v", err)
+	}
+	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return proj, nil }))
 
 	withSeams(t,
 		func() []harness.Harness {
@@ -382,9 +386,7 @@ func TestRefreshSkills_ProjectFlag_GetwdError_ReportsUserScope(t *testing.T) {
 	}
 
 	// getwd fails — forces the user-level fallback.
-	origGetwd := getwd
-	getwd = func() (string, error) { return "", errors.New("no cwd") }
-	t.Cleanup(func() { getwd = origGetwd })
+	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return "", errors.New("no cwd") }))
 
 	withSeams(t,
 		func() []harness.Harness {
