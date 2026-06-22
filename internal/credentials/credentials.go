@@ -167,6 +167,26 @@ func resolveGlobalName(flagProfile string) (string, Source) {
 	return DefaultProfileName, SourceDefault
 }
 
+// init wires the paths package's local-mode gate to the credentials store:
+// a discovered <repo>/.praxis is only the active root when its pointer names
+// a profile that actually exists here. This is what makes a bare or
+// teammate-committed .praxis inert for a user who never opted in, while
+// keeping paths free of a credentials import (which would be a cycle).
+func init() {
+	paths.LocalModeActive = func(projectRoot string) bool {
+		cfg, err := readConfigFile(filepath.Join(projectRoot, "config.json"))
+		if err != nil || cfg.Profile == "" {
+			return false
+		}
+		store, err := Load()
+		if err != nil {
+			return false
+		}
+		_, ok := store[cfg.Profile]
+		return ok
+	}
+}
+
 // projectProfile returns the profile named in the project-local pointer
 // (<projectRoot>/.praxis/config.json), or "" when there's no project root or
 // no profile recorded there.

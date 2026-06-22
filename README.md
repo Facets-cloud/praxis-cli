@@ -137,10 +137,13 @@ JSON envelope so your AI host can see what got installed.
 `completion` is shell-script output and has no JSON form.
 
 ```text
-praxis login [--profile X] [--url Y] [--token Z]
+praxis login [--profile X] [--url Y] [--token Z] [--local]
    The one-stop setup command. Idempotent. Re-run to refresh skills
    or switch profiles. The only command that's human-only — opens a
-   browser.
+   browser (unless a stored token is still valid, or --token is given).
+   --local pins this profile to the CURRENT directory tree (writes
+   <cwd>/.praxis) and installs its skills project-scoped, instead of
+   switching the global profile. See "Local mode" below.
 
 praxis logout [--all]
    Active profile: removes credentials, all org skills (praxis-*),
@@ -173,14 +176,12 @@ praxis duty <subcommand> [--agent <name|id>] [--json]
      report <run_id>               the report artifact a run produced
      findings <duty> [--status open|resolved|all] [--limit N]
 
-praxis use <profile> [--local] [--json]
-   Set the active profile without re-authenticating.
-   Default: writes the GLOBAL pointer (~/.praxis/config.json) — the
-   profile applies everywhere.
-   --local: pins the profile to the CURRENT directory tree instead
-   (writes <cwd>/.praxis/) and installs its skills project-scoped.
-   See "Local mode" below. The profile must already exist (created
-   by `praxis login --profile <name>`).
+praxis use <profile> [--json]
+   Set the GLOBAL active profile (~/.praxis/config.json) without
+   re-authenticating — kubectl-style. The profile must already exist
+   (created by `praxis login --profile <name>`). To pin a profile to
+   one directory tree instead, use `praxis login --local` (see "Local
+   mode" below).
 
 praxis refresh-skills [--project] [--json]
    Re-fetch this profile's catalog and rewrite skill files + MCP
@@ -191,8 +192,8 @@ praxis refresh-skills [--project] [--json]
    Installs at USER level by default (~/.claude/skills, ...), so
    skills apply across every repo. When run from inside a local-mode
    directory (one with a .praxis/ root) it auto-scopes to that repo.
-   Pass --project to force-scope a plain directory to the current
-   repo (<cwd>/.claude/skills, ...) instead.
+   Pass --project to pin the current directory to the active profile
+   (like `praxis login --local`, minus auth) and install there.
 
 praxis update [--yes] [--json]
    Self-update binary. --json implies --yes.
@@ -213,7 +214,7 @@ previous profile's org skills and installs X's. At the **user
 `refresh-skills` runs the same post-login flow without changing
 credentials.
 
-The one deliberate exception is **local mode** (`praxis use --local`):
+The one deliberate exception is **local mode** (`praxis login --local`):
 each directory tree keeps its *own* profile and its own copy of that
 profile's skills, so different repos can run different profiles at the
 same time without clobbering each other. The invariant still holds
@@ -292,11 +293,15 @@ shared in `~/.praxis/credentials` — local mode never duplicates secrets.
 
 ```bash
 cd ~/work/acme-repo
-praxis use --local acme        # pins this tree to "acme"
+praxis login --profile acme --local        # pins this tree to "acme"
 
 cd ~/work/bigcorp-repo
-praxis use --local bigcorp     # pins this tree to "bigcorp"
+praxis login --profile bigcorp --local     # pins this tree to "bigcorp"
 ```
+
+(If the profile's stored token is still valid, `--local` reuses it — no
+browser. Already logged in everywhere and just re-pinning? `praxis
+refresh-skills --project` does the same without re-auth.)
 
 Now each repo is permanently "logged in" as its own profile:
 
@@ -306,11 +311,12 @@ Now each repo is permanently "logged in" as its own profile:
 ~/  (everywhere else)  → the global profile (set by login / `praxis use`)
 ```
 
-`praxis use --local <profile>`:
+`praxis login --profile <name> --local`:
 
-1. Writes a project pointer at `<repo>/.praxis/config.json` (creating
+1. Saves the profile's credentials globally (as any login does), then
+   writes a project pointer at `<repo>/.praxis/config.json` (creating
    `<repo>/.praxis/` if needed; an existing root at or above the cwd is
-   reused).
+   reused) — WITHOUT touching the global active-profile pointer.
 2. Installs that profile's catalog skills + agents **project-scoped**
    into `<repo>/.claude/skills` (and the Codex/Gemini equivalents).
 3. Writes the skill receipt and the MCP snapshot under `<repo>/.praxis/`
@@ -326,28 +332,30 @@ Active-profile resolution walks this chain (first match wins):
 5. "default"
 ```
 
-A project pointer only wins if **you actually have that profile**. If a
-`<repo>/.praxis/config.json` names a profile that isn't in your
-credentials file (e.g. one a teammate committed), it's ignored and
-resolution falls through to your global profile — so a checked-in
-`.praxis` can't lock you out of a repo or hijack you into someone else's
-org. `praxis status` reports the resolved profile and, when it actually
-resolved from the project pointer, a `local mode: <repo>/.praxis` line
-(`profile_source: project` in JSON).
+Local mode only activates when **you actually have the pinned profile**.
+A `.praxis/` that's empty, or whose pointer names a profile not in your
+credentials file (e.g. one a teammate committed), is **completely inert**:
+resolution falls through to your global profile *and* the receipt, MCP
+snapshot, and skill location stay global too. So a checked-in or
+leftover `.praxis` can never lock you out of a repo, hijack you into
+someone else's org, or quietly redirect your skills. `praxis status`
+reports the resolved profile and, only when it actually resolved from the
+project pointer, a `local mode: <repo>/.praxis` line (`profile_source:
+project` in JSON).
 
 A few things to know:
 
-- **`login` and `logout` are always global.** Even run from inside a
-  project tree, they operate on shared credentials at the user level —
-  never scoped to the repo. Manage local mode with `use --local` /
-  `refresh-skills`; to fully detach a repo, delete its marker:
-  `rm -rf .praxis`.
+- **`login` (global) and `logout` are always global.** Run from inside a
+  project tree, plain `praxis login` and `praxis logout` operate on
+  shared credentials at the user level — never scoped to the repo. Use
+  `login --local` / `refresh-skills --project` to manage local mode; to
+  fully detach a repo, delete its marker: `rm -rf .praxis`.
 - **Discovery is bounded to your home directory.** A repo must live
-  under `$HOME` for auto-discovery to find its `.praxis/`; `use --local`
+  under `$HOME` for auto-discovery to find its `.praxis/`; `login --local`
   refuses to pin a directory outside it.
 - Add `/.praxis/` to the repo's `.gitignore` — it holds a per-developer
-  snapshot, not source. (If it does get committed, the fallback above
-  keeps it harmless for teammates who don't share the profile.)
+  snapshot, not source. (If it does get committed, the inert-by-default
+  behavior above keeps it harmless for teammates.)
 
 ### Refreshing
 
@@ -394,7 +402,7 @@ praxis logout --all
 ~/.gemini/skills/...                  same shape for Gemini CLI
 ```
 
-In **local mode** (`praxis use --local`), everything except credentials
+In **local mode** (`praxis login --local`), everything except credentials
 moves into the repo. Credentials stay in `~/.praxis/credentials`; the
 project root carries its own pointer, receipt, snapshot, and skills:
 

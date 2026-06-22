@@ -59,6 +59,17 @@ func RootIsPinned() bool {
 	return activeRootOverride != ""
 }
 
+// LocalModeActive, when set, decides whether a discovered project root should
+// actually be treated as the ActiveRoot — i.e. whether local mode is GENUINELY
+// active there (its pointer names a profile this machine has). It is injected
+// by the credentials package (which paths can't import without a cycle) so a
+// bare .praxis (no pointer) or a foreign one (pointer to a profile you don't
+// have, e.g. a teammate's committed marker) does NOT silently divert the
+// receipt/snapshot/skill location for a user who never opted in. When nil
+// (low-level tests with no credentials wired up), discovery falls back to
+// presence-only.
+var LocalModeActive func(projectRoot string) bool
+
 // Dir returns the HOME root ~/.praxis (does not create it).
 func Dir() (string, error) {
 	home, err := os.UserHomeDir()
@@ -117,7 +128,11 @@ func ActiveRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if ok {
+	// A discovered .praxis only becomes the active root when local mode is
+	// genuinely active there (see LocalModeActive). Otherwise — a bare or
+	// foreign marker — fall back to home so a stray directory can't divert a
+	// normal user's receipt/snapshot/skills.
+	if ok && (LocalModeActive == nil || LocalModeActive(root)) {
 		return root, nil
 	}
 	return Dir()

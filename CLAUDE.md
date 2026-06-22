@@ -51,8 +51,8 @@ cmd/                  cobra command tree (only commands that DO something
   update.go           `praxis update` (self-update via GitHub Releases)
   completion.go       `praxis completion {bash|zsh|fish|powershell}`
   logout.go           `praxis logout` (deletes ~/.praxis/credentials)
-  use.go              `praxis use <profile> [--local]` (active-profile pointer;
-                       --local pins a directory tree — see Local mode below)
+  use.go              `praxis use <profile>` (sets the GLOBAL active-profile
+                       pointer; local mode is `praxis login --local`)
   duty.go             `praxis duty *` (Agent Schedule runs/findings/reports)
 internal/             pure logic, unit-tested
   paths/              Praxis filesystem locations. Two roots: the HOME root
@@ -80,31 +80,46 @@ in-process MCP reference (`run_cloud_cli(...)`) is rewritten to a
 
 ## Local mode (per-directory profiles)
 
-A `.praxis/` directory in the working tree, discovered git-style by
-`paths.ProjectRoot()` (walking up from cwd, **bounded to `$HOME`**),
-makes that tree a *project root*. When present it becomes
-`paths.ActiveRoot()`, so the skill receipt (`installed.json`), the MCP
-snapshot (`mcp-tools.json`), the active-profile pointer, and the
-installed skills all live under `<repo>/.praxis` + `<repo>/.claude` —
-letting different repos run different profiles at once.
+`praxis login --profile X --local` pins a profile to the current
+directory tree: it writes a project pointer at `<cwd>/.praxis/config.json`
+(leaving the global pointer alone) and installs project-scoped.
+`refresh-skills --project` does the same for the already-active profile,
+minus auth. A `.praxis/` directory is discovered git-style by
+`paths.ProjectRoot()` (walking up from cwd, **bounded to `$HOME`**).
+
+The active root (`paths.ActiveRoot()`) decides where the skill receipt
+(`installed.json`), MCP snapshot (`mcp-tools.json`), and installed skills
+live. It returns the discovered project root **only when local mode is
+genuinely active** — gated by the `paths.LocalModeActive` hook, which the
+credentials package wires up to check that the project pointer names a
+profile actually present in the store. Otherwise it returns the HOME root.
 
 Invariants to preserve when touching this area:
 
 - **Credentials are always global.** `paths.Credentials()` is pinned to
   the HOME root; never route it through `ActiveRoot()`.
-- **Receipt and install location share one root.** The "wipe previous
-  profile" step is safe *because* `UninstallByPrefix` reads the same
-  `ActiveRoot()` receipt that the install wrote — don't reintroduce a
-  scope where they diverge (that was the old `--project` footgun).
-- **`login` is global by design.** It calls
-  `paths.OverrideActiveRoot(home)` so its setup stays user-level even
-  inside a project tree; `cmd.resolveProjectScope` honors the pin.
-- **Active-profile resolution** (`credentials.resolveName`):
-  `--profile` flag → project pointer → global pointer → `PRAXIS_PROFILE`
-  → `"default"`. `SourceProject` marks the project-pointer case.
-- Discovery is **home-subtree only** — this both matches the intended
-  use case and keeps tests deterministic under a faked `$HOME`. Tests
-  drive discovery via `paths.SetGetwdForTest`.
+- **A bare or foreign `.praxis` must stay inert.** Local mode activates
+  only via `LocalModeActive` (pointer names a known profile). Don't switch
+  any state on mere directory presence — that's what protects a user who
+  never opted in (a teammate-committed `.praxis` resolves to the global
+  profile *and* keeps receipt/snapshot/skills global).
+- **Receipt and install location share one root.** Both derive from
+  `ActiveRoot()`, so the unconditional "wipe previous profile" step
+  (`UninstallByPrefix`) only ever touches the active root. Callers set the
+  scope up front by pinning via `paths.OverrideActiveRoot` (login --local /
+  refresh --project) or by being in an active local tree; never make a
+  scope decision that diverges receipt from install.
+- **`login` (global) and `logout` are global by design.** They pin the
+  active root to home (`paths.OverrideActiveRoot(home)` / logout) and
+  resolve the global profile (`credentials.ResolveActiveGlobal`), so being
+  inside a project tree never redirects them.
+- **Active-profile resolution** (`credentials.resolveName`): `--profile`
+  flag → project pointer → global pointer → `PRAXIS_PROFILE` → `"default"`.
+  `SourceProject` marks the project case; a project pointer to an unknown
+  profile falls back to the global resolution.
+- Discovery is **home-subtree only** — matches the intended use case and
+  keeps tests deterministic under a faked `$HOME`. Tests drive discovery
+  via `paths.SetGetwdForTest` and pin via `paths.OverrideActiveRoot`.
 
 ## Build & run
 

@@ -45,13 +45,7 @@ func stubPostAuth(t *testing.T) *bool {
 	t.Helper()
 	called := false
 	orig := postAuthSetup
-	postAuthSetup = func(out io.Writer, asJSON bool, baseURL, token string, projectScoped bool) postAuthState {
-		// The login path is never project-scoped — only `refresh-skills
-		// --project` is. Guard the compatibility contract so a future
-		// signature change can't silently start passing true here.
-		if projectScoped {
-			t.Errorf("login should call postAuthSetup with projectScoped=false, got true")
-		}
+	postAuthSetup = func(out io.Writer, asJSON bool, baseURL, token string) postAuthState {
 		called = true
 		return postAuthState{}
 	}
@@ -64,7 +58,7 @@ func stubBrowserLogin(t *testing.T) *bool {
 	t.Helper()
 	called := false
 	orig := browserLoginFn
-	browserLoginFn = func(out io.Writer, asJSON bool, profileName, baseURL string, timeout time.Duration) error {
+	browserLoginFn = func(out io.Writer, asJSON bool, profileName, baseURL string, timeout time.Duration, local bool) error {
 		called = true
 		return nil
 	}
@@ -87,11 +81,11 @@ func stubOsExit(t *testing.T) *int {
 func resetLoginFlags(t *testing.T) {
 	t.Helper()
 	loginProfile, loginURL, loginToken = "", "", ""
-	loginForce, loginJSON = false, false
+	loginForce, loginLocal, loginJSON = false, false, false
 	loginTimeout = 90 * time.Second
 	t.Cleanup(func() {
 		loginProfile, loginURL, loginToken = "", "", ""
-		loginForce, loginJSON = false, false
+		loginForce, loginLocal, loginJSON = false, false, false
 		loginTimeout = 90 * time.Second
 	})
 }
@@ -247,7 +241,7 @@ func TestTryReuseStoredToken(t *testing.T) {
 				return &authMeResponse{Email: "u@x"}, nil
 			})
 
-			reused, err := tryReuseStoredToken(io.Discard, true, "default", tt.targetURL)
+			reused, err := tryReuseStoredToken(io.Discard, true, "default", tt.targetURL, false)
 			if tt.wantErr {
 				// The transient failure must surface the underlying cause
 				// verbatim, not a generic wrapper — that's what lets the

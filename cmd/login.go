@@ -39,6 +39,7 @@ var (
 	loginURL     string
 	loginToken   string
 	loginForce   bool
+	loginLocal   bool
 	loginJSON    bool
 	loginTimeout time.Duration
 )
@@ -61,6 +62,8 @@ func init() {
 	loginCmd.Flags().StringVar(&loginURL, "url", "", "Praxis deployment URL (default: existing profile URL or "+credentials.DefaultURL+")")
 	loginCmd.Flags().StringVar(&loginToken, "token", "", "skip browser flow; save and verify the given API key directly")
 	loginCmd.Flags().BoolVar(&loginForce, "force", false, "skip reusing a stored token; always open the browser")
+	loginCmd.Flags().BoolVar(&loginLocal, "local", false,
+		"pin this profile to the current directory tree (writes <cwd>/.praxis) and install its skills project-scoped, instead of switching the global profile")
 	loginCmd.Flags().BoolVar(&loginJSON, "json", false, "JSON output")
 	loginCmd.Flags().DurationVar(&loginTimeout, "timeout", 90*time.Second, "max time to wait for browser callback")
 	rootCmd.AddCommand(loginCmd)
@@ -113,19 +116,19 @@ separate refresh command in v0.7.`,
 		// --token is the explicit non-browser path: verify the supplied
 		// key and persist it, unchanged by the reuse logic.
 		if loginToken != "" {
-			return saveAndVerifyToken(out, asJSON, profileName, baseURL, loginToken)
+			return saveAndVerifyToken(out, asJSON, profileName, baseURL, loginToken, loginLocal)
 		}
 
 		// Smart default: if the active profile already has a token valid
 		// for this URL, refresh skills + manifest without a browser hop.
 		// --force opts out and always re-authenticates via the browser.
 		if !loginForce {
-			handled, rerr := tryReuseStoredToken(out, asJSON, profileName, baseURL)
+			handled, rerr := tryReuseStoredToken(out, asJSON, profileName, baseURL, loginLocal)
 			if handled {
 				return rerr
 			}
 		}
-		return browserLoginFn(out, asJSON, profileName, baseURL, loginTimeout)
+		return browserLoginFn(out, asJSON, profileName, baseURL, loginTimeout, loginLocal)
 	},
 }
 
@@ -175,7 +178,7 @@ func normalizeBaseURL(raw string) string {
 // different URL, or the server actively REJECTED the token (expired/revoked,
 // HTTP 401/403). The error is always nil here. A rejected token is reported
 // as a one-line notice on stderr, not an error, so the fallback is smooth.
-func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string) (bool, error) {
+func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string, local bool) (bool, error) {
 	store, err := credentials.Load()
 	if err != nil {
 		return false, nil // can't read the store — just use the browser
@@ -221,7 +224,7 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 	if user.canonicalBaseURL != "" {
 		baseURL = user.canonicalBaseURL
 	}
-	return true, persistAndSetup(out, asJSON, profileName, baseURL, prof.Token, user.Email)
+	return true, persistAndSetup(out, asJSON, profileName, baseURL, prof.Token, user.Email, local)
 }
 
 // browserSessionPollLogin opens the browser to the api-keys page with a
@@ -233,7 +236,7 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 // Shields' localhost protection, Chromium Private Network Access). The
 // browser → server hop is now strictly same-origin, so neither CORS nor
 // PNA nor Shields are involved.
-func browserSessionPollLogin(out io.Writer, asJSON bool, profileName, baseURL string, timeout time.Duration) error {
+func browserSessionPollLogin(out io.Writer, asJSON bool, profileName, baseURL string, timeout time.Duration, local bool) error {
 	sessionNonce := randomNonce()
 
 	openURL, err := buildLoginURL(baseURL, sessionNonce, suggestedKeyName())
@@ -264,7 +267,7 @@ func browserSessionPollLogin(out io.Writer, asJSON bool, profileName, baseURL st
 			"the login handshake failed", exitcode.Auth)
 		os.Exit(exitcode.Auth)
 	}
-	return saveAndVerifyToken(out, asJSON, profileName, baseURL, key)
+	return saveAndVerifyToken(out, asJSON, profileName, baseURL, key, local)
 }
 
 // pollSessionKey polls GET {baseURL}/ai-api/v1/cli-session/{nonce}/key
@@ -384,7 +387,7 @@ func suggestedKeyName() string {
 // the browser flow) and persists it. A verification failure here is fatal
 // — the user explicitly supplied this key, so there's no graceful
 // fallback to attempt.
-func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token string) error {
+func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token string, local bool) error {
 	user, err := fetchAuthMe(baseURL, token)
 	if err != nil {
 		render.PrintError(out, asJSON,
@@ -399,16 +402,25 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 	if user.canonicalBaseURL != "" {
 		baseURL = user.canonicalBaseURL
 	}
-	return persistAndSetup(out, asJSON, profileName, baseURL, token, user.Email)
+	return persistAndSetup(out, asJSON, profileName, baseURL, token, user.Email, local)
 }
 
-// persistAndSetup saves the verified token under profileName, flips the
-// active-profile pointer, runs post-auth setup (meta-skill + catalog +
-// MCP manifest), and renders the result. It is the shared tail of both
-// the verify-then-save path (saveAndVerifyToken) and the reuse path
-// (tryReuseStoredToken). Returning an error rather than os.Exit lets the
-// reuse path stay non-fatal up to this point.
-func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, email string) error {
+// persistAndSetup saves the verified token under profileName, sets the
+// active-profile pointer (global, or project-local when `local` is set),
+// runs post-auth setup (meta-skill + catalog + MCP manifest), and renders
+// the result. It is the shared tail of both the verify-then-save path
+// (saveAndVerifyToken) and the reuse path (tryReuseStoredToken). Returning an
+// error rather than os.Exit lets the reuse path stay non-fatal up to this
+// point.
+//
+// Credentials are ALWAYS saved globally (~/.praxis/credentials). What `local`
+// changes is the active-profile pointer and the install scope:
+//   - global (default): flip ~/.praxis/config.json and install user-level,
+//     pinning the active root to home so being inside a project tree doesn't
+//     accidentally scope the install.
+//   - local: write <cwd>/.praxis/config.json and install project-scoped,
+//     leaving the global pointer untouched.
+func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, email string, local bool) error {
 	prof := credentials.Profile{
 		URL:      baseURL,
 		Username: email,
@@ -417,30 +429,44 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, em
 	if err := credentials.Put(profileName, prof); err != nil {
 		return fmt.Errorf("save credentials: %w", err)
 	}
-	if err := credentials.SetActive(profileName); err != nil {
-		return fmt.Errorf("set active profile: %w", err)
-	}
 
-	// Login is always a GLOBAL operation: pin the active root to home so the
-	// meta-skill, catalog, and MCP snapshot install user-level even when the
-	// command is run from inside a project tree (where they'd otherwise be
-	// scoped to <repo>/.praxis). Local mode is managed via `praxis use
-	// --local` / `praxis refresh-skills`, not login.
-	if home, herr := paths.Dir(); herr == nil {
-		restore := paths.OverrideActiveRoot(home)
+	projectRoot := ""
+	if local {
+		// Pin the profile to this directory tree. SetActiveLocal writes the
+		// project pointer and creates <cwd>/.praxis (requiring the cwd to be
+		// under home); the marker now names a profile we have, so ActiveRoot
+		// resolves to it and the install lands project-scoped.
+		root, err := credentials.SetActiveLocal(profileName)
+		if err != nil {
+			return fmt.Errorf("pin profile to this directory: %w", err)
+		}
+		projectRoot = root
+		restore := paths.OverrideActiveRoot(root)
 		defer restore()
+	} else {
+		if err := credentials.SetActive(profileName); err != nil {
+			return fmt.Errorf("set active profile: %w", err)
+		}
+		// Global login: pin the active root to home so the meta-skill,
+		// catalog, and MCP snapshot install user-level even when run from
+		// inside a project tree.
+		if home, herr := paths.Dir(); herr == nil {
+			restore := paths.OverrideActiveRoot(home)
+			defer restore()
+		}
 	}
 
 	// Post-auth: install meta-skill, wipe previous org skills, install
 	// this profile's catalog, refresh the MCP tools snapshot.
-	state := postAuthSetup(out, asJSON, baseURL, token, false)
+	state := postAuthSetup(out, asJSON, baseURL, token)
 
 	if asJSON {
-		return render.JSON(out, map[string]any{
+		payload := map[string]any{
 			"ok":               true,
 			"profile":          profileName,
 			"username":         email,
 			"url":              baseURL,
+			"scope":            scopeLabel(local),
 			"meta_skill":       state.metaSkill,
 			"catalog_skills":   state.catalogSkills,
 			"removed_skills":   state.removedSkills,
@@ -448,7 +474,15 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, em
 			"removed_agents":   state.removedAgents,
 			"snapshot_path":    state.snapshotPath,
 			"snapshot_warning": state.snapshotWarning,
-		})
+		}
+		if projectRoot != "" {
+			payload["project_root"] = projectRoot
+		}
+		return render.JSON(out, payload)
+	}
+	if local {
+		fmt.Fprintf(out, "\n✓ Logged in as %s and pinned profile %q to %s\n", email, profileName, projectRoot)
+		return nil
 	}
 	fmt.Fprintf(out, "\n✓ Logged in as %s (profile: %s, url: %s)\n", email, profileName, baseURL)
 	return nil
@@ -516,6 +550,14 @@ var fetchAuthMe = func(baseURL, token string) (*authMeResponse, error) {
 		}
 	}
 	return &me, nil
+}
+
+// scopeLabel renders the install scope for JSON output.
+func scopeLabel(local bool) string {
+	if local {
+		return "local"
+	}
+	return "global"
 }
 
 func randomNonce() string {

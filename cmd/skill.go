@@ -11,6 +11,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
@@ -303,12 +304,27 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 			os.Exit(exitcode.Auth)
 		}
 
-		state := runPostAuthSetup(out, asJSON, active.Profile.URL, active.Profile.Token, refreshSkillsProject)
+		// --project pins this repo to the active profile (writes
+		// <cwd>/.praxis) and scopes the install there. Otherwise the
+		// install follows the resolved active root: project when we're
+		// already inside a local-mode tree, else user-level.
+		if refreshSkillsProject {
+			root, perr := credentials.SetActiveLocal(active.Name)
+			if perr != nil {
+				render.PrintError(out, asJSON,
+					fmt.Sprintf("cannot scope to this directory: %v", perr),
+					"run `praxis refresh-skills --project` from a directory under your home directory",
+					exitcode.Usage)
+				osExit(exitcode.Usage)
+				return nil // reached only under test (osExit stubbed)
+			}
+			restore := paths.OverrideActiveRoot(root)
+			defer restore()
+		}
 
-		// Report the *effective* scope, not the requested flag: if
-		// --project was set but the working directory couldn't be
-		// resolved, runPostAuthSetup falls back to a user-level install,
-		// and the user must be told where files actually landed.
+		state := runPostAuthSetup(out, asJSON, active.Profile.URL, active.Profile.Token)
+
+		// Report the *effective* scope (where files actually landed).
 		scope := "user"
 		if state.projectScoped {
 			scope = "project"

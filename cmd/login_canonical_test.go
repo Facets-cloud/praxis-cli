@@ -111,7 +111,7 @@ func TestSaveAndVerifyToken_StoresCanonicalURL(t *testing.T) {
 	stubPostAuth(t)
 	stale, final := canonicalPair(t)
 
-	if err := saveAndVerifyToken(io.Discard, true, "default", stale.URL, "sk_test_T"); err != nil {
+	if err := saveAndVerifyToken(io.Discard, true, "default", stale.URL, "sk_test_T", false); err != nil {
 		t.Fatalf("saveAndVerifyToken: %v", err)
 	}
 
@@ -133,7 +133,7 @@ func TestTryReuseStoredToken_SelfHealsStaleURL(t *testing.T) {
 	stale, final := canonicalPair(t)
 	seedProfile(t, "default", stale.URL, "sk_test_T")
 
-	reused, err := tryReuseStoredToken(io.Discard, true, "default", stale.URL)
+	reused, err := tryReuseStoredToken(io.Discard, true, "default", stale.URL, false)
 	if err != nil {
 		t.Fatalf("tryReuseStoredToken: %v", err)
 	}

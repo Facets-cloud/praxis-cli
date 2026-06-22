@@ -63,31 +63,29 @@ type agentInstallationLite struct {
 // not roll back the credentials save. The user can re-run login any
 // time to retry the steps that failed (login is idempotent).
 //
-// Install scope follows the active root (see internal/paths):
+// Install scope follows paths.ActiveRoot — the single source of truth, set up
+// by the caller before calling this:
 //
-//   - If the working directory is inside a project tree (a discovered
-//     .praxis dir), the install is project-scoped: host skill dirs are
-//     rebased onto the project (<repo>/.claude/skills, ...) and the receipt
-//     plus MCP snapshot land in <repo>/.praxis. `praxis use --local`
-//     creates such a tree.
+//   - `praxis login --local` and `praxis refresh-skills --project` pin the
+//     active root to a project (<repo>/.praxis), so the install is
+//     project-scoped: host skill dirs are rebased onto the project
+//     (<repo>/.claude/skills, ...) and the receipt + MCP snapshot land in
+//     <repo>/.praxis.
+//   - `praxis login` (global) pins the active root to home, and a plain
+//     `praxis refresh-skills` inside an active local-mode tree resolves to the
+//     project automatically — both via ActiveRoot.
 //   - Otherwise the install is user-level (~/.claude/skills, ~/.praxis).
 //
-// forceProject (set by `praxis refresh-skills --project`) creates a project
-// root at the working directory when none is discovered, so a repo can be
-// scoped without a prior `use --local`. `praxis login` pins the active root
-// to home (paths.OverrideActiveRoot), which forces user scope here even when
-// run from inside a project tree — login is always a global operation.
-//
-// Because the receipt now follows the same root as the install location, the
+// Because the receipt follows the same root as the install location, the
 // "wipe previous profile" step (UninstallByPrefix) only ever touches the
 // active root's receipt + that root's host dirs — so it runs unconditionally
 // and stays safe in both scopes (a project refresh can't delete the user's
 // global skills, and vice versa).
-func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string, forceProject bool) postAuthState {
+func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAuthState {
 	state := postAuthState{}
 	hosts := detectHarnesses()
 
-	projectDir, inProject := resolveProjectScope(out, asJSON, forceProject, len(hosts) > 0)
+	projectDir, inProject := resolveProjectScope()
 	if inProject {
 		for i := range hosts {
 			hosts[i] = hosts[i].ProjectScoped(projectDir)
@@ -238,35 +236,20 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string, forcePr
 	return state
 }
 
-// resolveProjectScope decides whether this run installs into a project root
-// or the user-global location, and returns the directory to rebase host skill
-// dirs onto (the dir containing .praxis).
-//
-//   - A pinned active root (login → paths.OverrideActiveRoot) forces user
-//     scope: login is always global, even from inside a project tree.
-//   - A discovered .praxis dir (walking up from the working directory to
-//     home) wins → project scope.
-//   - forceProject (refresh-skills --project) with hosts present creates a
-//     project root at the working directory when none is discovered.
-//
-// On any failure to enable a forced project scope it logs a warning and
-// degrades to user scope, so the install still lands somewhere sane.
-func resolveProjectScope(out io.Writer, asJSON, forceProject, haveHosts bool) (string, bool) {
-	if paths.RootIsPinned() {
-		return "", false
-	}
-	if root, ok, err := paths.ProjectRoot(); err == nil && ok {
-		return filepath.Dir(root), true
-	}
-	if !forceProject || !haveHosts {
-		return "", false
-	}
-	root, err := paths.EnsureProjectRoot()
+// resolveProjectScope reads the already-resolved active root and reports the
+// install scope. The active root is the single source of truth: a project
+// root means project scope (host skill dirs rebased onto the dir containing
+// .praxis); the home root means user scope. Callers (login --local,
+// refresh-skills --project, or an active local-mode cwd) set the active root
+// up front, so this never makes a scope decision on its own — keeping the
+// receipt location (ActiveRoot) and the install location in lockstep.
+func resolveProjectScope() (string, bool) {
+	root, err := paths.ActiveRoot()
 	if err != nil {
-		if !asJSON {
-			fmt.Fprintf(out, "Warning: cannot enable project scope: %v\n", err)
-			fmt.Fprintln(out, "Falling back to user-level install.")
-		}
+		return "", false
+	}
+	home, err := paths.Dir()
+	if err != nil || root == home {
 		return "", false
 	}
 	return filepath.Dir(root), true
