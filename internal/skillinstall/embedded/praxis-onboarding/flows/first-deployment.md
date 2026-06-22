@@ -7,8 +7,9 @@ deploy a minimal sample to their cloud, verify it, then tear it down. By the
 end they understand the Facets mental model because they *did* it.
 
 Run each stop with the engine loop in SKILL.md (teach → act → check → record).
-Honor the SKILL.md Safety tiers. All raptor steps run through
-`praxis mcp raptor_cli run_raptor_cli --arg command='<the raptor command>'`.
+Honor the SKILL.md Safety tiers. raptor is a **local CLI** — run every `raptor`
+command directly in Bash. Complete the SKILL.md raptor preflight (installed?
+logged in?) before the first raptor command in Stop 0.
 Labels:
 - `[RO]` — read-only, runs freely.
 - `[SOFT]` — free/reversible mutation; confirm normally, or announce-and-proceed
@@ -38,25 +39,25 @@ Labels:
 
 ## Stop 0 — Connect & orient  `[RO]` (+ `[HARD GATE]` sandbox check)
 
-**Teach:** Two gateways: MCP tools reach *Praxis*; `raptor` (via
-`run_raptor_cli`) reaches your *Facets control plane*. First, figure out what's
+**Teach:** Two surfaces: MCP tools reach *Praxis* (via `praxis mcp …`); the
+local `raptor` CLI reaches your *Facets control plane*. First, figure out what's
 already wired up — don't assume.
 
 Run these and read the results:
 
 ```
-praxis mcp raptor_cli list_facets_integrations    # is a Facets CP linked? (PAT)
+raptor whoami                                      # is raptor installed & logged into a CP?
 praxis mcp catalog_ops get_existing_catalog        # is the module catalog populated?
 raptor get accounts                                # which cloud accounts are linked IN Facets
 ```
 
 Branch on what you find:
 
-- **No Facets CP linked** (`list_facets_integrations` returns no integration /
-  no active PAT): a linked CP is a **prerequisite** for this flow. Guided
-  linking is not built yet (parked for a future capability). For now, tell the
-  user to run `praxis login` against their CP so the PAT is established, then
-  resume onboarding. Do not try to script the link.
+- **raptor not logged in** (`raptor whoami` errors, or `command -v raptor` finds
+  nothing): a working raptor login is a **prerequisite** for this flow. If raptor
+  is missing, ask the user to install it (see the SKILL.md preflight). If it's
+  installed but not authenticated, tell the user to run `raptor login` against
+  their CP, then resume onboarding. Do not try to script the login.
 - **Catalog already populated:** good — you will SKIP the import in Stop 2.
 - **Catalog empty:** you will import in Stop 2.
 - **No cloud account in `get accounts`:** you'll link one before deploying
@@ -157,10 +158,8 @@ Azure Cloud Shell), paste this one-liner". The script uses whichever cloud
 account that shell session is signed into. Local CLI, instance-with-role,
 and CI runners all work equally; don't push any one of them.
 
-**Do not use `-w` via the MCP wrapper** — linking polls a webhook for
-several minutes, well past the wrapper's default 60-second HTTP timeout
-(raise it with `praxis mcp … --timeout <dur>` if you must wait
-synchronously). Trigger without `-w`, then poll:
+**Avoid `-w`** — linking polls a webhook for several minutes and `-w` would
+block your shell that whole time. Trigger without `-w`, then poll:
 
 ```
 until acct=$(raptor get accounts -o json 2>&1) && \
@@ -330,8 +329,8 @@ a NAT gateway (~$32/month) or similar billable infra. Get explicit yes
 raptor launch environment <env> -p <project>
 ```
 
-**Do not use `-w` via the MCP wrapper** — launch typically runs 1–5 min, which
-exceeds the wrapper's default 60-second HTTP timeout. Trigger without `-w`, then poll:
+**Avoid `-w`** — launch typically runs 1–5 min and `-w` would block your shell
+that whole time. Trigger without `-w`, then poll:
 
 ```
 # poll until launch leaves IN_PROGRESS
@@ -395,8 +394,8 @@ even under "don't ask me"). Then:
 raptor create release -p <project> -e <env>
 ```
 
-**Do not use `-w` via the MCP wrapper** — release also exceeds the default
-60-second HTTP timeout. Trigger without `-w`, then poll:
+**Avoid `-w`** — release also runs for minutes and `-w` would block your shell.
+Trigger without `-w`, then poll:
 
 ```
 until rel=$(raptor get releases -p <project> -e <env> 2>&1) && \
@@ -406,7 +405,7 @@ until rel=$(raptor get releases -p <project> -e <env> 2>&1) && \
 On failure, hand off to `praxis-release-debugging` / `troubleshoot` and read the
 logs together: `raptor logs release -p <project> -e <env> <release-id> --stream`.
 The `--stream` flag is what tees the log lines into stdout — without it you only
-get the tempfile path, which the model can't read back through the MCP wrapper.
+get the tempfile path instead of the log content.
 
 ---
 
