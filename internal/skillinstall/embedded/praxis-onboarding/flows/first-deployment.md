@@ -8,8 +8,8 @@ end they understand the Facets mental model because they *did* it.
 
 Run each stop with the engine loop in SKILL.md (teach → act → check → record).
 Honor the SKILL.md Safety tiers. raptor is a **local CLI** — run every `raptor`
-command directly in Bash (never via `praxis mcp`). Complete the SKILL.md raptor
-preflight (installed? logged in?) before the first raptor command in Stop 0.
+command directly in Bash. Complete the SKILL.md raptor preflight (installed?
+logged in?) before the first raptor command in Stop 0.
 Labels:
 - `[RO]` — read-only, runs freely.
 - `[SOFT]` — free/reversible mutation; confirm normally, or announce-and-proceed
