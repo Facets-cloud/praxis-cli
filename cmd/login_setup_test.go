@@ -296,6 +296,10 @@ func TestRunPostAuthSetupAgentFetchFailureLeavesExistingInPlace(t *testing.T) {
 	hosts := []harness.Harness{{
 		Name:     "claude-code",
 		Detected: true,
+		// SkillDir must point under tmp: runPostAuthSetup installs the
+		// meta-skills before the agent step, and a host without a SkillDir
+		// resolves to a CWD-relative path, leaking praxis* skill dirs into cmd/.
+		SkillDir: filepath.Join(tmp, "claude", "skills"),
 		AgentDir: filepath.Join(tmp, "claude", "agents"),
 	}}
 
