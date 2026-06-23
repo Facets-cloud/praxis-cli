@@ -49,7 +49,6 @@ func findProfile(out profilesOutput, name string) (profileEntry, bool) {
 
 func TestProfilesCmd_ListsAllProfiles(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetProfilesFlags()
 
 	mustPut(t, "default", credentials.Profile{
@@ -86,7 +85,6 @@ func TestProfilesCmd_ListsAllProfiles(t *testing.T) {
 
 func TestProfilesCmd_ActiveMarker(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetProfilesFlags()
 
 	mustPut(t, "default", credentials.Profile{URL: "https://default.test", Token: "td"})
@@ -117,7 +115,6 @@ func TestProfilesCmd_ActiveMarker(t *testing.T) {
 
 func TestProfilesCmd_SingleProfile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetProfilesFlags()
 
 	mustPut(t, "default", credentials.Profile{
@@ -141,7 +138,6 @@ func TestProfilesCmd_SingleProfile(t *testing.T) {
 
 func TestProfilesCmd_NoConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetProfilesFlags()
 
 	var buf bytes.Buffer
@@ -158,7 +154,6 @@ func TestProfilesCmd_NoConfig(t *testing.T) {
 
 func TestProfilesCmd_DoesNotCallNetworkByDefault(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetProfilesFlags()
 
 	called := false
@@ -182,7 +177,6 @@ func TestProfilesCmd_DoesNotCallNetworkByDefault(t *testing.T) {
 
 func TestProfilesCmd_Refresh_VerifiesEachLoggedInProfile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetProfilesFlags()
 	profilesRefresh = true
 
@@ -276,7 +270,6 @@ func TestRenderProfilesText_Empty(t *testing.T) {
 
 func TestProfilesCmd_Refresh_RecordsTokenFailure(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetProfilesFlags()
 	profilesRefresh = true
 

@@ -15,17 +15,16 @@
 // Active-profile resolution (highest priority first):
 //
 //  1. --profile flag passed to a command (where it exists)
-//  2. <cwd>/.praxis/config.json project pointer (set by `praxis use --local`),
-//     discovered by walking up from the working directory to home
-//  3. ~/.praxis/config.json "default profile" pointer (set by `praxis use`)
-//  4. PRAXIS_PROFILE environment variable
-//  5. literal "default" section
+//  2. <cwd>/.praxis/config.json project pointer (set by
+//     `praxis login --profile X --local`), discovered by walking up from
+//     the working directory to home
+//  3. ~/.praxis/config.json "default profile" pointer (set by
+//     `praxis login --profile X`)
+//  4. literal "default" section
 //
 // Rationale: a project pointer is the most specific, explicit choice — being
-// inside that directory tree IS the intent — so it wins. `praxis use X` is an
-// explicit, persistent global choice; it's next. PRAXIS_PROFILE is the
-// fallback when no `use` has been called (and the rare per-shell override) —
-// it does NOT silently override an explicit `use` decision in the next shell.
+// inside that directory tree IS the intent — so it wins. The global pointer
+// is an explicit, persistent choice; it's next.
 //
 // Single-profile users never see steps 1–3 — everything resolves to
 // "default" automatically.
@@ -85,7 +84,6 @@ type Source string
 const (
 	SourceFlag    Source = "flag"
 	SourceProject Source = "project"
-	SourceEnv     Source = "env"
 	SourceConfig  Source = "config"
 	SourceDefault Source = "default"
 )
@@ -129,7 +127,7 @@ func ResolveActive(flagProfile string) (Active, error) {
 }
 
 // ResolveActiveGlobal resolves the active profile IGNORING any project-local
-// pointer — flag → global config → PRAXIS_PROFILE → "default". Lifecycle
+// pointer — flag → global config → "default". Lifecycle
 // commands that are global by definition (e.g. `praxis logout`, mirroring
 // `praxis login`) use this so a stray/leftover <cwd>/.praxis can't redirect a
 // destructive operation at a profile the user didn't mean.
@@ -160,9 +158,6 @@ func resolveGlobalName(flagProfile string) (string, Source) {
 	}
 	if cfg, _ := loadConfig(); cfg.Profile != "" {
 		return cfg.Profile, SourceConfig
-	}
-	if env := os.Getenv("PRAXIS_PROFILE"); env != "" {
-		return env, SourceEnv
 	}
 	return DefaultProfileName, SourceDefault
 }

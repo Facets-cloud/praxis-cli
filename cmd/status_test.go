@@ -21,7 +21,6 @@ func resetStatusFlags() {
 func TestStatusCmd_LocalMode_ReportsProjectRootAndSource(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetStatusFlags()
 
 	if err := credentials.Put("acme", credentials.Profile{URL: "https://acme.test", Username: "u@acme", Token: "tok"}); err != nil {
@@ -51,7 +50,6 @@ func TestStatusCmd_LocalMode_ReportsProjectRootAndSource(t *testing.T) {
 
 func TestStatusCmd_NotLoggedIn_DefaultProfile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetStatusFlags()
 
 	var buf bytes.Buffer
@@ -69,7 +67,6 @@ func TestStatusCmd_NotLoggedIn_DefaultProfile(t *testing.T) {
 
 func TestStatusCmd_LoggedIn_ReportsUsernameAndURL(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetStatusFlags()
 
 	_ = credentials.Put("default", credentials.Profile{
@@ -93,7 +90,6 @@ func TestStatusCmd_LoggedIn_ReportsUsernameAndURL(t *testing.T) {
 
 func TestStatusCmd_DoesNotCallNetwork(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetStatusFlags()
 
 	// Sentinel: if status calls fetchAuthMe, this test would deadlock /
@@ -121,7 +117,6 @@ func TestStatusCmd_HonorsActiveProfileFromUseConfig(t *testing.T) {
 	// `praxis use acme` is the documented way to switch profiles —
 	// status must reflect that without any flag.
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetStatusFlags()
 
 	_ = credentials.Put("default", credentials.Profile{URL: "https://default.test", Token: "td"})
@@ -170,7 +165,6 @@ func TestStatusCmd_JSONSummarizesInstalls(t *testing.T) {
 	// must stay small. Per-harness detail (paths, timestamps) lives in
 	// `status --full`, `praxis agents --json`, and `list-skills --json`.
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetStatusFlags()
 	seedInstalledReceipt(t)
 
@@ -196,7 +190,6 @@ func TestStatusCmd_JSONSummarizesInstalls(t *testing.T) {
 
 func TestStatusCmd_EmptyReceiptMarshalsEmptyArrays(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetStatusFlags()
 
 	var buf bytes.Buffer
@@ -214,7 +207,6 @@ func TestStatusCmd_EmptyReceiptMarshalsEmptyArrays(t *testing.T) {
 
 func TestStatusCmd_FullFlagIncludesDetailedEntries(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetStatusFlags()
 	statusFull = true
 	seedInstalledReceipt(t)

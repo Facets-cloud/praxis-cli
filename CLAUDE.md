@@ -51,8 +51,6 @@ cmd/                  cobra command tree (only commands that DO something
   update.go           `praxis update` (self-update via GitHub Releases)
   completion.go       `praxis completion {bash|zsh|fish|powershell}`
   logout.go           `praxis logout` (deletes ~/.praxis/credentials)
-  use.go              `praxis use <profile>` (sets the GLOBAL active-profile
-                       pointer; local mode is `praxis login --local`)
   duty.go             `praxis duty *` (Agent Schedule runs/findings/reports)
 internal/             pure logic, unit-tested
   paths/              Praxis filesystem locations. Two roots: the HOME root
@@ -70,8 +68,9 @@ Makefile              build (with ldflags), install, test, lint, clean
 **Don't add stub commands.** A cobra command that prints "not yet
 implemented" is worse than no command — it lies to users and to
 `--help`. Skill sourcing and the server gateway are now live:
-`login`, `whoami`, `mcp`, `install-skill`, `uninstall-skill`,
-`list-skills`, and `refresh-skills` are all implemented. Skills are
+`login`, `logout`, `status`, `profiles`, `mcp`, `list-skills`, and
+`refresh-skills` are all implemented (skills install automatically as
+part of `login`/`refresh-skills`). Skills are
 fetched from the server, name-prefixed (`praxis-*`), and have the
 `render.ExecutionPreamble` inserted after their frontmatter so any
 in-process MCP reference (`run_cloud_cli(...)`) is rewritten to a
@@ -114,7 +113,7 @@ Invariants to preserve when touching this area:
   resolve the global profile (`credentials.ResolveActiveGlobal`), so being
   inside a project tree never redirects them.
 - **Active-profile resolution** (`credentials.resolveName`): `--profile`
-  flag → project pointer → global pointer → `PRAXIS_PROFILE` → `"default"`.
+  flag → project pointer → global pointer → `"default"`.
   `SourceProject` marks the project case; a project pointer to an unknown
   profile falls back to the global resolution.
 - Discovery is **home-subtree only** — matches the intended use case and

@@ -171,7 +171,7 @@ func Credentials() (string, error) {
 	return filepath.Join(d, "credentials"), err
 }
 
-// Config is the GLOBAL active-profile pointer (set by `praxis use`). Always
+// Config is the GLOBAL active-profile pointer (set by `praxis login`). Always
 // under the home root. The project-local pointer is ProjectConfig.
 func Config() (string, error) {
 	d, err := Dir()

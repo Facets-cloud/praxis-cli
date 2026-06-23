@@ -21,7 +21,6 @@ import (
 func isolateHome(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 }
 
 // seedProfile writes a profile into the isolated credentials store.

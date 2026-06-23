@@ -37,7 +37,6 @@ func resetMemoryFlags() {
 func seedDefaultProfile(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	if err := credentials.Put("default", credentials.Profile{
 		URL:      "https://x.test",
 		Username: "u@x.com",

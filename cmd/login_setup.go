@@ -33,6 +33,14 @@ type postAuthState struct {
 	projectScoped bool
 }
 
+// skillInstallationLite is the trimmed JSON shape for skill installs in
+// login output — drops the receipt-internal InstalledAt timestamp, whose
+// churn would clutter output AI hosts re-read on every login.
+type skillInstallationLite struct {
+	Harness string `json:"harness"`
+	Path    string `json:"path"`
+}
+
 // agentInstallationLite is the JSON shape used in login output. Mirrors
 // skillInstallationLite for output consistency.
 type agentInstallationLite struct {
