@@ -131,10 +131,36 @@ Human-only (don't try to script these):
     the user's behalf when status shows logged_out, but the user has to
     click "Create Key" once. Wait for exit 0 before retrying the task.
 
+## Facets control plane = the local raptor CLI
+
+Facets control-plane objects — **projects, resources, environments,
+releases, cloud accounts** — are NOT gateway MCP tools. They are managed
+by the ` + "`raptor`" + ` CLI, which runs **locally on this machine**, directly in
+the shell. Never route raptor through ` + "`praxis mcp`" + ` (there is no
+` + "`raptor_cli`" + ` gateway tool).
+
+` + "```bash" + `
+raptor get projects -o json                    # list Facets projects
+raptor get accounts -o json                    # linked cloud accounts
+raptor get releases -p <project> -e <env> -o json
+` + "```" + `
+
+Preflight — once per session, before the first raptor command:
+
+  - **Installed?** ` + "`command -v raptor`" + ` — if missing, ask the user to
+    install it; don't install it yourself.
+  - **Logged in?** ` + "`raptor whoami`" + ` — if it errors, ask the user to run
+    ` + "`raptor login`" + ` (a browser flow that stores a PAT in
+    ` + "`~/.facets/credentials`" + `). Never ask for a token in chat or write
+    credentials yourself.
+
+So when the user asks about projects / resources / environments /
+releases / cloud accounts, reach for ` + "`raptor`" + `, not ` + "`praxis mcp`" + `.
+
 ## Discovering MCP tools
 
 The server gateway exposes tools grouped by MCP namespace
-(` + "`cloud_cli`" + `, ` + "`k8s_cli`" + `, ` + "`catalog_ops`" + `, ` + "`raptor_cli`" + `, …). Each tool runs
+(` + "`cloud_cli`" + `, ` + "`k8s_cli`" + `, ` + "`catalog_ops`" + `, …). Each tool runs
 server-side under the org's managed credentials — your laptop never
 holds AWS / kube secrets.
 
