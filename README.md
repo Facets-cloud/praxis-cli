@@ -19,9 +19,10 @@ Once installed and logged in, your local AI host can:
   commands against your org's integrations through the `cloud_cli`
   MCP. Mutating verbs blocked at the validator.
 - **Drive Facets via Raptor** — the full `raptor` verb surface, read
-  and write (projects, releases, environments, schemas, logs), through
-  the `raptor_cli` MCP, under your org's Facets PAT. RBAC and audit
-  are enforced server-side.
+  and write (projects, releases, environments, schemas, logs). Raptor
+  runs as a **local CLI** under your own `raptor login` (PAT in
+  `~/.facets/credentials`) — it is not a gateway MCP tool. RBAC and
+  audit are enforced by the control plane server-side.
 - **Read & search the infrastructure catalog** — list registered
   repos, search GitHub, register newly discovered repos via the
   `catalog_ops` MCP.
