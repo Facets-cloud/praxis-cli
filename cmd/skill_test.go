@@ -90,6 +90,13 @@ func TestInstallSkill_NoHosts(t *testing.T) {
 }
 
 func TestInstallSkill_Success(t *testing.T) {
+	// Isolate HOME so the catalog step resolves a not-logged-in profile and
+	// soft-skips. Without this, the real catalog flow runs against the
+	// developer's live profile and installs real catalog skills into the
+	// SkillDir-less harnesses below — which resolves to a path under the test
+	// CWD, leaking praxis-* skill dirs into cmd/ (see .gitignore history).
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PRAXIS_PROFILE", "")
 	withSeams(t,
 		func() []harness.Harness {
 			return []harness.Harness{
