@@ -39,7 +39,6 @@ func stubMCPManifestFetch(t *testing.T) {
 // into a destructive operation.
 func TestRunPostAuthSetup_CatalogFetchFailure_PreservesExisting(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	stubMCPManifestFetch(t)
 
 	// Pre-seed: install a praxis-* skill on disk to represent a working
@@ -110,7 +109,6 @@ func TestRunPostAuthSetup_CatalogFetchFailure_PreservesExisting(t *testing.T) {
 // snapshot is useful even without an AI host installed.
 func TestRunPostAuthSetup_NoHosts_StillRefreshesSnapshot(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	stubMCPManifestFetch(t)
 
 	origDetect := detectHarnesses
@@ -156,7 +154,6 @@ func pinProjectRoot(t *testing.T, home string) string {
 func TestRunPostAuthSetup_ProjectScope_WritesIntoProjectDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("PRAXIS_PROFILE", "")
 	stubMCPManifestFetch(t)
 
 	proj := pinProjectRoot(t, home)
@@ -204,7 +201,6 @@ func TestRunPostAuthSetup_ProjectScope_WritesIntoProjectDir(t *testing.T) {
 func TestRunPostAuthSetup_ProjectScope_DoesNotWipeUserLevelInstall(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("PRAXIS_PROFILE", "")
 	stubMCPManifestFetch(t)
 
 	// Pre-seed a user-level org skill in the GLOBAL receipt + on disk

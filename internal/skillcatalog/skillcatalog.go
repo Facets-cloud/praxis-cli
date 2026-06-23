@@ -22,7 +22,7 @@ import (
 const (
 	// PraxisPrefix is prepended to org-skill names when written to disk.
 	// `~/.claude/skills/praxis-<name>/SKILL.md` keeps provenance visible
-	// and lets `praxis uninstall-skill --catalog` glob-match cleanly.
+	// and lets the catalog-cleanup glob-match praxis-* skills cleanly.
 	PraxisPrefix = "praxis-"
 
 	// bundlePath is the server endpoint that returns the full catalog.

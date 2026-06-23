@@ -12,5 +12,5 @@ const (
 	Auth     = 3 // missing / invalid / expired credentials → run `praxis login`
 	NoConfig = 4 // no Praxis URL resolvable (rare — default is hardcoded)
 	Network  = 5 // network unreachable / timed out
-	NoHost   = 6 // no AI host detected (for `install-skill` etc.)
+	NoHost   = 6 // no AI host detected (e.g. during skill install)
 )

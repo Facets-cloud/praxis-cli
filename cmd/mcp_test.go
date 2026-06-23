@@ -453,7 +453,6 @@ func TestMcpCmd_JsonOutputWiring(t *testing.T) {
 
 func TestMcpCmd_HappyPath(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetMcpFlags()
 	defer resetMcpFlags()
 
@@ -538,7 +537,6 @@ func max0(i int) int {
 
 func TestMcpCmd_NoArgs_JsonPassthrough(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetMcpFlags()
 	defer resetMcpFlags()
 

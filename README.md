@@ -177,13 +177,6 @@ praxis duty <subcommand> [--agent <name|id>] [--json]
      report <run_id>               the report artifact a run produced
      findings <duty> [--status open|resolved|all] [--limit N]
 
-praxis use <profile> [--json]
-   Set the GLOBAL active profile (~/.praxis/config.json) without
-   re-authenticating — kubectl-style. The profile must already exist
-   (created by `praxis login --profile <name>`). To pin a profile to
-   one directory tree instead, use `praxis login --local` (see "Local
-   mode" below).
-
 praxis refresh-skills [--project] [--json]
    Re-fetch this profile's catalog and rewrite skill files + MCP
    snapshot, without re-authenticating. Use when the org has
@@ -309,7 +302,7 @@ Now each repo is permanently "logged in" as its own profile:
 ```text
 ~/work/acme-repo/      → profile acme,     skills in ./.claude/skills
 ~/work/bigcorp-repo/   → profile bigcorp,  skills in ./.claude/skills
-~/  (everywhere else)  → the global profile (set by login / `praxis use`)
+~/  (everywhere else)  → the global profile (set by `praxis login`)
 ```
 
 `praxis login --profile <name> --local`:
@@ -328,9 +321,8 @@ Active-profile resolution walks this chain (first match wins):
 ```text
 1. --profile flag on the command
 2. <cwd>/.praxis/config.json   ← project pointer (walks up to your home dir)
-3. ~/.praxis/config.json       ← global pointer (set by `praxis use`)
-4. PRAXIS_PROFILE env var
-5. "default"
+3. ~/.praxis/config.json       ← global pointer (set by `praxis login --profile`)
+4. "default"
 ```
 
 Local mode only activates when **you actually have the pinned profile**.
@@ -393,7 +385,7 @@ praxis logout --all
 ```text
 ~/.praxis/credentials      INI, one [section] per profile (chmod 0600)
                            — ALWAYS global; shared across every directory
-~/.praxis/config.json      global active-profile pointer (login / `praxis use`)
+~/.praxis/config.json      global active-profile pointer (set by `praxis login`)
 ~/.praxis/mcp-tools.json   manifest snapshot of gateway tools
 ~/.praxis/installed.json   receipt of skill files written across hosts
 

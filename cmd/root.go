@@ -24,24 +24,9 @@ inside your AI; MCP tools execute server-side using org-managed
 credentials. No AWS/kube/terraform credentials on your laptop.
 
 Run 'praxis <command> --help' for details on any command.`,
-	SilenceUsage:     true,
-	SilenceErrors:    true,
-	Version:          version,
-	PersistentPreRun: warnDeprecatedEnvVars,
-}
-
-// warnDeprecatedEnvVars prints stderr warnings for legacy environment
-// variables that are deprecated in v0.7. The variables continue to work
-// for one minor version so existing scripts have time to migrate; they
-// will be removed in v0.8.
-func warnDeprecatedEnvVars(cmd *cobra.Command, args []string) {
-	if v := os.Getenv("PRAXIS_PROFILE"); v != "" {
-		fmt.Fprintf(os.Stderr,
-			"warning: PRAXIS_PROFILE env var is deprecated and will be ignored in v0.8.\n"+
-				"         Use `praxis login --profile %s` instead — login is the only way\n"+
-				"         to switch the active profile in v0.7+ (it also refreshes skills).\n",
-			v)
-	}
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	Version:       version,
 }
 
 // Execute runs the root command. Called from main.

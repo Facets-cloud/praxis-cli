@@ -2,7 +2,7 @@
 // and writes it to ~/.praxis/mcp-tools.json so AI hosts can grep the
 // file for available tools without hitting the network on every turn.
 //
-// The snapshot is best-effort: it's overwritten on `praxis install-skill`
+// The snapshot is best-effort: it's overwritten on `praxis login`
 // and `praxis refresh-skills` (i.e. anywhere the catalog is also pulled).
 // Callers that want a guaranteed-fresh listing should run `praxis mcp`
 // instead, which fetches live.

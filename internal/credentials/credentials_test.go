@@ -13,7 +13,6 @@ func withHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("PRAXIS_PROFILE", "")
 	return home
 }
 
@@ -33,7 +32,6 @@ func TestResolveActive_DefaultWhenNothingSet(t *testing.T) {
 
 func TestResolveActive_FlagWinsAll(t *testing.T) {
 	withHome(t)
-	t.Setenv("PRAXIS_PROFILE", "from-env")
 	if err := SetActive("from-config"); err != nil {
 		t.Fatal(err)
 	}
@@ -43,37 +41,6 @@ func TestResolveActive_FlagWinsAll(t *testing.T) {
 	}
 	if a.Name != "from-flag" || a.Source != SourceFlag {
 		t.Errorf("flag should win, got %+v", a)
-	}
-}
-
-func TestResolveActive_ConfigBeatsEnv(t *testing.T) {
-	// `praxis use` is an explicit, persistent choice — it should be
-	// sticky and not get silently overridden by PRAXIS_PROFILE.
-	withHome(t)
-	t.Setenv("PRAXIS_PROFILE", "from-env")
-	if err := SetActive("from-config"); err != nil {
-		t.Fatal(err)
-	}
-	a, err := ResolveActive("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a.Name != "from-config" || a.Source != SourceConfig {
-		t.Errorf("config (set by `praxis use`) should beat env, got %+v", a)
-	}
-}
-
-func TestResolveActive_EnvBeatsDefault(t *testing.T) {
-	// When `praxis use` hasn't been called, PRAXIS_PROFILE is the
-	// next signal before falling through to "default".
-	withHome(t)
-	t.Setenv("PRAXIS_PROFILE", "from-env")
-	a, err := ResolveActive("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a.Name != "from-env" || a.Source != SourceEnv {
-		t.Errorf("env should beat default, got %+v", a)
 	}
 }
 
@@ -336,9 +303,8 @@ func setCwd(t *testing.T, dir string) {
 	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return dir, nil }))
 }
 
-func TestResolveActive_ProjectBeatsConfigAndEnv(t *testing.T) {
+func TestResolveActive_ProjectBeatsConfig(t *testing.T) {
 	home := withHome(t)
-	t.Setenv("PRAXIS_PROFILE", "from-env")
 	if err := SetActive("from-config"); err != nil {
 		t.Fatal(err)
 	}

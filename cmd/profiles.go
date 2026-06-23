@@ -59,8 +59,8 @@ By default this is a LOCAL-ONLY snapshot (no network calls): a profile is
 A failing check on one profile is reported inline and does not abort the
 listing.
 
-The active profile (the one used when no --profile/PRAXIS_PROFILE is given)
-is marked with "*" and reported as active_profile in JSON output.`,
+The active profile (the one used when no --profile is given) is marked
+with "*" and reported as active_profile in JSON output.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()

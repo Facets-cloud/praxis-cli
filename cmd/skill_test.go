@@ -32,158 +32,22 @@ func _credentialsPut(name, url, username, token string) error {
 func withSeams(t *testing.T,
 	detect func() []harness.Harness,
 	install func(string, []harness.Harness) ([]skillinstall.Installation, error),
-	uninstall func(string) ([]skillinstall.Installation, error),
 	list func() ([]skillinstall.Installation, error),
 ) {
 	t.Helper()
-	origD, origI, origU, origL := detectHarnesses, installSkill, uninstallSkill, listInstalledSkill
+	origD, origI, origL := detectHarnesses, installSkill, listInstalledSkill
 	if detect != nil {
 		detectHarnesses = detect
 	}
 	if install != nil {
 		installSkill = install
 	}
-	if uninstall != nil {
-		uninstallSkill = uninstall
-	}
 	if list != nil {
 		listInstalledSkill = list
 	}
 	t.Cleanup(func() {
-		detectHarnesses, installSkill, uninstallSkill, listInstalledSkill = origD, origI, origU, origL
+		detectHarnesses, installSkill, listInstalledSkill = origD, origI, origL
 	})
-}
-
-func TestInstallSkill_PassesPraxisName(t *testing.T) {
-	// Isolate HOME so the catalog step resolves a not-logged-in profile and
-	// soft-skips (no real network call against the developer's live profile).
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
-	var capturedName string
-	withSeams(t,
-		func() []harness.Harness { return []harness.Harness{{Name: "claude-code", Detected: true}} },
-		func(name string, hosts []harness.Harness) ([]skillinstall.Installation, error) {
-			capturedName = name
-			return []skillinstall.Installation{{SkillName: name, Harness: "claude-code", Path: "/p"}}, nil
-		}, nil, nil)
-
-	installSkillCmd.SetOut(&bytes.Buffer{})
-	if err := installSkillCmd.RunE(installSkillCmd, nil); err != nil {
-		t.Fatalf("RunE err = %v", err)
-	}
-	if capturedName != "praxis" {
-		t.Errorf("install called with name %q, want praxis", capturedName)
-	}
-}
-
-func TestInstallSkill_NoHosts(t *testing.T) {
-	withSeams(t, func() []harness.Harness { return nil }, nil, nil, nil)
-
-	var buf bytes.Buffer
-	installSkillCmd.SetOut(&buf)
-	if err := installSkillCmd.RunE(installSkillCmd, nil); err != nil {
-		t.Fatalf("RunE err = %v", err)
-	}
-	if !strings.Contains(buf.String(), "No supported AI hosts detected") {
-		t.Errorf("output = %q, want substring 'No supported AI hosts detected'", buf.String())
-	}
-}
-
-func TestInstallSkill_Success(t *testing.T) {
-	// Isolate HOME so the catalog step resolves a not-logged-in profile and
-	// soft-skips. Without this, the real catalog flow runs against the
-	// developer's live profile and installs real catalog skills into the
-	// SkillDir-less harnesses below — which resolves to a path under the test
-	// CWD, leaking praxis-* skill dirs into cmd/ (see .gitignore history).
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
-	withSeams(t,
-		func() []harness.Harness {
-			return []harness.Harness{
-				{Name: "claude-code", Detected: true},
-				{Name: "codex", Detected: true},
-			}
-		},
-		func(name string, hosts []harness.Harness) ([]skillinstall.Installation, error) {
-			out := make([]skillinstall.Installation, 0, len(hosts))
-			for _, h := range hosts {
-				out = append(out, skillinstall.Installation{
-					SkillName:   name,
-					Harness:     h.Name,
-					Path:        "/fake/" + h.Name + "/" + name + "/SKILL.md",
-					InstalledAt: time.Now(),
-				})
-			}
-			return out, nil
-		},
-		nil, nil)
-
-	var buf bytes.Buffer
-	installSkillCmd.SetOut(&buf)
-	if err := installSkillCmd.RunE(installSkillCmd, nil); err != nil {
-		t.Fatalf("RunE err = %v", err)
-	}
-	out := buf.String()
-	for _, want := range []string{"claude-code", "codex", "/fake/claude-code/praxis/SKILL.md", "Installed \"praxis\" into 2 host(s)"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output missing %q\nfull output:\n%s", want, out)
-		}
-	}
-}
-
-func TestInstallSkill_PropagatesError(t *testing.T) {
-	withSeams(t,
-		func() []harness.Harness {
-			return []harness.Harness{{Name: "claude-code", Detected: true}}
-		},
-		func(string, []harness.Harness) ([]skillinstall.Installation, error) {
-			return nil, errors.New("disk full")
-		},
-		nil, nil)
-
-	installSkillCmd.SetOut(&bytes.Buffer{})
-	err := installSkillCmd.RunE(installSkillCmd, nil)
-	if err == nil || !strings.Contains(err.Error(), "disk full") {
-		t.Errorf("err = %v, want substring 'disk full'", err)
-	}
-}
-
-func TestUninstallSkill_NothingFound(t *testing.T) {
-	withSeams(t, nil, nil,
-		func(string) ([]skillinstall.Installation, error) { return nil, nil },
-		nil)
-
-	var buf bytes.Buffer
-	uninstallSkillCmd.SetOut(&buf)
-	if err := uninstallSkillCmd.RunE(uninstallSkillCmd, nil); err != nil {
-		t.Fatalf("RunE err = %v", err)
-	}
-	if !strings.Contains(buf.String(), "No installations of \"praxis\"") {
-		t.Errorf("output = %q, want substring 'No installations'", buf.String())
-	}
-}
-
-func TestUninstallSkill_RemovesAndReports(t *testing.T) {
-	withSeams(t, nil, nil,
-		func(name string) ([]skillinstall.Installation, error) {
-			return []skillinstall.Installation{
-				{SkillName: name, Harness: "claude-code", Path: "/c"},
-				{SkillName: name, Harness: "codex", Path: "/x"},
-			}, nil
-		},
-		nil)
-
-	var buf bytes.Buffer
-	uninstallSkillCmd.SetOut(&buf)
-	if err := uninstallSkillCmd.RunE(uninstallSkillCmd, nil); err != nil {
-		t.Fatalf("RunE err = %v", err)
-	}
-	out := buf.String()
-	for _, want := range []string{"claude-code", "codex", "/c", "/x", "Uninstalled \"praxis\" from 2 host(s)"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output missing %q\nfull:\n%s", want, out)
-		}
-	}
 }
 
 // TestListSkills_Empty covers the AI-host path: stdout is non-TTY
@@ -191,7 +55,7 @@ func TestUninstallSkill_RemovesAndReports(t *testing.T) {
 // produces `[]` not English text — preserving the parseable-JSON
 // contract every AI-callable command holds.
 func TestListSkills_Empty(t *testing.T) {
-	withSeams(t, nil, nil, nil,
+	withSeams(t, nil, nil,
 		func() ([]skillinstall.Installation, error) { return nil, nil })
 
 	var buf bytes.Buffer
@@ -205,7 +69,7 @@ func TestListSkills_Empty(t *testing.T) {
 }
 
 func TestListSkills_JSON(t *testing.T) {
-	withSeams(t, nil, nil, nil,
+	withSeams(t, nil, nil,
 		func() ([]skillinstall.Installation, error) {
 			return []skillinstall.Installation{
 				{SkillName: "praxis", Harness: "claude-code", Path: "/c/praxis/SKILL.md", InstalledAt: time.Now()},
@@ -233,93 +97,9 @@ func TestListSkills_JSON(t *testing.T) {
 	}
 }
 
-func TestInstallSkill_CatalogFlow(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
-
-	// Save credentials so ResolveActive returns a usable profile
-	if err := credentialsPut("default", "https://x.test", "tester@x", "sk_test_T"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Seam: install meta + body-installer + catalog fetcher
-	type bodyCall struct {
-		name string
-		body string
-	}
-	var bodyCalls []bodyCall
-
-	withSeams(t,
-		func() []harness.Harness {
-			return []harness.Harness{{Name: "claude-code", Detected: true, SkillDir: t.TempDir()}}
-		},
-		func(name string, hosts []harness.Harness) ([]skillinstall.Installation, error) {
-			return []skillinstall.Installation{{SkillName: name, Harness: "claude-code", Path: "/p"}}, nil
-		}, nil, nil)
-
-	origBody := installSkillBody
-	installSkillBody = func(name, body string, hosts []harness.Harness) ([]skillinstall.Installation, error) {
-		bodyCalls = append(bodyCalls, bodyCall{name, body})
-		return []skillinstall.Installation{{SkillName: name, Harness: "claude-code", Path: "/p/" + name}}, nil
-	}
-	defer func() { installSkillBody = origBody }()
-
-	origFetch := fetchCatalog
-	fetchCatalog = func(baseURL, token string) ([]skillcatalog.Skill, error) {
-		if baseURL != "https://x.test" || token != "sk_test_T" {
-			t.Fatalf("unexpected fetcher args baseURL=%q token=%q", baseURL, token)
-		}
-		return []skillcatalog.Skill{
-			{Name: "incident-investigator", Content: "# inv body", Scope: "global"},
-			{Name: "k8s-operations", Content: "# k8s body", Scope: "global"},
-		}, nil
-	}
-	defer func() { fetchCatalog = origFetch }()
-
-	var buf bytes.Buffer
-	installSkillCmd.SetOut(&buf)
-	if err := installSkillCmd.RunE(installSkillCmd, nil); err != nil {
-		t.Fatalf("RunE err = %v", err)
-	}
-
-	if len(bodyCalls) != 2 {
-		t.Fatalf("expected 2 catalog installs, got %d", len(bodyCalls))
-	}
-	// Names must be praxis-prefixed
-	if bodyCalls[0].name != "praxis-incident-investigator" {
-		t.Errorf("first install name = %q", bodyCalls[0].name)
-	}
-	// Body has the execution preamble injected (RenderedContent) AND
-	// preserves the original body content.
-	if !strings.Contains(bodyCalls[0].body, "Execution context") {
-		t.Errorf("first install body missing execution preamble")
-	}
-	if !strings.Contains(bodyCalls[0].body, "# inv body") {
-		t.Errorf("first install body missing original content; got: %q", bodyCalls[0].body)
-	}
-	if bodyCalls[1].name != "praxis-k8s-operations" {
-		t.Errorf("second install name = %q", bodyCalls[1].name)
-	}
-
-	out := buf.String()
-	for _, want := range []string{
-		"Installed \"praxis\" into 1 host(s)",
-		"Fetching skill catalog",
-		"Got 2 catalog skill(s)",
-		"praxis-incident-investigator",
-		"praxis-k8s-operations",
-		"Installed 2 catalog skill(s) into 1 host(s)",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output missing %q\nfull:\n%s", want, out)
-		}
-	}
-}
-
 func TestRefreshSkills_ProjectFlag_ScopesToProjectDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("PRAXIS_PROFILE", "")
 	stubMCPManifestFetch(t)
 
 	if err := credentialsPut("default", "https://x.test", "tester@x", "sk_test_T"); err != nil {
@@ -342,7 +122,7 @@ func TestRefreshSkills_ProjectFlag_ScopesToProjectDir(t *testing.T) {
 				SkillDir: filepath.Join(home, ".claude", "skills"),
 				AgentDir: filepath.Join(home, ".claude", "agents"),
 			}}
-		}, nil, nil, nil)
+		}, nil, nil)
 
 	origFetchSk := fetchCatalog
 	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
@@ -390,7 +170,6 @@ func TestRefreshSkills_ProjectFlag_ScopesToProjectDir(t *testing.T) {
 func TestRefreshSkills_ProjectFlag_Unresolvable_ExitsUsage(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("PRAXIS_PROFILE", "")
 	stubMCPManifestFetch(t)
 
 	if err := credentialsPut("default", "https://x.test", "tester@x", "sk_test_T"); err != nil {
@@ -409,7 +188,7 @@ func TestRefreshSkills_ProjectFlag_Unresolvable_ExitsUsage(t *testing.T) {
 				SkillDir: filepath.Join(home, ".claude", "skills"),
 				AgentDir: filepath.Join(home, ".claude", "agents"),
 			}}
-		}, nil, nil, nil)
+		}, nil, nil)
 
 	if err := refreshSkillsCmd.Flags().Set("project", "true"); err != nil {
 		t.Fatalf("set --project: %v", err)
@@ -441,49 +220,6 @@ func credentialsPut(name, url, username, token string) error {
 
 var credentialsPutImpl = func(name, url, username, token string) error {
 	return _credentialsPut(name, url, username, token)
-}
-
-func TestInstallSkill_NotLoggedIn_SoftSkipsCatalog(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
-	// Deliberately NOT calling credentialsPut — no profile saved.
-
-	withSeams(t,
-		func() []harness.Harness {
-			return []harness.Harness{{Name: "claude-code", Detected: true, SkillDir: t.TempDir()}}
-		},
-		func(name string, hosts []harness.Harness) ([]skillinstall.Installation, error) {
-			return []skillinstall.Installation{{SkillName: name, Harness: "claude-code", Path: "/p"}}, nil
-		}, nil, nil)
-
-	// Stub fetcher — must NOT be called when not logged in
-	origFetch := fetchCatalog
-	called := false
-	fetchCatalog = func(baseURL, token string) ([]skillcatalog.Skill, error) {
-		called = true
-		return nil, nil
-	}
-	defer func() { fetchCatalog = origFetch }()
-
-	var buf bytes.Buffer
-	installSkillCmd.SetOut(&buf)
-	if err := installSkillCmd.RunE(installSkillCmd, nil); err != nil {
-		t.Fatalf("RunE err = %v", err)
-	}
-	if called {
-		t.Error("catalog fetcher should not be called when not logged in")
-	}
-
-	out := buf.String()
-	for _, want := range []string{
-		"Installed \"praxis\" into 1 host(s)",
-		"Skipping org skill catalog",
-		"praxis login",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output missing %q\nfull:\n%s", want, out)
-		}
-	}
 }
 
 // TestListSkills_Populated exercises the pretty formatter directly,

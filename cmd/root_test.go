@@ -28,9 +28,9 @@ func TestRoot_HelpListsAllShippedCommands(t *testing.T) {
 			t.Errorf("--help output missing %q\nfull output:\n%s", want, out)
 		}
 	}
-	// Hidden commands must NOT appear in --help — they still work when
-	// invoked directly (with a deprecation warning) but the visible
-	// surface must stay small.
+	// Commands removed in the major-version cleanup (formerly deprecated:
+	// init, install-skill, uninstall-skill, whoami, use) and never-shipped
+	// stubs must NOT appear in --help.
 	for _, mustNot := range []string{
 		"init", "install-skill", "uninstall-skill",
 		"whoami", "use",
@@ -38,7 +38,7 @@ func TestRoot_HelpListsAllShippedCommands(t *testing.T) {
 		"doctor", "configure",
 	} {
 		if strings.Contains(out, mustNot) {
-			t.Errorf("--help still advertises hidden/removed command %q", mustNot)
+			t.Errorf("--help still advertises removed command %q", mustNot)
 		}
 	}
 }

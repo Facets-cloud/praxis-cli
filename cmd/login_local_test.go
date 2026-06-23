@@ -17,7 +17,6 @@ import (
 func TestLogin_Local_PinsProjectAndLeavesGlobalAlone(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetLoginFlags(t)
 
 	// A global profile is active; a separate profile will be pinned locally.
@@ -63,7 +62,6 @@ func TestLogin_Local_PinsProjectAndLeavesGlobalAlone(t *testing.T) {
 // (and does not flip any pointer) when run outside the home subtree.
 func TestLogin_Local_OutsideHome_Errors(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetLoginFlags(t)
 
 	seedProfile(t, "aurva", "https://aurva.test", "tok")

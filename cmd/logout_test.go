@@ -24,7 +24,6 @@ func resetLogoutFlags() {
 
 func TestLogoutCmd_NoCredentials_Default(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetLogoutFlags()
 
 	var buf bytes.Buffer
@@ -42,7 +41,6 @@ func TestLogoutCmd_NoCredentials_Default(t *testing.T) {
 
 func TestLogoutCmd_RemovesActive(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetLogoutFlags()
 
 	if err := credentials.Put("default", credentials.Profile{
@@ -75,7 +73,6 @@ func TestLogoutCmd_RemovesActive(t *testing.T) {
 // runs logout and verifies "default" survives.
 func TestLogoutCmd_LeavesOtherProfilesAlone(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetLogoutFlags()
 	defer resetLogoutFlags()
 
@@ -108,7 +105,6 @@ func TestLogoutCmd_LeavesOtherProfilesAlone(t *testing.T) {
 func TestLogoutCmd_InProjectDir_RemovesGlobalNotProjectProfile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetLogoutFlags()
 	defer resetLogoutFlags()
 
@@ -145,7 +141,6 @@ func TestLogoutCmd_InProjectDir_RemovesGlobalNotProjectProfile(t *testing.T) {
 
 func TestLogoutCmd_All_WipesEverything(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PRAXIS_PROFILE", "")
 	resetLogoutFlags()
 
 	_ = credentials.Put("default", credentials.Profile{URL: "x", Token: "t1"})
