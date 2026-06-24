@@ -183,14 +183,22 @@ func printUpdateNotification(latestVersion string, w io.Writer) {
 }
 
 // skipUpdateCheck reports whether the background nag should be suppressed for
-// this invocation, based on the raw args. Suppressed for version/update (which
-// already report version state) and completion (its stdout is sourced by the
-// shell — stray stderr would still surprise users debugging completion).
+// this invocation. Suppressed for the version-printing flags and for the
+// version/update/completion commands (which already report version state, or —
+// for completion — emit shell-sourced stdout where stray stderr would surprise
+// users). Only the leading version flags and the first positional token (the
+// command) are inspected, so a positional value that merely happens to be named
+// like a command — e.g. `praxis login --profile update` — does not suppress it.
 func skipUpdateCheck(args []string) bool {
 	for _, a := range args {
-		switch a {
-		case "update", "version", "--version", "-v", "completion":
+		switch {
+		case a == "--version" || a == "-v":
 			return true
+		case strings.HasPrefix(a, "-"):
+			continue // a flag (or its value) before the command — keep scanning
+		default:
+			// First positional token is the command name.
+			return a == "update" || a == "version" || a == "completion"
 		}
 	}
 	return false

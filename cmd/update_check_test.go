@@ -288,6 +288,9 @@ func TestSkipUpdateCheck(t *testing.T) {
 		{[]string{"--version"}, true},
 		{[]string{"-v"}, true},
 		{[]string{"completion", "zsh"}, true},
+		// A positional value named like a command must NOT suppress the check.
+		{[]string{"login", "--profile", "update"}, false},
+		{[]string{"status", "version"}, false},
 		{nil, false},
 	}
 	for _, tt := range tests {
