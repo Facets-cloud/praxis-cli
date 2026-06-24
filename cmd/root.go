@@ -4,6 +4,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -31,7 +32,33 @@ Run 'praxis <command> --help' for details on any command.`,
 
 // Execute runs the root command. Called from main.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	// Fire a non-blocking background check for a newer release. The notification
+	// (if any) is printed after the command finishes, via a deferred select that
+	// gives up after updateCheckMaxWait so it never delays the user. Suppressed
+	// for version/update/completion and dev builds (see checkForUpdate).
+	var notify func()
+	if !skipUpdateCheck(os.Args[1:]) {
+		ch := make(chan string, 1)
+		go func() { ch <- checkForUpdate() }()
+		notify = func() {
+			select {
+			case latest := <-ch:
+				if latest != "" {
+					printUpdateNotification(latest, os.Stderr)
+				}
+			case <-time.After(updateCheckMaxWait):
+				// Background check didn't finish in time — skip for this run.
+			}
+		}
+	}
+
+	err := rootCmd.Execute()
+	// Run the notification before any os.Exit so an error path still nags
+	// (the deferred-then-Exit ordering is handled explicitly here).
+	if notify != nil {
+		notify()
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}

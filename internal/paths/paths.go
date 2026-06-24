@@ -178,6 +178,15 @@ func Config() (string, error) {
 	return filepath.Join(d, "config.json"), err
 }
 
+// UpdateCheckCache is the throttle cache for the background version check.
+// ALWAYS under the home root (never project-local): the installed binary's
+// version is per-machine, not per-repo, so the "last checked" state must not
+// divert into a project tree.
+func UpdateCheckCache() (string, error) {
+	d, err := Dir()
+	return filepath.Join(d, "last-update-check.json"), err
+}
+
 // ProjectConfig returns the project-local active-profile pointer
 // (<projectRoot>/config.json) and whether a project root exists. Used to
 // resolve the active profile for a working directory ahead of the global
