@@ -14,14 +14,17 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/selfupdate"
 )
 
-const (
-	// updateCheckInterval throttles how often the background check hits GitHub.
-	updateCheckInterval = 24 * time.Hour
-	// updateCheckMaxWait bounds how long Execute waits for the background check
-	// before giving up on the notification for this run (selfupdate's fetch has
-	// a 10s timeout; this leaves headroom for one silent retry).
-	updateCheckMaxWait = 12 * time.Second
-)
+// updateCheckInterval throttles how often the background check hits GitHub.
+const updateCheckInterval = 24 * time.Hour
+
+// updateCheckMaxWait caps how long Execute waits for the background check before
+// giving up on the notice for this run. The select returns the instant the
+// result is ready, so the warm-cache path (the overwhelming majority of runs)
+// never waits — this bound only bites on the once-per-interval cold fetch, and
+// is deliberately short so even that is barely perceptible. A short wait (vs
+// pure non-blocking) is what lets the notice + cache write actually land for
+// fast local commands, whose work finishes long before a network fetch could.
+const updateCheckMaxWait = 3 * time.Second
 
 // updateCheckRetryDelay pauses between the two live-fetch attempts. A var (not
 // a const) so tests can zero it out and not sleep.
@@ -64,6 +67,11 @@ func checkForUpdate() string {
 	// Live fetch with one silent retry on any error.
 	rel := fetchLatestReleaseWithRetry()
 	if rel == nil {
+		// Record the attempt (empty LatestVersion) so an offline/API outage
+		// honors the 24h throttle instead of re-fetching on every invocation.
+		// The fresh-cache branch above treats an empty LatestVersion as "no
+		// update" via newerThan, so this stays silent until the cache expires.
+		_ = saveUpdateCache(updateCheckCache{CheckedAt: time.Now()})
 		return "" // best-effort — stay silent
 	}
 

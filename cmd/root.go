@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
 )
 
@@ -32,12 +33,17 @@ Run 'praxis <command> --help' for details on any command.`,
 
 // Execute runs the root command. Called from main.
 func Execute() {
-	// Fire a non-blocking background check for a newer release. The notification
-	// (if any) is printed after the command finishes, via a deferred select that
-	// gives up after updateCheckMaxWait so it never delays the user. Suppressed
-	// for version/update/completion and dev builds (see checkForUpdate).
+	// Fire a background check for a newer release, but only for an interactive
+	// human (stderr is a TTY). When praxis is spawned by an AI host or a script,
+	// stderr is piped — we skip entirely so the check never delays automation
+	// and never adds stderr noise to a parsed invocation. Also suppressed for
+	// version/update/completion and dev builds (see checkForUpdate).
+	//
+	// The notice prints after the command finishes. The select returns the
+	// instant the result is ready, so the warm-cache path doesn't wait; only a
+	// cold network fetch waits, bounded by updateCheckMaxWait.
 	var notify func()
-	if !skipUpdateCheck(os.Args[1:]) {
+	if render.IsTTY(os.Stderr) && !skipUpdateCheck(os.Args[1:]) {
 		ch := make(chan string, 1)
 		go func() { ch <- checkForUpdate() }()
 		notify = func() {
@@ -47,7 +53,9 @@ func Execute() {
 					printUpdateNotification(latest, os.Stderr)
 				}
 			case <-time.After(updateCheckMaxWait):
-				// Background check didn't finish in time — skip for this run.
+				// Cold fetch still in flight — skip the notice for this run.
+				// The goroutine keeps running long enough to refresh the cache
+				// in the common case, so the notice surfaces next invocation.
 			}
 		}
 	}

@@ -205,6 +205,52 @@ func TestCheckForUpdate_PersistsCache(t *testing.T) {
 	}
 }
 
+// TestCheckForUpdate_ThrottlesFailures verifies a failed live fetch records the
+// attempt (empty LatestVersion) so the 24h throttle applies offline: the next
+// call within the interval is served from cache and does not re-fetch.
+func TestCheckForUpdate_ThrottlesFailures(t *testing.T) {
+	origDelay := updateCheckRetryDelay
+	updateCheckRetryDelay = 0
+	t.Cleanup(func() { updateCheckRetryDelay = origDelay })
+
+	fakeHome(t)
+	withVersion(t, "1.0.0")
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+
+	orig := fetchLatestRelease
+	t.Cleanup(func() { fetchLatestRelease = orig })
+
+	// First call: fetch fails → should persist a throttle marker and stay silent.
+	calls := 0
+	fetchLatestRelease = func() (*selfupdate.Release, error) {
+		calls++
+		return nil, errors.New("offline")
+	}
+	if got := checkForUpdate(); got != "" {
+		t.Fatalf("first call = %q, want empty", got)
+	}
+	firstCalls := calls
+	if firstCalls == 0 {
+		t.Fatal("expected the first call to attempt a live fetch")
+	}
+
+	c, err := readUpdateCache()
+	if err != nil {
+		t.Fatalf("throttle marker not written: %v", err)
+	}
+	if c.LatestVersion != "" {
+		t.Errorf("LatestVersion = %q, want empty on a failed fetch", c.LatestVersion)
+	}
+
+	// Second call within the interval: must be served from cache, no re-fetch.
+	if got := checkForUpdate(); got != "" {
+		t.Fatalf("second call = %q, want empty", got)
+	}
+	if calls != firstCalls {
+		t.Errorf("second call re-fetched (%d → %d); throttle not honored", firstCalls, calls)
+	}
+}
+
 func TestPrintUpdateNotification(t *testing.T) {
 	withVersion(t, "1.0.0")
 	var buf bytes.Buffer
