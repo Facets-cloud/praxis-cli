@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -57,11 +58,10 @@ func checkForUpdate() string {
 	if isDevBuild(version) {
 		return ""
 	}
-	currentClean := strings.TrimPrefix(version, "v")
 
 	// Serve from cache while fresh.
 	if cached, err := readUpdateCache(); err == nil && time.Since(cached.CheckedAt) < updateCheckInterval {
-		return newerThan(currentClean, cached.LatestVersion)
+		return newerThan(version, cached.LatestVersion)
 	}
 
 	// Live fetch with one silent retry on any error.
@@ -80,7 +80,7 @@ func checkForUpdate() string {
 		LatestVersion: rel.TagName,
 	})
 
-	return newerThan(currentClean, rel.TagName)
+	return newerThan(version, rel.TagName)
 }
 
 // gitDescribeAhead matches the "-<n>-g<sha>" suffix git describe appends when
@@ -99,15 +99,74 @@ func isDevBuild(v string) bool {
 	return gitDescribeAhead.MatchString(v)
 }
 
-// newerThan reports latestTag (e.g. "v1.2.3") as the result when it differs
-// from the current version, else "". Comparison is string equality after
-// stripping the "v" prefix — matching praxis update (cmd/update.go) and raptor.
-func newerThan(currentClean, latestTag string) string {
-	latestClean := strings.TrimPrefix(latestTag, "v")
-	if latestClean != "" && latestClean != currentClean {
+// newerThan reports latestTag (e.g. "v1.2.3") as the result only when it is
+// strictly semver-newer than current, else "". A plain string-inequality test
+// is wrong here: the throttle cache can hold a tag that was latest when written
+// but is now OLDER than the installed binary (e.g. the user released vX and
+// self-upgraded within the 24h window), which would otherwise nag backward.
+func newerThan(current, latestTag string) string {
+	if latestTag == "" {
+		return ""
+	}
+	if compareSemver(latestTag, current) > 0 {
 		return latestTag
 	}
 	return ""
+}
+
+// compareSemver compares two dotted versions, ignoring a leading "v" and any
+// build metadata. Returns -1 if a<b, 0 if equal, 1 if a>b. The numeric core
+// (major.minor.patch) is compared numerically; a release outranks a prerelease
+// of the same core (1.0.0 > 1.0.0-rc1); two prereleases fall back to a string
+// compare. This is sufficient for goreleaser's clean release tags; "dev"/
+// "ahead"/"dirty" builds never reach here (filtered by isDevBuild).
+func compareSemver(a, b string) int {
+	ac, ap := splitVersion(a)
+	bc, bp := splitVersion(b)
+	for i := 0; i < 3; i++ {
+		if ac[i] != bc[i] {
+			if ac[i] < bc[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	switch {
+	case ap == bp:
+		return 0
+	case ap == "": // a is a release, b a prerelease of the same core → a newer
+		return 1
+	case bp == "":
+		return -1
+	case ap < bp:
+		return -1
+	default:
+		return 1
+	}
+}
+
+// splitVersion parses "v1.2.3-rc1+build" into its numeric core [1,2,3] and
+// prerelease ("rc1"). Missing core components default to 0; non-numeric ones
+// are treated as 0.
+func splitVersion(v string) ([3]int, string) {
+	v = strings.TrimPrefix(v, "v")
+	core, pre := v, ""
+	if i := strings.IndexByte(v, '-'); i >= 0 {
+		core, pre = v[:i], v[i+1:]
+	}
+	// Drop any build metadata (from the core if there was no prerelease, or
+	// from the tail of the prerelease).
+	if j := strings.IndexByte(core, '+'); j >= 0 {
+		core = core[:j]
+	}
+	if j := strings.IndexByte(pre, '+'); j >= 0 {
+		pre = pre[:j]
+	}
+	var nums [3]int
+	for i, p := range strings.SplitN(core, ".", 3) {
+		nums[i], _ = strconv.Atoi(p)
+	}
+	return nums, pre
 }
 
 // fetchLatestReleaseWithRetry calls the fetchLatestRelease seam up to twice,

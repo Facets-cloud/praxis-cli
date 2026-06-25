@@ -64,6 +64,12 @@ func TestCheckForUpdate(t *testing.T) {
 			want:    "v1.2.0",
 		},
 		{
+			name:    "newer patch returns latest tag",
+			version: "1.0.0",
+			rel:     &selfupdate.Release{TagName: "v1.0.1"},
+			want:    "v1.0.1",
+		},
+		{
 			name:    "equal returns empty",
 			version: "1.2.0",
 			rel:     &selfupdate.Release{TagName: "v1.2.0"},
@@ -73,6 +79,14 @@ func TestCheckForUpdate(t *testing.T) {
 			name:    "equal without v-prefix on tag",
 			version: "v1.2.0",
 			rel:     &selfupdate.Release{TagName: "1.2.0"},
+			want:    "",
+		},
+		{
+			// Regression: installed binary is NEWER than the live "latest".
+			// String-equality would nag backward; semver must stay silent.
+			name:    "installed newer than latest stays silent",
+			version: "1.2.0",
+			rel:     &selfupdate.Release{TagName: "v1.0.0"},
 			want:    "",
 		},
 		{
@@ -120,6 +134,18 @@ func TestCheckForUpdate(t *testing.T) {
 			version: "2.0.0",
 			seedCache: func(t *testing.T) {
 				writeCache(t, time.Hour, "v2.0.0")
+			},
+			failFetch: true,
+			want:      "",
+		},
+		{
+			// Exact production bug: a fresh cache holds the tag that was latest
+			// when written (v1.0.0), but the user has since self-upgraded to
+			// 1.1.0 within the 24h window. Must NOT nag backward.
+			name:    "fresh cache older than installed stays silent",
+			version: "1.1.0",
+			seedCache: func(t *testing.T) {
+				writeCache(t, time.Hour, "v1.0.0")
 			},
 			failFetch: true,
 			want:      "",
@@ -248,6 +274,47 @@ func TestCheckForUpdate_ThrottlesFailures(t *testing.T) {
 	}
 	if calls != firstCalls {
 		t.Errorf("second call re-fetched (%d → %d); throttle not honored", firstCalls, calls)
+	}
+}
+
+func TestCompareSemver(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"1.0.0", "1.0.0", 0},
+		{"v1.0.0", "1.0.0", 0}, // v-prefix ignored
+		{"1.1.0", "1.0.0", 1},
+		{"1.0.0", "1.1.0", -1},
+		{"1.0.1", "1.0.0", 1},
+		{"2.0.0", "1.9.9", 1},
+		{"1.10.0", "1.9.0", 1},        // numeric, not lexical
+		{"1.0", "1.0.0", 0},           // missing patch defaults to 0
+		{"1.0.0", "1.0.0-rc1", 1},     // release outranks prerelease
+		{"1.0.0-rc1", "1.0.0", -1},    // and vice versa
+		{"1.0.0-rc2", "1.0.0-rc1", 1}, // prerelease string compare
+		{"1.2.3+build", "1.2.3", 0},   // build metadata ignored
+	}
+	for _, tt := range tests {
+		if got := compareSemver(tt.a, tt.b); got != tt.want {
+			t.Errorf("compareSemver(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
+func TestNewerThan(t *testing.T) {
+	tests := []struct {
+		current, latestTag, want string
+	}{
+		{"1.0.0", "v1.1.0", "v1.1.0"}, // newer → returns the tag verbatim
+		{"1.0.0", "v1.0.0", ""},       // equal
+		{"1.1.0", "v1.0.0", ""},       // older → silent (the bug)
+		{"1.0.0", "", ""},             // empty (failed-fetch marker)
+	}
+	for _, tt := range tests {
+		if got := newerThan(tt.current, tt.latestTag); got != tt.want {
+			t.Errorf("newerThan(%q, %q) = %q, want %q", tt.current, tt.latestTag, got, tt.want)
+		}
 	}
 }
 

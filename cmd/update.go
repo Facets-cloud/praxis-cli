@@ -56,7 +56,11 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 
 		latest := strings.TrimPrefix(rel.TagName, "v")
 		current := strings.TrimPrefix(version, "v")
-		if latest == current {
+		// Treat "not strictly newer" as already-latest: an equal version, or a
+		// release that is older than the installed build (so we never offer a
+		// downgrade). Uses the same comparator as the background update nag
+		// (cmd/update_check.go) so the two can't disagree.
+		if compareSemver(rel.TagName, version) <= 0 {
 			if asJSON {
 				return render.JSON(out, map[string]any{
 					"updated": false,
