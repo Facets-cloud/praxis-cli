@@ -166,6 +166,83 @@ func InstallWithBody(skillName, body string, hosts []harness.Harness) ([]Install
 	return results, nil
 }
 
+// FileBody is one supporting file of a multi-file skill, ready to write:
+// Path is a skill-relative POSIX path, Content the (already brand-substituted)
+// body. Decouples skillinstall from skillcatalog's wire type.
+type FileBody struct {
+	Path    string
+	Content string
+}
+
+// InstallTreeWithBodies installs a multi-file skill whose bodies arrive from
+// the server catalog (not the binary embed): primary is the SKILL.md body
+// (already rendered with the execution preamble), files are the supporting
+// files. Like InstallTree it recreates the layout under <SkillDir>/<skillName>/
+// and records the root SKILL.md as the canonical receipt path, so
+// list/status/uninstall treat it like any other installation.
+func InstallTreeWithBodies(skillName, primary string, files []FileBody, hosts []harness.Harness) ([]Installation, error) {
+	receipt, err := loadReceipt()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	results := make([]Installation, 0, len(hosts))
+	for _, h := range hosts {
+		dir := filepath.Join(h.SkillDir, skillName)
+		if err := writeBodies(dir, primary, files); err != nil {
+			return results, err
+		}
+		install := Installation{
+			SkillName:   skillName,
+			Harness:     h.Name,
+			Path:        filepath.Join(dir, "SKILL.md"),
+			InstalledAt: now,
+		}
+		results = append(results, install)
+		receipt = upsert(receipt, install)
+	}
+
+	if err := saveReceipt(receipt); err != nil {
+		return results, fmt.Errorf("save receipt: %w", err)
+	}
+	return results, nil
+}
+
+// writeBodies replaces dstDir with a SKILL.md (primary) plus the given
+// supporting files, recreating subdirectories. dstDir is cleared first so a
+// re-install or refresh that dropped/renamed a file leaves nothing stale — the
+// on-disk tree always matches the server's current set (mirrors writeTree).
+//
+// A supporting file whose path is absolute or escapes the skill dir (via "..")
+// is rejected: the server validates this too, but the CLI must never write
+// outside the skill folder on the strength of a server response.
+func writeBodies(dstDir, primary string, files []FileBody) error {
+	if err := os.RemoveAll(dstDir); err != nil {
+		return fmt.Errorf("clear %s: %w", dstDir, err)
+	}
+	if err := os.MkdirAll(dstDir, 0700); err != nil {
+		return fmt.Errorf("create %s: %w", dstDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dstDir, "SKILL.md"), []byte(primary), 0600); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Join(dstDir, "SKILL.md"), err)
+	}
+	for _, f := range files {
+		clean := filepath.Clean(filepath.FromSlash(f.Path))
+		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("unsafe skill file path %q", f.Path)
+		}
+		dst := filepath.Join(dstDir, clean)
+		if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
+			return fmt.Errorf("create %s: %w", filepath.Dir(dst), err)
+		}
+		if err := os.WriteFile(dst, []byte(f.Content), 0600); err != nil {
+			return fmt.Errorf("write %s: %w", dst, err)
+		}
+	}
+	return nil
+}
+
 // Uninstall removes the named skill from every harness where the receipt
 // shows it installed, deletes the file (and its parent skill dir if
 // empty), and updates the receipt. Returns the entries that were
@@ -232,10 +309,13 @@ func UninstallByPrefix(prefix string) ([]Installation, error) {
 			kept = append(kept, entry)
 			continue
 		}
-		if err := os.Remove(entry.Path); err != nil && !os.IsNotExist(err) {
-			return removed, fmt.Errorf("remove %s: %w", entry.Path, err)
+		// RemoveAll the whole skill dir, not just SKILL.md — a multi-file skill
+		// would otherwise leave its supporting files orphaned on a profile
+		// switch (the receipt path is always <skilldir>/SKILL.md).
+		dir := filepath.Dir(entry.Path)
+		if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
+			return removed, fmt.Errorf("remove %s: %w", dir, err)
 		}
-		_ = os.Remove(filepath.Dir(entry.Path))
 		removed = append(removed, entry)
 	}
 	receipt.Skills = kept

@@ -323,7 +323,20 @@ func installFetchedCatalog(out io.Writer, asJSON bool, skills []skillcatalog.Ski
 	failures := 0
 	for _, sk := range skills {
 		prefixed := sk.PrefixedName()
-		results, err := installSkillBody(prefixed, sk.RenderedContent(), hosts)
+		var results []skillinstall.Installation
+		var err error
+		if sk.IsMultiFile() {
+			// Multi-file skill: write SKILL.md (with preamble) + supporting
+			// files as a directory tree. Supporting files install verbatim —
+			// the server already branded them; no preamble (SKILL.md-only).
+			files := make([]skillinstall.FileBody, len(sk.Files))
+			for i, f := range sk.Files {
+				files[i] = skillinstall.FileBody{Path: f.Path, Content: f.Content}
+			}
+			results, err = installSkillTree(prefixed, sk.RenderedContent(), files, hosts)
+		} else {
+			results, err = installSkillBody(prefixed, sk.RenderedContent(), hosts)
+		}
 		if err != nil {
 			if !asJSON {
 				fmt.Fprintf(out, "  ✗ %-40s failed: %v\n", prefixed, err)

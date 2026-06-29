@@ -264,3 +264,37 @@ func TestPrefixedName_AlwaysPrefixed(t *testing.T) {
 		}
 	}
 }
+
+func TestIsMultiFile(t *testing.T) {
+	if (Skill{}).IsMultiFile() {
+		t.Error("skill with no files should not be multi-file")
+	}
+	s := Skill{Files: []SkillFile{{Path: "catalog.md", Content: "x"}}}
+	if !s.IsMultiFile() {
+		t.Error("skill with files should be multi-file")
+	}
+}
+
+func TestFetch_ParsesSupportingFiles(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"name":"gcp","scope":"global","display_name":"GCP","description":"d","content":"# Body",
+			 "files":[{"path":"nuances-catalog.md","content":"# catalog"},
+			          {"path":"flows/step.md","content":"step"}]}
+		]`))
+	}))
+	defer srv.Close()
+
+	skills, err := Fetch(srv.URL, "tok")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(skills) != 1 || !skills[0].IsMultiFile() {
+		t.Fatalf("expected one multi-file skill, got %+v", skills)
+	}
+	files := skills[0].Files
+	if len(files) != 2 || files[0].Path != "nuances-catalog.md" || files[1].Content != "step" {
+		t.Errorf("files parsed wrong: %+v", files)
+	}
+}

@@ -495,3 +495,116 @@ func TestReceiptLoadsOldSkillsOnlyJSON(t *testing.T) {
 		t.Errorf("want 1 skill entry, got %d", len(entries))
 	}
 }
+
+// --- multi-file ("nested") catalog skills -----------------------------------
+
+func TestInstallTreeWithBodies_WritesPrimaryAndSupportingFiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+
+	files := []FileBody{
+		{Path: "nuances-catalog.md", Content: "# catalog"},
+		{Path: "flows/step.md", Content: "step body"},
+	}
+	results, err := InstallTreeWithBodies("praxis-gcp", "SKILL body", files, hosts)
+	if err != nil {
+		t.Fatalf("InstallTreeWithBodies err = %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("got %d installs, want 3", len(results))
+	}
+
+	for _, in := range results {
+		dir := filepath.Dir(in.Path)
+		// Receipt path is the root SKILL.md.
+		if filepath.Base(in.Path) != "SKILL.md" {
+			t.Errorf("recorded path %q is not the SKILL.md root", in.Path)
+		}
+		assertFileContent(t, in.Path, "SKILL body")
+		assertFileContent(t, filepath.Join(dir, "nuances-catalog.md"), "# catalog")
+		// Subdirectory layout preserved.
+		assertFileContent(t, filepath.Join(dir, "flows", "step.md"), "step body")
+	}
+
+	recorded, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorded) != 3 {
+		t.Errorf("List() = %d entries, want 3", len(recorded))
+	}
+}
+
+func TestInstallTreeWithBodies_ClearsStaleFilesOnReinstall(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+
+	if _, err := InstallTreeWithBodies("praxis-gcp", "body",
+		[]FileBody{{Path: "old.md", Content: "x"}}, hosts); err != nil {
+		t.Fatal(err)
+	}
+	// Reinstall with a different file set — old.md must not survive.
+	results, err := InstallTreeWithBodies("praxis-gcp", "body",
+		[]FileBody{{Path: "new.md", Content: "y"}}, hosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range results {
+		dir := filepath.Dir(in.Path)
+		if _, err := os.Stat(filepath.Join(dir, "old.md")); !os.IsNotExist(err) {
+			t.Errorf("stale file old.md survived reinstall in %s", dir)
+		}
+		assertFileContent(t, filepath.Join(dir, "new.md"), "y")
+	}
+}
+
+func TestInstallTreeWithBodies_RejectsUnsafePath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+
+	for _, bad := range []string{"../escape.md", "/etc/passwd", "a/../../b"} {
+		_, err := InstallTreeWithBodies("praxis-x", "body",
+			[]FileBody{{Path: bad, Content: "x"}}, hosts)
+		if err == nil {
+			t.Errorf("path %q: expected error, got nil", bad)
+		}
+	}
+}
+
+func TestUninstallByPrefix_RemovesWholeMultiFileSkillDir(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+
+	if _, err := InstallTreeWithBodies("praxis-gcp", "body",
+		[]FileBody{{Path: "catalog.md", Content: "c"}}, hosts); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := UninstallByPrefix("praxis-")
+	if err != nil {
+		t.Fatalf("UninstallByPrefix err = %v", err)
+	}
+	if len(removed) != 3 {
+		t.Fatalf("removed %d, want 3", len(removed))
+	}
+	// The entire skill dir (incl. supporting files) must be gone — not just
+	// SKILL.md (regression: the old file-only delete orphaned supporting files).
+	for _, in := range removed {
+		dir := filepath.Dir(in.Path)
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Errorf("skill dir %s not removed (supporting files orphaned)", dir)
+		}
+	}
+}
+
+func assertFileContent(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Errorf("read %s: %v", path, err)
+		return
+	}
+	if string(got) != want {
+		t.Errorf("%s = %q, want %q", path, string(got), want)
+	}
+}

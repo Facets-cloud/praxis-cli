@@ -23,6 +23,7 @@ var (
 	detectHarnesses         = harness.Detected
 	installSkill            = skillinstall.Install
 	installSkillBody        = skillinstall.InstallWithBody
+	installSkillTree        = skillinstall.InstallTreeWithBodies
 	listInstalledSkill      = skillinstall.List
 	refreshSkills           = skillinstall.Refresh
 	fetchCatalog            = skillcatalog.Fetch
