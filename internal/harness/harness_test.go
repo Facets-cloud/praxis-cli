@@ -18,13 +18,13 @@ func withIsolatedHome(t *testing.T) string {
 	return home
 }
 
-func TestAll_ReturnsThreeHarnesses(t *testing.T) {
+func TestAll_ReturnsAllHarnesses(t *testing.T) {
 	withIsolatedHome(t)
 	got := All()
-	if len(got) != 3 {
-		t.Errorf("len(All()) = %d, want 3", len(got))
+	if len(got) != 4 {
+		t.Errorf("len(All()) = %d, want 4", len(got))
 	}
-	wantNames := map[string]bool{"claude-code": true, "codex": true, "gemini-cli": true}
+	wantNames := map[string]bool{"claude-code": true, "codex": true, "gemini-cli": true, "antigravity": true}
 	for _, h := range got {
 		if !wantNames[h.Name] {
 			t.Errorf("unexpected harness %q in All()", h.Name)
@@ -101,6 +101,32 @@ func TestDetect_GeminiCLI_HomeDir(t *testing.T) {
 	}
 }
 
+func TestDetect_Antigravity_AppDataDir(t *testing.T) {
+	home := withIsolatedHome(t)
+	// The antigravity-ide app-data subdir under ~/.gemini is the distinct
+	// signal that disambiguates Antigravity from Gemini CLI.
+	if err := os.MkdirAll(filepath.Join(home, ".gemini", "antigravity-ide"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := ByName("antigravity")
+	if !h.Detected {
+		t.Errorf("Antigravity not detected when ~/.gemini/antigravity-ide exists: %+v", h)
+	}
+}
+
+func TestDetect_Antigravity_NotOnBareGemini(t *testing.T) {
+	home := withIsolatedHome(t)
+	// A bare ~/.gemini (Gemini CLI's signal) must NOT trip Antigravity —
+	// the two share the ~/.gemini root and must stay disambiguated.
+	if err := os.MkdirAll(filepath.Join(home, ".gemini"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := ByName("antigravity")
+	if h.Detected {
+		t.Errorf("Antigravity must not be detected on a bare ~/.gemini: %+v", h)
+	}
+}
+
 func TestSkillDir_PerHarness(t *testing.T) {
 	home := withIsolatedHome(t)
 	tests := []struct {
@@ -110,6 +136,7 @@ func TestSkillDir_PerHarness(t *testing.T) {
 		{"claude-code", filepath.Join(home, ".claude", "skills")},
 		{"codex", filepath.Join(home, ".agents", "skills")},
 		{"gemini-cli", filepath.Join(home, ".gemini", "skills")},
+		{"antigravity", filepath.Join(home, ".gemini", "config", "skills")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -249,6 +276,7 @@ func TestAllHarnessesHaveAgentDir(t *testing.T) {
 		"claude-code": filepath.Join(home, ".claude", "agents"),
 		"codex":       filepath.Join(home, ".codex", "agents"),
 		"gemini-cli":  filepath.Join(home, ".gemini", "agents"),
+		"antigravity": filepath.Join(home, ".gemini", "config", "agents"),
 	}
 	for _, h := range All() {
 		got, ok := want[h.Name]
