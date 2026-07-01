@@ -1,7 +1,13 @@
 // Package harness detects which AI host CLIs/IDEs are present locally and
-// reports where each one looks for skill files. The 3 harnesses listed
+// reports where each one looks for skill files. The harnesses listed
 // here all support the Agent Skills open standard at user scope, so
 // `praxis skill install` writes the same SKILL.md to each detected one.
+//
+// Google Antigravity and Gemini CLI both root their config under
+// ~/.gemini, but at different skill dirs: Gemini CLI reads ~/.gemini/skills
+// while Antigravity reads ~/.gemini/config/skills (its config root, marked
+// by ~/.gemini/config/.migrated). They are detected by distinct signals so
+// a bare ~/.gemini does not misattribute one for the other.
 //
 // Cursor is intentionally NOT included: it has no user-scope skills
 // directory (only project-scope under .cursor/skills/), so it requires
@@ -18,7 +24,7 @@ import (
 
 // Harness is one supported AI host.
 type Harness struct {
-	Name        string // canonical id: "claude-code", "codex", "gemini-cli"
+	Name        string // canonical id: "claude-code", "codex", "gemini-cli", "antigravity"
 	DisplayName string // human label
 	Detected    bool   // present on this machine
 	BinaryPath  string // resolved binary path if found in $PATH
@@ -33,12 +39,13 @@ func All() []Harness {
 		detectClaudeCode(home),
 		detectCodex(home),
 		detectGeminiCLI(home),
+		detectAntigravity(home),
 	}
 }
 
 // Detected returns only the harnesses present on this machine.
 func Detected() []Harness {
-	out := make([]Harness, 0, 3)
+	out := make([]Harness, 0, 4)
 	for _, h := range All() {
 		if h.Detected {
 			out = append(out, h)
@@ -110,6 +117,43 @@ func detectGeminiCLI(home string) Harness {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".gemini")); err == nil {
 		h.Detected = true
+	}
+	return h
+}
+
+func detectAntigravity(home string) Harness {
+	h := Harness{
+		Name:        "antigravity",
+		DisplayName: "Google Antigravity",
+		// Antigravity's canonical config root is ~/.gemini/config (it writes
+		// a migration marker at ~/.gemini/config/.migrated on first run).
+		// Global user-scope skills live under that config dir, and per the
+		// official docs each is a folder containing SKILL.md.
+		SkillDir: filepath.Join(home, ".gemini", "config", "skills"),
+		// AgentDir is set for struct consistency but unused: Antigravity
+		// agent install is gated off (see agentinstall.supportsAgentInstall),
+		// pending verification of its subagent loader path — same posture as
+		// Codex. Only the skill dir above is written today.
+		AgentDir: filepath.Join(home, ".gemini", "config", "agents"),
+	}
+	// Detect via the Antigravity binaries (CLI `agy`, IDE `antigravity-ide`)
+	// or its app-data dirs. Deliberately NOT keyed off a bare ~/.gemini —
+	// that is shared with Gemini CLI; the antigravity-ide subdir / app-data
+	// dir disambiguates so the two hosts are never conflated.
+	for _, bin := range []string{"agy", "antigravity-ide"} {
+		if p, err := exec.LookPath(bin); err == nil {
+			h.Detected = true
+			h.BinaryPath = p
+			break
+		}
+	}
+	for _, dir := range []string{
+		filepath.Join(home, ".gemini", "antigravity-ide"),
+		filepath.Join(home, ".antigravity-ide"),
+	} {
+		if _, err := os.Stat(dir); err == nil {
+			h.Detected = true
+		}
 	}
 	return h
 }
