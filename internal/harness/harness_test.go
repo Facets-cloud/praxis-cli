@@ -135,7 +135,9 @@ func TestSkillDir_PerHarness(t *testing.T) {
 	}{
 		{"claude-code", filepath.Join(home, ".claude", "skills")},
 		{"codex", filepath.Join(home, ".agents", "skills")},
-		{"gemini-cli", filepath.Join(home, ".gemini", "skills")},
+		// Gemini CLI shares Codex's ~/.agents/skills alias (both read it),
+		// so praxis writes once and Gemini never sees a duplicate.
+		{"gemini-cli", filepath.Join(home, ".agents", "skills")},
 		{"antigravity", filepath.Join(home, ".gemini", "config", "skills")},
 	}
 	for _, tt := range tests {
@@ -148,6 +150,24 @@ func TestSkillDir_PerHarness(t *testing.T) {
 				t.Errorf("SkillDir = %q, want %q", h.SkillDir, tt.want)
 			}
 		})
+	}
+}
+
+// TestSkillDir_CodexAndGeminiShareAlias is the load-bearing regression for
+// issue #9: Codex and Gemini CLI must resolve to the SAME SkillDir
+// (~/.agents/skills) so the install loop writes each skill once. If they
+// diverge again, Gemini re-emits one "Skill conflict detected" warning per
+// skill because it also scans that alias.
+func TestSkillDir_CodexAndGeminiShareAlias(t *testing.T) {
+	home := withIsolatedHome(t)
+	codex := mustByName(t, "codex")
+	gemini := mustByName(t, "gemini-cli")
+	if codex.SkillDir != gemini.SkillDir {
+		t.Errorf("codex SkillDir %q != gemini SkillDir %q — the two must share the alias to avoid conflict warnings",
+			codex.SkillDir, gemini.SkillDir)
+	}
+	if want := filepath.Join(home, ".agents", "skills"); gemini.SkillDir != want {
+		t.Errorf("gemini SkillDir = %q, want the shared alias %q", gemini.SkillDir, want)
 	}
 }
 

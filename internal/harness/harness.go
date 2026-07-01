@@ -3,11 +3,18 @@
 // here all support the Agent Skills open standard at user scope, so
 // `praxis skill install` writes the same SKILL.md to each detected one.
 //
-// Google Antigravity and Gemini CLI both root their config under
-// ~/.gemini, but at different skill dirs: Gemini CLI reads ~/.gemini/skills
-// while Antigravity reads ~/.gemini/config/skills (its config root, marked
-// by ~/.gemini/config/.migrated). They are detected by distinct signals so
-// a bare ~/.gemini does not misattribute one for the other.
+// Both Codex and Gemini CLI read skills from the ~/.agents/skills open-
+// standard alias, so they share that SkillDir — the install loop dedupes
+// by SkillDir and writes once. Gemini CLI ALSO scans its native
+// ~/.gemini/skills, and warns ("Skill conflict detected") whenever the
+// same skill resolves from two locations; routing Gemini through the
+// shared alias (instead of writing to both) is what avoids that warning.
+//
+// Google Antigravity roots its config under ~/.gemini too, but reads
+// skills from ~/.gemini/config/skills (its config root, marked by
+// ~/.gemini/config/.migrated) — distinct from Gemini CLI's dirs, so no
+// conflict. The two are detected by distinct signals so a bare ~/.gemini
+// does not misattribute one for the other.
 //
 // Cursor is intentionally NOT included: it has no user-scope skills
 // directory (only project-scope under .cursor/skills/), so it requires
@@ -108,8 +115,13 @@ func detectGeminiCLI(home string) Harness {
 	h := Harness{
 		Name:        "gemini-cli",
 		DisplayName: "Gemini CLI",
-		SkillDir:    filepath.Join(home, ".gemini", "skills"),
-		AgentDir:    filepath.Join(home, ".gemini", "agents"),
+		// Gemini CLI discovers user skills from BOTH ~/.gemini/skills and
+		// the ~/.agents/skills alias, and warns when the same skill shows
+		// up in two locations. We write only to the shared alias (the same
+		// dir Codex uses) so the skill resolves from exactly one place —
+		// no "Skill conflict detected" spam.
+		SkillDir: filepath.Join(home, ".agents", "skills"),
+		AgentDir: filepath.Join(home, ".gemini", "agents"),
 	}
 	if p, err := exec.LookPath("gemini"); err == nil {
 		h.Detected = true
