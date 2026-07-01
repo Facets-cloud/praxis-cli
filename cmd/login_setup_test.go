@@ -362,3 +362,46 @@ func TestRunPostAuthSetupAgentFetchFailureLeavesExistingInPlace(t *testing.T) {
 		t.Errorf("seeded agent file %s should still exist after fetch failure: %v", seededPath, err)
 	}
 }
+
+// TestInstallFetchedCatalog_RoutesMultiFileToTree verifies the install branch:
+// single-file skills go through installSkillBody (one SKILL.md), multi-file
+// skills go through installSkillTree with their supporting files attached.
+func TestInstallFetchedCatalog_RoutesMultiFileToTree(t *testing.T) {
+	hosts := []harness.Harness{{Name: "claude-code", SkillDir: t.TempDir(), Detected: true}}
+
+	var bodyCalls, treeCalls []string
+	var treeFiles []skillinstall.FileBody
+	origBody, origTree := installSkillBody, installSkillTree
+	installSkillBody = func(name, _ string, _ []harness.Harness) ([]skillinstall.Installation, error) {
+		bodyCalls = append(bodyCalls, name)
+		return []skillinstall.Installation{{SkillName: name, Harness: "claude-code", Path: "/x/SKILL.md"}}, nil
+	}
+	installSkillTree = func(name, _ string, files []skillinstall.FileBody, _ []harness.Harness) ([]skillinstall.Installation, error) {
+		treeCalls = append(treeCalls, name)
+		treeFiles = files
+		return []skillinstall.Installation{{SkillName: name, Harness: "claude-code", Path: "/x/SKILL.md"}}, nil
+	}
+	t.Cleanup(func() { installSkillBody, installSkillTree = origBody, origTree })
+
+	skills := []skillcatalog.Skill{
+		{Name: "plain", Content: "---\nname: plain\n---\nbody"},
+		{
+			Name:    "gcp",
+			Content: "---\nname: gcp\n---\nbody",
+			Files:   []skillcatalog.SkillFile{{Path: "catalog.md", Content: "c"}},
+		},
+	}
+
+	var buf bytes.Buffer
+	installFetchedCatalog(&buf, false, skills, hosts)
+
+	if len(bodyCalls) != 1 || bodyCalls[0] != "praxis-plain" {
+		t.Errorf("single-file should route to installSkillBody; got %v", bodyCalls)
+	}
+	if len(treeCalls) != 1 || treeCalls[0] != "praxis-gcp" {
+		t.Errorf("multi-file should route to installSkillTree; got %v", treeCalls)
+	}
+	if len(treeFiles) != 1 || treeFiles[0].Path != "catalog.md" {
+		t.Errorf("tree install should receive supporting files; got %v", treeFiles)
+	}
+}

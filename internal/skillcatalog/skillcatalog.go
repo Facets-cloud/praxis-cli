@@ -31,18 +31,34 @@ const (
 	defaultTimeout = 30 * time.Second
 )
 
+// SkillFile is one supporting file of a multi-file ("nested") skill. The
+// server sends these already brand-substituted; the CLI writes them verbatim
+// under the skill dir at Path (no frontmatter / no execution preamble — those
+// are SKILL.md-only). Path is a skill-relative POSIX path.
+type SkillFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
 // Skill is the wire shape returned by /v1/skills/bundle. Mirrors the
 // server's SkillResponse minus fields the CLI doesn't need.
 type Skill struct {
-	Name        string   `json:"name"`
-	DisplayName string   `json:"display_name"`
-	Description string   `json:"description"`
-	Icon        string   `json:"icon"`
-	Triggers    []string `json:"triggers"`
-	Scope       string   `json:"scope"` // global | organization | personal
-	Category    string   `json:"category,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Content     string   `json:"content"`
+	Name        string      `json:"name"`
+	DisplayName string      `json:"display_name"`
+	Description string      `json:"description"`
+	Icon        string      `json:"icon"`
+	Triggers    []string    `json:"triggers"`
+	Scope       string      `json:"scope"` // global | organization | personal
+	Category    string      `json:"category,omitempty"`
+	Tags        []string    `json:"tags,omitempty"`
+	Content     string      `json:"content"`
+	Files       []SkillFile `json:"files,omitempty"`
+}
+
+// IsMultiFile reports whether this skill carries supporting files and so must
+// be installed as a directory tree rather than a lone SKILL.md.
+func (s Skill) IsMultiFile() bool {
+	return len(s.Files) > 0
 }
 
 // PrefixedName is the on-disk skill folder name (e.g. praxis-incident-investigator).
