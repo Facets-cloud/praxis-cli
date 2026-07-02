@@ -116,6 +116,49 @@ func TestInstall_OnlySpecifiedHosts(t *testing.T) {
 	}
 }
 
+// TestInstallWithBody_SharedSkillDir_WritesOnceRecordsEach is the dedup half
+// of issue #9: when two hosts resolve to the SAME SkillDir (Codex and Gemini
+// both read ~/.agents/skills), the skill is written once but recorded under
+// each harness, so status/list report it as available to both.
+func TestInstallWithBody_SharedSkillDir_WritesOnceRecordsEach(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	shared := filepath.Join(t.TempDir(), "agents", "skills")
+	hosts := []harness.Harness{
+		{Name: "codex", DisplayName: "OpenAI Codex", Detected: true, SkillDir: shared},
+		{Name: "gemini-cli", DisplayName: "Gemini CLI", Detected: true, SkillDir: shared},
+	}
+
+	results, err := InstallWithBody("praxis-k8s", "body", hosts)
+	if err != nil {
+		t.Fatalf("InstallWithBody err = %v", err)
+	}
+	// One record per harness, both pointing at the single shared file.
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2 (one per harness)", len(results))
+	}
+	if results[0].Path != results[1].Path {
+		t.Errorf("shared-dir installs recorded different paths: %q vs %q", results[0].Path, results[1].Path)
+	}
+	if _, err := os.Stat(results[0].Path); err != nil {
+		t.Errorf("skill file missing at shared path: %v", err)
+	}
+
+	recorded, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorded) != 2 {
+		t.Errorf("receipt = %d entries, want 2 (reported under both harnesses)", len(recorded))
+	}
+	seen := map[string]bool{}
+	for _, e := range recorded {
+		seen[e.Harness] = true
+	}
+	if !seen["codex"] || !seen["gemini-cli"] {
+		t.Errorf("receipt missing a sharing harness: got %v", seen)
+	}
+}
+
 func TestUninstall_RemovesFilesAndReceiptEntries(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	hosts := fakeHosts(t)

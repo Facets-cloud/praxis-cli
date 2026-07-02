@@ -75,8 +75,8 @@ var loginCmd = &cobra.Command{
 	Long: `Single entry point for setup. Login does, in order:
 
   1. Install the praxis meta-skill into every detected AI host
-     (~/.claude/skills/praxis, ~/.agents/skills/praxis,
-      ~/.gemini/skills/praxis) — idempotent.
+     (~/.claude/skills/praxis, plus ~/.agents/skills/praxis — the
+      shared alias Codex and Gemini CLI both read) — idempotent.
   2. Reuse the active profile's stored token when it's still valid for
      this URL (no browser); otherwise open a browser to create a Praxis
      API key. Use --token to supply a key directly, or --force to always

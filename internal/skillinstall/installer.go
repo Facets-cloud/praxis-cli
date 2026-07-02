@@ -62,12 +62,15 @@ func Install(skillName string, hosts []harness.Harness) ([]Installation, error) 
 	return InstallWithBody(skillName, body, hosts)
 }
 
-// InstallTree writes a multi-file (tree) skill into every host's skill
-// directory, recreating the layout of fsys under <SkillDir>/<skillName>/.
-// The canonical recorded path is the SKILL.md at the tree root, so
-// list/status/uninstall treat a tree skill like any other installation.
-// Used for binary-embedded multi-file meta-skills.
-func InstallTree(skillName string, fsys fs.FS, hosts []harness.Harness) ([]Installation, error) {
+// installToHosts writes a skill once per unique SkillDir (via write, called
+// with <SkillDir>/<skillName>) and records an Installation under EVERY host,
+// then saves the receipt. Hosts that share a SkillDir — Codex and Gemini both
+// read ~/.agents/skills — resolve to the same dir, so the write runs once
+// while status/list still report the skill as available to each harness.
+// Writing per-harness would also needlessly churn (and briefly delete) a dir
+// a sibling harness just populated, since the tree writers clear it first.
+// The recorded path is always <dir>/SKILL.md.
+func installToHosts(skillName string, hosts []harness.Harness, write func(dir string) error) ([]Installation, error) {
 	receipt, err := loadReceipt()
 	if err != nil {
 		return nil, err
@@ -75,10 +78,14 @@ func InstallTree(skillName string, fsys fs.FS, hosts []harness.Harness) ([]Insta
 
 	now := time.Now().UTC()
 	results := make([]Installation, 0, len(hosts))
+	written := make(map[string]bool, len(hosts))
 	for _, h := range hosts {
 		dir := filepath.Join(h.SkillDir, skillName)
-		if err := writeTree(fsys, dir); err != nil {
-			return results, err
+		if !written[dir] {
+			if err := write(dir); err != nil {
+				return results, err
+			}
+			written[dir] = true
 		}
 		install := Installation{
 			SkillName:   skillName,
@@ -94,6 +101,17 @@ func InstallTree(skillName string, fsys fs.FS, hosts []harness.Harness) ([]Insta
 		return results, fmt.Errorf("save receipt: %w", err)
 	}
 	return results, nil
+}
+
+// InstallTree writes a multi-file (tree) skill into every host's skill
+// directory, recreating the layout of fsys under <SkillDir>/<skillName>/.
+// The canonical recorded path is the SKILL.md at the tree root, so
+// list/status/uninstall treat a tree skill like any other installation.
+// Used for binary-embedded multi-file meta-skills.
+func InstallTree(skillName string, fsys fs.FS, hosts []harness.Harness) ([]Installation, error) {
+	return installToHosts(skillName, hosts, func(dir string) error {
+		return writeTree(fsys, dir)
+	})
 }
 
 // writeTree replaces dstDir with the contents of fsys, recreating
@@ -134,36 +152,16 @@ func writeTree(fsys fs.FS, dstDir string) error {
 // arrives from the server's /v1/skills/bundle endpoint and isn't
 // embedded in the binary.
 func InstallWithBody(skillName, body string, hosts []harness.Harness) ([]Installation, error) {
-	receipt, err := loadReceipt()
-	if err != nil {
-		return nil, err
-	}
-
-	now := time.Now().UTC()
-	results := make([]Installation, 0, len(hosts))
-	for _, h := range hosts {
-		dir := filepath.Join(h.SkillDir, skillName)
+	return installToHosts(skillName, hosts, func(dir string) error {
 		if err := os.MkdirAll(dir, 0700); err != nil {
-			return results, fmt.Errorf("create %s: %w", dir, err)
+			return fmt.Errorf("create %s: %w", dir, err)
 		}
 		path := filepath.Join(dir, "SKILL.md")
 		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
-			return results, fmt.Errorf("write %s: %w", path, err)
+			return fmt.Errorf("write %s: %w", path, err)
 		}
-		install := Installation{
-			SkillName:   skillName,
-			Harness:     h.Name,
-			Path:        path,
-			InstalledAt: now,
-		}
-		results = append(results, install)
-		receipt = upsert(receipt, install)
-	}
-
-	if err := saveReceipt(receipt); err != nil {
-		return results, fmt.Errorf("save receipt: %w", err)
-	}
-	return results, nil
+		return nil
+	})
 }
 
 // FileBody is one supporting file of a multi-file skill, ready to write:
@@ -181,32 +179,9 @@ type FileBody struct {
 // and records the root SKILL.md as the canonical receipt path, so
 // list/status/uninstall treat it like any other installation.
 func InstallTreeWithBodies(skillName, primary string, files []FileBody, hosts []harness.Harness) ([]Installation, error) {
-	receipt, err := loadReceipt()
-	if err != nil {
-		return nil, err
-	}
-
-	now := time.Now().UTC()
-	results := make([]Installation, 0, len(hosts))
-	for _, h := range hosts {
-		dir := filepath.Join(h.SkillDir, skillName)
-		if err := writeBodies(dir, primary, files); err != nil {
-			return results, err
-		}
-		install := Installation{
-			SkillName:   skillName,
-			Harness:     h.Name,
-			Path:        filepath.Join(dir, "SKILL.md"),
-			InstalledAt: now,
-		}
-		results = append(results, install)
-		receipt = upsert(receipt, install)
-	}
-
-	if err := saveReceipt(receipt); err != nil {
-		return results, fmt.Errorf("save receipt: %w", err)
-	}
-	return results, nil
+	return installToHosts(skillName, hosts, func(dir string) error {
+		return writeBodies(dir, primary, files)
+	})
 }
 
 // writeBodies replaces dstDir with a SKILL.md (primary) plus the given

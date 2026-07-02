@@ -405,3 +405,130 @@ func TestInstallFetchedCatalog_RoutesMultiFileToTree(t *testing.T) {
 		t.Errorf("tree install should receive supporting files; got %v", treeFiles)
 	}
 }
+
+// TestRunPostAuthSetup_EndToEnd_NoGeminiConflict is the full inside-out proof
+// for issue #9. It drives the REAL runPostAuthSetup — real harness detection,
+// real meta-skill embed install, real catalog install — on a simulated
+// Codex+Gemini machine. Only the network seams (catalog/agents/MCP) are
+// stubbed. It then asserts the exact condition Gemini CLI warns on — the same
+// skill name resolving from BOTH ~/.gemini/skills and ~/.agents/skills — is
+// never created: every praxis skill lives only at the shared alias, and
+// nothing praxis-managed is written to ~/.gemini/skills.
+func TestRunPostAuthSetup_EndToEnd_NoGeminiConflict(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", "") // detection is dir-based only — deterministic, ignores the dev machine
+	stubMCPManifestFetch(t)
+
+	geminiSkills := filepath.Join(home, ".gemini", "skills")
+	agentsSkills := filepath.Join(home, ".agents", "skills")
+
+	// Simulate a machine with BOTH Codex (~/.codex) and Gemini CLI (~/.gemini).
+	mustMkdir(t, filepath.Join(home, ".codex"))
+	mustMkdir(t, filepath.Join(home, ".gemini"))
+
+	// A skill the user authored by hand in Gemini's own dir — praxis must never
+	// touch it (we only ever write to the shared alias now).
+	seedSkillFile(t, geminiSkills, "user-own")
+
+	// Confirm the premise: real detection sees Codex + Gemini sharing the alias.
+	det := harness.Detected()
+	byName := map[string]harness.Harness{}
+	for _, h := range det {
+		byName[h.Name] = h
+	}
+	if _, ok := byName["codex"]; !ok {
+		t.Fatalf("premise broken: Codex not detected; got %v", det)
+	}
+	if _, ok := byName["gemini-cli"]; !ok {
+		t.Fatalf("premise broken: Gemini not detected; got %v", det)
+	}
+	if byName["codex"].SkillDir != agentsSkills || byName["gemini-cli"].SkillDir != agentsSkills {
+		t.Fatalf("premise broken: codex=%q gemini=%q, both want %q",
+			byName["codex"].SkillDir, byName["gemini-cli"].SkillDir, agentsSkills)
+	}
+
+	// Stub only the network seams. Catalog returns one real single-file skill;
+	// agents empty. Install/detection/migration all run for real.
+	origFetch, origAgents := fetchCatalog, fetchAgents
+	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) {
+		return []skillcatalog.Skill{{Name: "cloudops", Content: "---\nname: cloudops\n---\nbody"}}, nil
+	}
+	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) { return nil, nil }
+	t.Cleanup(func() { fetchCatalog, fetchAgents = origFetch, origAgents })
+
+	var buf bytes.Buffer
+	runPostAuthSetup(&buf, false, "https://x.test", "tok")
+
+	// 1. The catalog skill and both metas installed at the shared alias.
+	for _, name := range []string{"praxis-cloudops", "praxis", "praxis-memory"} {
+		if _, err := os.Stat(filepath.Join(agentsSkills, name, "SKILL.md")); err != nil {
+			t.Errorf("%s not installed at the alias %s: %v", name, agentsSkills, err)
+		}
+	}
+
+	// 2. THE INVARIANT: nothing praxis-managed may remain under ~/.gemini/skills —
+	// that dir is the second location Gemini scans, so any praxis-* there is a
+	// conflict source. The user's own skill must still be present.
+	remaining := listDirNames(t, geminiSkills)
+	for _, name := range remaining {
+		if name == "praxis" || strings.HasPrefix(name, "praxis-") {
+			t.Errorf("praxis skill %q still in ~/.gemini/skills — Gemini would warn on it", name)
+		}
+	}
+	if !sliceHas(remaining, "user-own") {
+		t.Errorf("user's own skill was wrongly swept from ~/.gemini/skills; remaining=%v", remaining)
+	}
+
+	// 3. The precise Gemini conflict predicate: no praxis skill name appears in
+	// BOTH scanned dirs at once.
+	geminiSet := map[string]bool{}
+	for _, n := range remaining {
+		geminiSet[n] = true
+	}
+	for _, n := range listDirNames(t, agentsSkills) {
+		if (n == "praxis" || strings.HasPrefix(n, "praxis-")) && geminiSet[n] {
+			t.Errorf("skill %q resolves from BOTH ~/.agents/skills and ~/.gemini/skills — the exact #9 conflict", n)
+		}
+	}
+}
+
+func mustMkdir(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedSkillFile(t *testing.T, base, name string) {
+	t.Helper()
+	mustMkdir(t, filepath.Join(base, name))
+	if err := os.WriteFile(filepath.Join(base, name, "SKILL.md"), []byte("---\nname: "+name+"\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func listDirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+func sliceHas(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}

@@ -121,9 +121,9 @@ flow — useful when you're already logged in and just want to:
     (so AI hosts see the new on-disk content immediately)
 
 By default this installs at USER level — the host's home-scope skill
-dir (~/.claude/skills, ~/.agents/skills, ~/.gemini/skills) — so the
-skills apply across every repo. Pass --project to scope the install to
-the current repo instead, writing to <cwd>/.claude/skills (and the
+dir (~/.claude/skills, and ~/.agents/skills shared by Codex and Gemini
+CLI) — so the skills apply across every repo. Pass --project to scope
+the install to the current repo instead, writing to <cwd>/.claude/skills (and the
 equivalent per-host project dirs). Use --project when you only want
 Praxis skills active inside one repository and not globally.
 
