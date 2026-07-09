@@ -22,8 +22,17 @@ var gitCredentialCmd = &cobra.Command{
 	Long: `Implements git's credential-helper protocol. Configure git with:
 
   git config --global credential.https://github.com.helper "!praxis git-credential"
+  git config --global credential.https://github.com.useHttpPath true
 
-On 'get', it reads the requested host/path from stdin and returns a
+Scope the helper to https://github.com as shown. An unscoped
+'credential.helper' is invoked by git for every host, and this helper only
+ever mints for GitHub — it emits nothing for other hosts so git falls through.
+
+'useHttpPath' is what makes git send the repository path (e.g.
+owner/repo.git); without it git sends only the host, so the mint request
+carries no repo and cannot be scoped or audited per-repository.
+
+On 'get', it reads the requested protocol/host/path from stdin and returns a
 short-lived, org-brokered token (username x-access-token). 'store' and 'erase'
 are no-ops because the token is ephemeral — nothing is persisted on the laptop.`,
 	Args: cobra.ExactArgs(1),
@@ -44,14 +53,47 @@ func resolveGateway() (string, string, error) {
 	return active.Profile.URL, active.Profile.Token, nil
 }
 
+// isGitHubHost reports whether a brokered GitHub token may be handed to host.
+//
+// git invokes a credential helper for whatever host it is talking to. If the
+// helper is configured unscoped (`credential.helper` rather than
+// `credential.https://github.com.helper`), a push to any other host would
+// otherwise receive our GitHub token. Fail closed on anything unrecognized.
+func isGitHubHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "" {
+		return false
+	}
+	// Strip any :port git may append.
+	if i := strings.IndexByte(h, ':'); i > 0 {
+		h = h[:i]
+	}
+	return h == "github.com" ||
+		strings.HasSuffix(h, ".github.com") || // github.com subdomains
+		strings.HasSuffix(h, ".ghe.com") // GitHub Enterprise Cloud
+}
+
 // runGitCredential handles one credential-helper invocation.
 func runGitCredential(out io.Writer, in io.Reader, op string, gw func() (string, string, error)) error {
-	if op != "get" {
-		// store / erase: ephemeral tokens, nothing to persist or revoke.
+	switch op {
+	case "get":
+		// handled below
+	case "store", "erase":
+		// Ephemeral tokens: nothing to persist or revoke.
 		return nil
+	default:
+		return fmt.Errorf("unsupported credential operation %q (want get, store, or erase)", op)
 	}
 
 	attrs := parseCredentialInput(in)
+
+	// Never mint for a host that isn't GitHub, or over plaintext. Emitting
+	// nothing and exiting 0 is git's protocol for "this helper has no
+	// credentials" — git then falls through to the next helper.
+	if attrs["protocol"] != "https" || !isGitHubHost(attrs["host"]) {
+		return nil
+	}
+
 	body, _ := json.Marshal(map[string]string{
 		"host": attrs["host"],
 		"path": attrs["path"],
