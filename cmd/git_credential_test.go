@@ -72,7 +72,11 @@ func TestGitCredentialGet_ParsesHostAndPath(t *testing.T) {
 // Verified with a real `git ls-remote https://gitlab.com/...`, which feeds the
 // helper `host=gitlab.com`. Minting there would hand a GitHub token to a third
 // party, so non-GitHub hosts must never reach the gateway.
-func TestGitCredentialGet_RefusesNonGitHubHosts(t *testing.T) {
+// assertSilentFallThrough runs `get` with the given credential input and
+// requires the helper to emit nothing, error nothing, and never reach the
+// gateway — git's protocol for "this helper has no credentials".
+func assertSilentFallThrough(t *testing.T, protocol, host string) {
+	t.Helper()
 	orig := callMCP
 	defer func() { callMCP = orig }()
 	called := false
@@ -81,58 +85,52 @@ func TestGitCredentialGet_RefusesNonGitHubHosts(t *testing.T) {
 		return nil, 200, nil
 	}
 
-	for _, host := range []string{"gitlab.com", "evil.example.com", "github.com.evil.test", ""} {
-		var out bytes.Buffer
-		in := strings.NewReader("protocol=https\nhost=" + host + "\n\n")
-		if err := runGitCredential(&out, in, "get",
-			func() (string, string, error) { return "https://gw", "tok", nil }); err != nil {
-			t.Fatalf("host %q: expected silent fall-through, got err %v", host, err)
-		}
-		if called {
-			t.Fatalf("host %q: helper must not call the gateway", host)
-		}
-		if out.Len() != 0 {
-			t.Fatalf("host %q: must emit no credential, got %q", host, out.String())
-		}
+	var out bytes.Buffer
+	in := strings.NewReader("protocol=" + protocol + "\nhost=" + host + "\n\n")
+	if err := runGitCredential(&out, in, "get",
+		func() (string, string, error) { return "https://gw", "tok", nil }); err != nil {
+		t.Fatalf("expected silent fall-through, got err %v", err)
+	}
+	if called {
+		t.Fatal("helper must not call the gateway")
+	}
+	if out.Len() != 0 {
+		t.Fatalf("must emit no credential, got %q", out.String())
 	}
 }
 
-func TestGitCredentialGet_AllowsGitHubHosts(t *testing.T) {
-	orig := callMCP
-	defer func() { callMCP = orig }()
-	callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
-		env := `{"content":[{"type":"text","text":"{\"username\":\"x-access-token\",\"password\":\"ghs_abc\"}"}]}`
-		return []byte(env), 200, nil
-	}
-	for _, host := range []string{"github.com", "GitHub.COM", "acme.ghe.com"} {
-		var out bytes.Buffer
-		in := strings.NewReader("protocol=https\nhost=" + host + "\n\n")
-		if err := runGitCredential(&out, in, "get",
-			func() (string, string, error) { return "https://gw", "tok", nil }); err != nil {
-			t.Fatalf("host %q: %v", host, err)
-		}
-		if !strings.Contains(out.String(), "password=ghs_abc") {
-			t.Fatalf("host %q: expected a credential, got %q", host, out.String())
-		}
+func TestGitCredentialGet_RefusesNonGitHubHosts(t *testing.T) {
+	// "github.com.evil.test" is the suffix trap; "" is a missing host.
+	for _, host := range []string{"gitlab.com", "evil.example.com", "github.com.evil.test", ""} {
+		t.Run(host, func(t *testing.T) { assertSilentFallThrough(t, "https", host) })
 	}
 }
 
 func TestGitCredentialGet_RefusesNonHTTPSProtocol(t *testing.T) {
-	orig := callMCP
-	defer func() { callMCP = orig }()
-	called := false
-	callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
-		called = true
-		return nil, 200, nil
+	for _, proto := range []string{"http", "ssh", ""} {
+		t.Run(proto, func(t *testing.T) { assertSilentFallThrough(t, proto, "github.com") })
 	}
-	var out bytes.Buffer
-	in := strings.NewReader("protocol=http\nhost=github.com\n\n")
-	if err := runGitCredential(&out, in, "get",
-		func() (string, string, error) { return "https://gw", "tok", nil }); err != nil {
-		t.Fatalf("expected silent fall-through, got %v", err)
-	}
-	if called || out.Len() != 0 {
-		t.Fatalf("plaintext http must not mint (called=%v out=%q)", called, out.String())
+}
+
+func TestGitCredentialGet_AllowsGitHubHosts(t *testing.T) {
+	for _, host := range []string{"github.com", "GitHub.COM", "acme.ghe.com", "github.com:443"} {
+		t.Run(host, func(t *testing.T) {
+			orig := callMCP
+			defer func() { callMCP = orig }()
+			callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+				env := `{"content":[{"type":"text","text":"{\"username\":\"x-access-token\",\"password\":\"ghs_abc\"}"}]}`
+				return []byte(env), 200, nil
+			}
+			var out bytes.Buffer
+			in := strings.NewReader("protocol=https\nhost=" + host + "\n\n")
+			if err := runGitCredential(&out, in, "get",
+				func() (string, string, error) { return "https://gw", "tok", nil }); err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			if !strings.Contains(out.String(), "password=ghs_abc") {
+				t.Fatalf("expected a credential, got %q", out.String())
+			}
+		})
 	}
 }
 
@@ -143,6 +141,11 @@ func TestGitCredential_RejectsUnknownOperation(t *testing.T) {
 		func() (string, string, error) { return "https://gw", "tok", nil })
 	if err == nil {
 		t.Fatal("unknown operation must return an error, not silently succeed")
+	}
+	// Assert on content so an unrelated error can't make this pass.
+	if !strings.Contains(err.Error(), "unsupported credential operation") ||
+		!strings.Contains(err.Error(), `"gte"`) {
+		t.Fatalf("error should name the unsupported op, got: %v", err)
 	}
 	if out.Len() != 0 {
 		t.Fatalf("unknown operation must emit nothing, got %q", out.String())
