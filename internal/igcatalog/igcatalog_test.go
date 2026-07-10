@@ -366,8 +366,10 @@ func TestDownloadBundle_ReturnsBytesAndETag(t *testing.T) {
 
 func TestDownloadBundle_SendsIfNoneMatchAnd304IsNoOp(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if inm := r.Header.Get("If-None-Match"); inm != "sha256:current" {
-			t.Errorf("If-None-Match = %q; want sha256:current", inm)
+		// ifNoneMatch is passed in bare (as callers now store it, post
+		// unquoting); the wire header must be the properly quoted form.
+		if inm := r.Header.Get("If-None-Match"); inm != `"sha256:current"` {
+			t.Errorf("If-None-Match = %q; want the quoted validator %q", inm, `"sha256:current"`)
 		}
 		w.Header().Set("ETag", "sha256:current")
 		w.WriteHeader(http.StatusNotModified)
@@ -386,6 +388,99 @@ func TestDownloadBundle_SendsIfNoneMatchAnd304IsNoOp(t *testing.T) {
 	}
 	if etag != "sha256:current" {
 		t.Errorf("etag = %q", etag)
+	}
+}
+
+// --- DownloadBundle: ETag is quoted HTTP syntax, not data (RFC 9110) ---
+//
+// RFC 9110 §8.8.3: entity-tag = [ weak ] opaque-tag, opaque-tag = DQUOTE
+// *etagc DQUOTE. A real server's `ETag` header therefore always carries
+// literal surrounding double quotes, and MAY carry a leading `W/` for a
+// weak validator. Those are HTTP syntax, not catalog data: DownloadBundle
+// must strip them so callers only ever see the bare tag.
+
+func TestDownloadBundle_StripsQuotedETag(t *testing.T) {
+	const tarball = "\x1f\x8bfake-gzipped-tarball"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1.2.3"`)
+		_, _ = w.Write([]byte(tarball))
+	}))
+	defer srv.Close()
+
+	_, etag, notModified, err := DownloadBundle(srv.URL, "tok", "payments", "")
+	if err != nil {
+		t.Fatalf("DownloadBundle: %v", err)
+	}
+	if notModified {
+		t.Error("notModified should be false on 200")
+	}
+	if etag != "v1.2.3" {
+		t.Errorf("etag = %q; want the bare tag v1.2.3 with surrounding quotes stripped", etag)
+	}
+}
+
+func TestDownloadBundle_StripsWeakValidatorPrefix(t *testing.T) {
+	const tarball = "\x1f\x8bfake-gzipped-tarball"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `W/"v1.2.3"`)
+		_, _ = w.Write([]byte(tarball))
+	}))
+	defer srv.Close()
+
+	_, etag, _, err := DownloadBundle(srv.URL, "tok", "payments", "")
+	if err != nil {
+		t.Fatalf("DownloadBundle: %v", err)
+	}
+	if etag != "v1.2.3" {
+		t.Errorf("etag = %q; want the bare tag v1.2.3 with W/ and quotes stripped", etag)
+	}
+}
+
+func TestDownloadBundle_Strips304QuotedETag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1.2.3"`)
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+
+	_, etag, notModified, err := DownloadBundle(srv.URL, "tok", "payments", "v1.2.3")
+	if err != nil {
+		t.Fatalf("DownloadBundle: %v", err)
+	}
+	if !notModified {
+		t.Error("304 must report notModified=true")
+	}
+	if etag != "v1.2.3" {
+		t.Errorf("etag = %q; want the bare tag v1.2.3 on a 304 too", etag)
+	}
+}
+
+// TestDownloadBundle_SendsProperlyQuotedIfNoneMatch is the send-side half
+// of the fix: callers now pass a BARE digest (post-unquoting) as
+// ifNoneMatch, so DownloadBundle must re-quote it before putting it on the
+// wire — a bare unquoted token is not a valid If-None-Match value per RFC
+// 9110. Before the fix this "worked" only by accident: the stored digest
+// still carried its original quotes, so the bare-pass-through happened to
+// produce valid syntax. Once the digest is stored bare, skipping this
+// re-quote would break the 304 path against a real (spec-compliant) server.
+func TestDownloadBundle_SendsProperlyQuotedIfNoneMatch(t *testing.T) {
+	var gotINM string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotINM = r.Header.Get("If-None-Match")
+		w.Header().Set("ETag", `"v1.2.3"`)
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+
+	_, _, notModified, err := DownloadBundle(srv.URL, "tok", "payments", "v1.2.3")
+	if err != nil {
+		t.Fatalf("DownloadBundle: %v", err)
+	}
+	if !notModified {
+		t.Error("304 must report notModified=true")
+	}
+	if gotINM != `"v1.2.3"` {
+		t.Errorf("If-None-Match sent = %q; want the quoted validator %q (a bare token is invalid HTTP syntax)", gotINM, `"v1.2.3"`)
 	}
 }
 

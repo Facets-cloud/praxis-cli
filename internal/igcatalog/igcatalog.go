@@ -217,7 +217,7 @@ var DownloadBundle = func(baseURL, token, catalog, ifNoneMatch string) (body []b
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	if ifNoneMatch != "" {
-		req.Header.Set("If-None-Match", ifNoneMatch)
+		req.Header.Set("If-None-Match", quoteETag(ifNoneMatch))
 	}
 
 	client := &http.Client{Timeout: bundleTimeout}
@@ -228,7 +228,7 @@ var DownloadBundle = func(baseURL, token, catalog, ifNoneMatch string) (body []b
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotModified {
-		return nil, resp.Header.Get("ETag"), true, nil
+		return nil, unquoteETag(resp.Header.Get("ETag")), true, nil
 	}
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -237,7 +237,37 @@ var DownloadBundle = func(baseURL, token, catalog, ifNoneMatch string) (body []b
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", false, fmt.Errorf("HTTP %d from %s: %s", resp.StatusCode, full, truncate(string(raw), 200))
 	}
-	return raw, resp.Header.Get("ETag"), false, nil
+	return raw, unquoteETag(resp.Header.Get("ETag")), false, nil
+}
+
+// unquoteETag strips the surrounding double quotes an HTTP ETag header is
+// required to carry (RFC 9110 §8.8.3: entity-tag = [ weak ] opaque-tag,
+// opaque-tag = DQUOTE *etagc DQUOTE), plus a leading weak-validator "W/"
+// prefix if present, so callers only ever see the bare tag. Those quotes
+// are HTTP syntax, not catalog data: `praxis ig sync` used to store the
+// header verbatim, leaking `"` into .sync.json's digest/from fields and
+// therefore into `ig`'s human-facing provenance footer. A value that
+// isn't quoted (e.g. already-bare test fixtures) passes through
+// unchanged.
+func unquoteETag(raw string) string {
+	v := strings.TrimSpace(raw)
+	v = strings.TrimPrefix(v, "W/")
+	if len(v) >= 2 && strings.HasPrefix(v, `"`) && strings.HasSuffix(v, `"`) {
+		v = v[1 : len(v)-1]
+	}
+	return v
+}
+
+// quoteETag is unquoteETag's inverse for the send side: If-None-Match must
+// carry a properly quoted validator per RFC 9110, but callers now pass the
+// bare digest they read out of .sync.json (post unquoteETag). A value
+// that's already quoted (e.g. a digest cached before this fix shipped) is
+// left alone rather than double-quoted.
+func quoteETag(v string) string {
+	if v == "" || (len(v) >= 2 && strings.HasPrefix(v, `"`) && strings.HasSuffix(v, `"`)) {
+		return v
+	}
+	return `"` + v + `"`
 }
 
 // ManifestPush uploads the manifest text and its git sha. The server stamps

@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -211,6 +213,115 @@ func TestIgSync_NotModifiedIsCheapNoOp(t *testing.T) {
 	}
 	if gotINM != "sha256:old" {
 		t.Errorf("If-None-Match = %q; want the local digest sha256:old", gotINM)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "marker.txt")); err != nil || string(b) != "KEEP-ME" {
+		t.Errorf("304 must not re-extract; marker = %q err=%v", b, err)
+	}
+	st, _ := readSyncState(dir)
+	if st.SyncedAt != "2026-07-01T00:00:00Z" {
+		t.Errorf("304 must not rewrite .sync.json; got %+v", st)
+	}
+}
+
+// --- sync: ETag is quoted HTTP syntax, not catalog data (RFC 9110) -----
+//
+// These two hit a REAL httptest.Server rather than stubbing
+// igcatalog.DownloadBundle, so the actual net/http header round-trip is
+// exercised end to end: a real server's `ETag` header is a *quoted*
+// string (RFC 9110 §8.8.3), e.g. `ETag: "v1.2.3"`. syncOne must store the
+// bare tag — no quotes — in .sync.json's digest/from fields, since a
+// human reads `from` in ig's provenance footer and quotes there are HTTP
+// syntax leaking into displayed data.
+
+func TestIgSync_StripsQuotedETagIntoDigestAndFrom(t *testing.T) {
+	igHomeDir := t.TempDir()
+	t.Setenv("IG_HOME", igHomeDir)
+	resetIgFlags()
+	defer resetIgFlags()
+
+	tarball := makeTarGz(t, map[string]string{
+		"metadata.json": `{"catalog":"payments"}`,
+		"graph.json":    `{"root":true}`,
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1.2.3"`)
+		_, _ = w.Write(tarball)
+	}))
+	defer srv.Close()
+
+	active := credentials.Active{
+		Name:    "acme",
+		Profile: credentials.Profile{URL: srv.URL, Token: "tok", Username: "u@x.com"},
+		Loaded:  true,
+	}
+	if _, err := syncOne(active, "payments"); err != nil {
+		t.Fatalf("syncOne: %v", err)
+	}
+
+	dir := filepath.Join(igHomeDir, "projects", "payments")
+	st, ok := readSyncState(dir)
+	if !ok {
+		t.Fatal(".sync.json was not written")
+	}
+	if st.Digest != "v1.2.3" {
+		t.Errorf("digest = %q; want the bare tag v1.2.3 with no quotes", st.Digest)
+	}
+	if st.From != "praxis@acme:payments@v1.2.3" {
+		t.Errorf("from = %q; want praxis@acme:payments@v1.2.3 with no quotes", st.From)
+	}
+}
+
+// TestIgSync_ReSyncSendsQuotedIfNoneMatchAndTreats304AsUpToDate is the
+// send-side half: once the stored digest is bare (post-fix), re-syncing
+// must re-quote it before sending If-None-Match — a bare unquoted token
+// is invalid HTTP syntax and a spec-compliant server need not honor it —
+// and a resulting 304 must still be treated as "already current" with no
+// re-extract.
+func TestIgSync_ReSyncSendsQuotedIfNoneMatchAndTreats304AsUpToDate(t *testing.T) {
+	igHomeDir := t.TempDir()
+	t.Setenv("IG_HOME", igHomeDir)
+	resetIgFlags()
+	defer resetIgFlags()
+
+	dir := filepath.Join(igHomeDir, "projects", "payments")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "marker.txt"), []byte("KEEP-ME"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A catalog already synced by the FIXED code: the stored digest is
+	// bare, no quotes.
+	if err := writeSyncState(dir, syncState{
+		SyncedAt: "2026-07-01T00:00:00Z", Digest: "v1.2.3",
+		From: "praxis@default:payments@v1.2.3", Refresh: "praxis ig sync payments",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotINM string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotINM = r.Header.Get("If-None-Match")
+		w.Header().Set("ETag", `"v1.2.3"`)
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+
+	active := credentials.Active{
+		Name:    "default",
+		Profile: credentials.Profile{URL: srv.URL, Token: "tok", Username: "u@x.com"},
+		Loaded:  true,
+	}
+	upToDate, err := syncOne(active, "payments")
+	if err != nil {
+		t.Fatalf("syncOne: %v", err)
+	}
+	if !upToDate {
+		t.Error("304 must report up-to-date")
+	}
+	if gotINM != `"v1.2.3"` {
+		t.Errorf("If-None-Match sent = %q; want the properly quoted validator %q", gotINM, `"v1.2.3"`)
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "marker.txt")); err != nil || string(b) != "KEEP-ME" {
 		t.Errorf("304 must not re-extract; marker = %q err=%v", b, err)
