@@ -40,6 +40,14 @@ const igDefaultHome = ".ig"
 // exits non-zero — CI depends on this.
 var errBundleMismatch = errors.New("bundle digest mismatch")
 
+// errBundleContract marks a downloaded bundle whose extracted tree violates
+// the archive contract: metadata.json MUST sit at the tree root. sync
+// refuses to swap such a tree into place and exits non-zero. Silently
+// tolerating a malformed bundle is exactly what once materialized a broken,
+// double-nested catalog (projects/<c>/<c>/metadata.json) that `ig status`
+// then reported as NO_METADATA while praxis claimed success.
+var errBundleContract = errors.New("bundle contract violation")
+
 // maxMemberFileBytes bounds a single extracted file so a malformed or
 // hostile bundle can't exhaust the disk. Catalog members are JSON graphs;
 // this is a generous ceiling, not a normal size.
@@ -211,6 +219,13 @@ func syncOne(active credentials.Active, catalog string) (upToDate bool, err erro
 	if err := extractTarGz(body, tmp); err != nil {
 		return false, err
 	}
+	// Enforce the archive contract on the freshly-extracted tree BEFORE any
+	// swap: metadata.json MUST sit at the root. A malformed bundle fails
+	// here, the deferred cleanup drops the temp dir, and the live tree at
+	// `dir` is never touched.
+	if err := validateBundleTree(tmp, catalog); err != nil {
+		return false, err
+	}
 	state := syncState{
 		SyncedAt: nowFn().UTC().Format(time.RFC3339),
 		Digest:   etag,
@@ -342,6 +357,42 @@ func withinDir(base, target string) bool {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// validateBundleTree enforces the ig archive contract on a freshly-extracted
+// tree, run BEFORE the tree is swapped into place. The bundle must carry the
+// catalog directory's *contents* — metadata.json at the archive root, plus
+// member/<m>/graphify-out/graph.json and catalog/graphify-out/graph.json — so
+// a valid tree always has metadata.json at its root.
+//
+// The failure we hit in production: the server emitted entries prefixed with
+// the catalog name (`<catalog>/metadata.json`, ...), which extracts to
+// `<catalog>/metadata.json` and, once swapped in, becomes the double-nested
+// projects/<catalog>/<catalog>/metadata.json that `ig status` calls
+// NO_METADATA. We diagnose that exact shape specifically.
+//
+// We deliberately do NOT strip the prefix to "fix it up": silently tolerating
+// a malformed bundle is precisely what let the broken tree ship and would
+// hide the next server regression. Fail loudly instead.
+func validateBundleTree(dir, catalog string) error {
+	if isRegularFile(filepath.Join(dir, "metadata.json")) {
+		return nil
+	}
+	// The exact shape of the bug: the tree is rooted at a single directory
+	// named after the catalog, with metadata.json one level down.
+	if isRegularFile(filepath.Join(dir, catalog, "metadata.json")) {
+		return fmt.Errorf("%w: bundle for catalog %q has no metadata.json at its root; it appears to be rooted at %s/ instead, so the server is emitting a catalog-prefixed archive. Expected the catalog directory's contents (metadata.json at the archive root), not a %s/ directory",
+			errBundleContract, catalog, catalog, catalog)
+	}
+	return fmt.Errorf("%w: bundle for catalog %q has no metadata.json at its root; the archive does not match the ig catalog contract",
+		errBundleContract, catalog)
+}
+
+// isRegularFile reports whether path is an existing regular file (not a
+// directory or other node).
+func isRegularFile(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().IsRegular()
 }
 
 // sanitizeTemp keeps the temp-dir suffix filesystem-safe for catalog names
@@ -521,6 +572,11 @@ live tree.`,
 				if errors.Is(err, errBundleMismatch) {
 					render.PrintError(out, asJSON, fmt.Sprintf("sync %q: %v", c, err),
 						"refusing to replace the local catalog on a digest mismatch", exitcode.Error)
+					os.Exit(exitcode.Error)
+				}
+				if errors.Is(err, errBundleContract) {
+					render.PrintError(out, asJSON, fmt.Sprintf("sync %q: %v", c, err),
+						"the server sent a malformed catalog bundle; the local catalog was left untouched", exitcode.Error)
 					os.Exit(exitcode.Error)
 				}
 				return reportHTTPErr(out, active.Name, err)

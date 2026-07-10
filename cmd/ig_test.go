@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -105,6 +106,7 @@ func TestIgSync_WritesSyncStateAndComposesRefresh(t *testing.T) {
 	defer resetIgFlags()
 
 	tarball := makeTarGz(t, map[string]string{
+		"metadata.json":         `{"catalog":"payments"}`,
 		"graph.json":            `{"root":true}`,
 		"member/api/graph.json": `{"m":"api"}`,
 	})
@@ -276,7 +278,7 @@ func TestIgSync_ReplacesExistingTreeCleanly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tarball := makeTarGz(t, map[string]string{"NEW.txt": "new"})
+	tarball := makeTarGz(t, map[string]string{"metadata.json": `{"catalog":"payments"}`, "NEW.txt": "new"})
 	etag := sha256Etag(tarball)
 	orig := igcatalog.DownloadBundle
 	igcatalog.DownloadBundle = func(_, _, _, inm string) ([]byte, string, bool, error) {
@@ -308,6 +310,122 @@ func TestIgSync_ReplacesExistingTreeCleanly(t *testing.T) {
 		if strings.Contains(e.Name(), ".bak") {
 			t.Errorf("leftover backup dir: %s", e.Name())
 		}
+	}
+}
+
+// --- sync: enforces the archive contract (metadata.json at the root) ---
+
+// A well-formed bundle carries the catalog directory's *contents*:
+// metadata.json at the archive root plus member/<m>/graphify-out/graph.json.
+// It must swap in cleanly and leave metadata.json readable at the tree root.
+func TestIgSync_GoodBundleWithMetadataAtRootSwapsIn(t *testing.T) {
+	igHomeDir := t.TempDir()
+	t.Setenv("IG_HOME", igHomeDir)
+	resetIgFlags()
+	defer resetIgFlags()
+
+	tarball := makeTarGz(t, map[string]string{
+		"metadata.json":                      `{"catalog":"capillary-cloud"}`,
+		"member/api/graphify-out/graph.json": `{"m":"api"}`,
+		"catalog/graphify-out/graph.json":    `{"root":true}`,
+	})
+	etag := sha256Etag(tarball)
+	orig := igcatalog.DownloadBundle
+	igcatalog.DownloadBundle = func(_, _, _, _ string) ([]byte, string, bool, error) {
+		return tarball, etag, false, nil
+	}
+	defer func() { igcatalog.DownloadBundle = orig }()
+
+	if _, err := syncOne(testActive(), "capillary-cloud"); err != nil {
+		t.Fatalf("good bundle should sync: %v", err)
+	}
+	dir := filepath.Join(igHomeDir, "projects", "capillary-cloud")
+	if b, err := os.ReadFile(filepath.Join(dir, "metadata.json")); err != nil || string(b) != `{"catalog":"capillary-cloud"}` {
+		t.Errorf("metadata.json must land at the catalog root: %q err=%v", b, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "member", "api", "graphify-out", "graph.json")); err != nil || string(b) != `{"m":"api"}` {
+		t.Errorf("member graph missing after sync: %q err=%v", b, err)
+	}
+	// The double-nest must NOT be present.
+	if _, err := os.Stat(filepath.Join(dir, "capillary-cloud")); err == nil {
+		t.Error("catalog should not be double-nested under itself")
+	}
+}
+
+// A malformed bundle must be rejected AFTER extraction but BEFORE the swap,
+// so the pre-existing live tree is left untouched and readable. The two
+// shapes we guard against:
+//   - a catalog-prefixed archive (<catalog>/metadata.json, ...) — the exact
+//     double-nesting regression we hit in production;
+//   - an archive with no metadata.json anywhere.
+func TestIgSync_RejectsMalformedBundleAndKeepsLiveTree(t *testing.T) {
+	cases := []struct {
+		name        string
+		files       map[string]string
+		wantInError string
+	}{
+		{
+			name: "catalog-prefixed archive",
+			files: map[string]string{
+				"capillary-cloud/metadata.json":                      `{"catalog":"capillary-cloud"}`,
+				"capillary-cloud/member/api/graphify-out/graph.json": `{"m":"api"}`,
+			},
+			wantInError: "catalog-prefixed",
+		},
+		{
+			name: "no metadata.json anywhere",
+			files: map[string]string{
+				"member/api/graphify-out/graph.json": `{"m":"api"}`,
+			},
+			wantInError: "no metadata.json",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			igHomeDir := t.TempDir()
+			t.Setenv("IG_HOME", igHomeDir)
+			resetIgFlags()
+			defer resetIgFlags()
+
+			// Seed a healthy, readable live tree that MUST survive.
+			dir := filepath.Join(igHomeDir, "projects", "capillary-cloud")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(`LIVE-KEEP-ME`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeSyncState(dir, syncState{Digest: "sha256:old"}); err != nil {
+				t.Fatal(err)
+			}
+
+			tarball := makeTarGz(t, tc.files)
+			etag := sha256Etag(tarball)
+			orig := igcatalog.DownloadBundle
+			igcatalog.DownloadBundle = func(_, _, _, _ string) ([]byte, string, bool, error) {
+				return tarball, etag, false, nil
+			}
+			defer func() { igcatalog.DownloadBundle = orig }()
+
+			_, err := syncOne(testActive(), "capillary-cloud")
+			if err == nil {
+				t.Fatal("malformed bundle was silently accepted; want a non-nil contract error")
+			}
+			if !errors.Is(err, errBundleContract) {
+				t.Errorf("error = %v; want errBundleContract", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantInError) {
+				t.Errorf("error %q must mention %q", err.Error(), tc.wantInError)
+			}
+
+			// The live tree is untouched and still readable.
+			if b, err := os.ReadFile(filepath.Join(dir, "metadata.json")); err != nil || string(b) != "LIVE-KEEP-ME" {
+				t.Errorf("live tree must survive a rejected sync; metadata.json = %q err=%v", b, err)
+			}
+			if st, _ := readSyncState(dir); st.Digest != "sha256:old" {
+				t.Errorf("rejected sync must not rewrite .sync.json; got %+v", st)
+			}
+		})
 	}
 }
 
