@@ -149,6 +149,15 @@ func TestGetCatalog_404SurfacesError(t *testing.T) {
 }
 
 // --- Claims ------------------------------------------------------------
+//
+// The live server returns an ENVELOPE — {"git":<url>,"catalogs":[...]} — not
+// a bare array of catalog names. Decoding it as []string is exactly the bug
+// that made `praxis ig claims` die with
+//
+//	network error: parse response: json: cannot unmarshal object into Go value of type []string
+//
+// Claims must peel the envelope and hand callers the catalog names so repo CI
+// can loop over them.
 
 func TestClaims_EncodesGitAndReturnsNames(t *testing.T) {
 	const git = "https://github.com/acme/api.git"
@@ -157,7 +166,7 @@ func TestClaims_EncodesGitAndReturnsNames(t *testing.T) {
 		if r.URL.Query().Get("git") != git {
 			t.Errorf("git = %q; want %q", r.URL.Query().Get("git"), git)
 		}
-		_, _ = w.Write([]byte(`["payments","identity"]`))
+		_, _ = w.Write([]byte(`{"git":"` + git + `","catalogs":["payments","identity"]}`))
 	}))
 	defer srv.Close()
 
@@ -167,6 +176,44 @@ func TestClaims_EncodesGitAndReturnsNames(t *testing.T) {
 	}
 	if len(got) != 2 || got[0] != "payments" || got[1] != "identity" {
 		t.Errorf("got = %+v", got)
+	}
+}
+
+// The exact live payload for control-plane (from live-shapes.txt): a single
+// claiming catalog. This is the byte-for-byte shape the broken client choked
+// on in production.
+func TestClaims_DecodesLiveEnvelope(t *testing.T) {
+	const git = "github.com/facets-cloud/control-plane"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertReq(t, r, http.MethodGet, "/ai-api/ig/catalogs/claims", "tok")
+		_, _ = w.Write([]byte(`{"git":"github.com/facets-cloud/control-plane","catalogs":["capillary-cloud"]}`))
+	}))
+	defer srv.Close()
+
+	got, err := Claims(srv.URL, "tok", git)
+	if err != nil {
+		t.Fatalf("Claims: %v", err)
+	}
+	if len(got) != 1 || got[0] != "capillary-cloud" {
+		t.Errorf("got = %+v; want [capillary-cloud]", got)
+	}
+}
+
+// A repo no catalog claims: the server still returns the envelope, with
+// catalogs absent or empty. Claims must yield an empty list, not an error.
+func TestClaims_UnclaimedRepoIsEmptyNotError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertReq(t, r, http.MethodGet, "/ai-api/ig/catalogs/claims", "tok")
+		_, _ = w.Write([]byte(`{"git":"github.com/acme/orphan"}`))
+	}))
+	defer srv.Close()
+
+	got, err := Claims(srv.URL, "tok", "github.com/acme/orphan")
+	if err != nil {
+		t.Fatalf("Claims: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got = %+v; want empty", got)
 	}
 }
 
@@ -344,14 +391,28 @@ func TestDownloadBundle_SendsIfNoneMatchAnd304IsNoOp(t *testing.T) {
 
 // --- Manifest push / pull ----------------------------------------------
 
-func TestManifestPush_SendsContentAndStamps(t *testing.T) {
+// The server's IgManifestPushRequest declares ONLY content + git_sha. The
+// server stamps pushed_by (from the bearer) and pushed_at (server time)
+// itself, so the client must not put them on the wire even though the cmd
+// layer hands ManifestPush a fully-populated Manifest for its local echo.
+func TestManifestPush_SendsOnlyContentAndGitSHA(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assertReq(t, r, http.MethodPost, "/ai-api/ig/catalogs/payments/manifest", "tok")
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("content-type = %q; want application/json", ct)
+		}
 		raw, _ := io.ReadAll(r.Body)
 		s := string(raw)
-		for _, want := range []string{`"content":"manifest-body"`, `"git_sha":"cafe42"`, `"pushed_by":"u@x.com"`} {
+		for _, want := range []string{`"content":"manifest-body"`, `"git_sha":"cafe42"`} {
 			if !strings.Contains(s, want) {
 				t.Errorf("push body missing %q\ngot: %s", want, s)
+			}
+		}
+		// Server-stamped fields must NOT be sent: they are not in the
+		// IgManifestPushRequest schema.
+		for _, forbidden := range []string{"pushed_by", "pushed_at", "u@x.com"} {
+			if strings.Contains(s, forbidden) {
+				t.Errorf("push body leaked server-stamped field %q\ngot: %s", forbidden, s)
 			}
 		}
 		w.WriteHeader(200)
@@ -366,10 +427,27 @@ func TestManifestPush_SendsContentAndStamps(t *testing.T) {
 	}
 }
 
+// git_sha is nullable/optional: when the manifest came from a non-git dir the
+// client omits it entirely rather than sending an empty string.
+func TestManifestPush_OmitsEmptyGitSHA(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		if s := string(raw); strings.Contains(s, "git_sha") {
+			t.Errorf("empty git_sha should be omitted; got: %s", s)
+		}
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	if err := ManifestPush(srv.URL, "tok", "payments", Manifest{Content: "body-only"}); err != nil {
+		t.Fatalf("ManifestPush: %v", err)
+	}
+}
+
 func TestManifestPull_ReturnsServedManifest(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assertReq(t, r, http.MethodGet, "/ai-api/ig/catalogs/payments/manifest", "tok")
-		_, _ = w.Write([]byte(`{"content":"served-manifest","pushed_by":"a@b","git_sha":"c0ffee"}`))
+		_, _ = w.Write([]byte(`{"catalog":"payments","content":"served-manifest","pushed_by":"a@b","pushed_at":"2026-07-10T10:00:00Z","git_sha":"c0ffee"}`))
 	}))
 	defer srv.Close()
 
@@ -377,8 +455,25 @@ func TestManifestPull_ReturnsServedManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ManifestPull: %v", err)
 	}
-	if m.Content != "served-manifest" || m.GitSHA != "c0ffee" {
+	if m.Catalog != "payments" || m.Content != "served-manifest" || m.GitSHA != "c0ffee" {
 		t.Errorf("manifest = %+v", m)
+	}
+}
+
+// git_sha is nullable on the wire: an explicit null must decode to the empty
+// string, not error.
+func TestManifestPull_ToleratesNullGitSHA(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"catalog":"payments","content":"m","pushed_by":"a@b","pushed_at":"2026-07-10T10:00:00Z","git_sha":null}`))
+	}))
+	defer srv.Close()
+
+	m, err := ManifestPull(srv.URL, "tok", "payments")
+	if err != nil {
+		t.Fatalf("ManifestPull: %v", err)
+	}
+	if m.GitSHA != "" {
+		t.Errorf("git_sha = %q; want empty", m.GitSHA)
 	}
 }
 

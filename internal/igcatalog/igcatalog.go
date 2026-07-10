@@ -76,14 +76,40 @@ type Member struct {
 	SHA  string `json:"sha,omitempty"`
 }
 
-// Manifest is the wire shape of a served manifest: the text plus the
-// stamps the server records on push (who pushed it, when, and the git sha
-// of the working tree the file came from).
+// Manifest is the wire shape of a served manifest (the server's IgManifest):
+// the catalog it belongs to, the text, plus the stamps the server records on
+// push (who pushed it, when, and the git sha of the working tree the file came
+// from). All four of Catalog/Content/PushedBy/PushedAt are required on the
+// wire; GitSHA is nullable. Catalog is retained so the response type captures
+// every field the server declares required, even though the CLI currently only
+// surfaces Content.
 type Manifest struct {
+	Catalog  string `json:"catalog,omitempty"`
 	Content  string `json:"content"`
 	PushedBy string `json:"pushed_by,omitempty"`
 	PushedAt string `json:"pushed_at,omitempty"`
 	GitSHA   string `json:"git_sha,omitempty"`
+}
+
+// manifestPushRequest is the wire shape the server accepts on manifest push
+// (its IgManifestPushRequest): ONLY the text and an optional git sha. The
+// server stamps pushed_by (from the bearer's identity) and pushed_at (server
+// time) itself, so the client must NOT send them — reusing the Manifest
+// response type here would put fields on the wire the server never declared.
+type manifestPushRequest struct {
+	Content string `json:"content"`
+	GitSHA  string `json:"git_sha,omitempty"`
+}
+
+// claimsResponse is the envelope the server returns from GET /catalogs/claims
+// (its IgClaimsResponse): the echoed git URL plus the names of the catalogs
+// claiming it. The server does NOT return a bare []string — decoding it as one
+// is what made `praxis ig claims` die with "cannot unmarshal object into Go
+// value of type []string". Only Git is required; Catalogs is absent (nil) when
+// no catalog claims the repo.
+type claimsResponse struct {
+	Git      string   `json:"git"`
+	Catalogs []string `json:"catalogs"`
 }
 
 // --- HTTP seams — tests swap these to avoid the network. ---------------
@@ -116,8 +142,12 @@ var Claims = func(baseURL, token, git string) ([]string, error) {
 	}
 	q := url.Values{}
 	q.Set("git", git)
-	return doJSON[[]string](baseURL, token, http.MethodGet,
+	env, err := doJSON[claimsResponse](baseURL, token, http.MethodGet,
 		apiPrefix+"/catalogs/claims?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	return env.Catalogs, nil
 }
 
 // PublishMember uploads one member's gzipped graph.json to a catalog,
@@ -210,12 +240,15 @@ var DownloadBundle = func(baseURL, token, catalog, ifNoneMatch string) (body []b
 	return raw, resp.Header.Get("ETag"), false, nil
 }
 
-// ManifestPush uploads the manifest text plus its stamps.
+// ManifestPush uploads the manifest text and its git sha. The server stamps
+// pushed_by/pushed_at itself, so only content and git_sha go on the wire (the
+// server's IgManifestPushRequest) — m.PushedBy/m.PushedAt are ignored here and
+// exist only for the cmd layer's local echo.
 var ManifestPush = func(baseURL, token, catalog string, m Manifest) error {
 	if catalog == "" {
 		return fmt.Errorf("catalog is required")
 	}
-	body, err := json.Marshal(m)
+	body, err := json.Marshal(manifestPushRequest{Content: m.Content, GitSHA: m.GitSHA})
 	if err != nil {
 		return err
 	}
