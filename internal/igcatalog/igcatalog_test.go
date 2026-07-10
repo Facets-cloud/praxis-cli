@@ -27,8 +27,8 @@ func assertReq(t *testing.T, r *http.Request, wantMethod, wantPath, wantBearer s
 
 func TestListCatalogs_HappyPath(t *testing.T) {
 	const body = `[
-		{"name":"payments","version":"sha256:aaa","built_at":"2026-07-09T10:00:00Z","members":["api","web"]},
-		{"name":"identity","version":"sha256:bbb","built_at":"2026-07-08T09:00:00Z","members":["idp"]}
+		{"name":"payments","version":"sha256:aaa","built_at":"2026-07-09T10:00:00Z","members":[{"name":"api","kind":"code","git":"github.com/acme/api","sha":"a1"},{"name":"web","kind":"code","git":"github.com/acme/web","sha":"b2"}]},
+		{"name":"identity","version":"sha256:bbb","built_at":"2026-07-08T09:00:00Z","members":[{"name":"idp","kind":"code","git":"github.com/acme/idp","sha":"c3"}]}
 	]`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assertReq(t, r, http.MethodGet, "/ai-api/ig/catalogs", "tok")
@@ -46,6 +46,90 @@ func TestListCatalogs_HappyPath(t *testing.T) {
 	if got[0].Version != "sha256:aaa" {
 		t.Errorf("version = %q", got[0].Version)
 	}
+}
+
+// --- ListCatalogs: member objects (server contract) --------------------
+//
+// The live server returns member OBJECTS ({name,kind,git,sha}), mirroring
+// ig's own metadata.json — not a list of bare member-name strings. This is
+// the exact payload `praxis ig list` choked on before Catalog.Members
+// became []Member.
+
+func assertMember(t *testing.T, m Member, name, kind, git, sha string) {
+	t.Helper()
+	if m.Name != name || m.Kind != kind || m.Git != git || m.SHA != sha {
+		t.Errorf("member = %+v; want {Name:%s Kind:%s Git:%s SHA:%s}", m, name, kind, git, sha)
+	}
+}
+
+func TestListCatalogs_DecodesMemberObjects(t *testing.T) {
+	const body = `[
+  {
+    "name": "capillary-cloud",
+    "version": "2026.07.10-104039",
+    "built_at": "2026-07-10T10:40:39Z",
+    "members": [
+      {"name": "control-plane",          "kind": "code", "git": "github.com/facets-cloud/control-plane",          "sha": "9a7c76c51a85da8dee3307bac95f85318961e8f9"},
+      {"name": "control-plane-ui-react", "kind": "code", "git": "github.com/facets-cloud/control-plane-ui-react", "sha": "6fa97644570cc1b38968a350e8e63c723cc5b33b"},
+      {"name": "raptor",                 "kind": "code", "git": "github.com/facets-cloud/raptor",                  "sha": "5032459d14e117d6b45033fce49c862ce588c842"},
+      {"name": "agent-factory",          "kind": "code", "git": "github.com/facets-cloud/agent-factory",           "sha": "ae22e27b9d3f4a5c6e7f8091a2b3c4d5e6f70819"}
+    ]
+  }
+]`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertReq(t, r, http.MethodGet, "/ai-api/ig/catalogs", "tok")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	got, err := ListCatalogs(srv.URL, "tok")
+	if err != nil {
+		t.Fatalf("ListCatalogs: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d catalogs; want 1: %+v", len(got), got)
+	}
+	c := got[0]
+	if c.Name != "capillary-cloud" || c.Version != "2026.07.10-104039" {
+		t.Errorf("catalog head = %+v", c)
+	}
+	if len(c.Members) != 4 {
+		t.Fatalf("got %d members; want 4: %+v", len(c.Members), c.Members)
+	}
+	assertMember(t, c.Members[0], "control-plane", "code",
+		"github.com/facets-cloud/control-plane", "9a7c76c51a85da8dee3307bac95f85318961e8f9")
+	assertMember(t, c.Members[2], "raptor", "code",
+		"github.com/facets-cloud/raptor", "5032459d14e117d6b45033fce49c862ce588c842")
+	assertMember(t, c.Members[3], "agent-factory", "code",
+		"github.com/facets-cloud/agent-factory", "ae22e27b9d3f4a5c6e7f8091a2b3c4d5e6f70819")
+}
+
+// An infra member carries no repo: git/sha are absent (or explicit null).
+// It must decode without error, leaving Git/SHA empty.
+func TestListCatalogs_InfraMemberHasNoRepo(t *testing.T) {
+	const body = `[
+  {"name":"cap","version":"v1","built_at":"2026-07-10T10:40:39Z","members":[
+    {"name":"platform","kind":"code","git":"github.com/facets-cloud/platform","sha":"deadbeef"},
+    {"name":"infra","kind":"infra"},
+    {"name":"infra-null","kind":"infra","git":null,"sha":null}
+  ]}
+]`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertReq(t, r, http.MethodGet, "/ai-api/ig/catalogs", "tok")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	got, err := ListCatalogs(srv.URL, "tok")
+	if err != nil {
+		t.Fatalf("ListCatalogs: %v", err)
+	}
+	if len(got) != 1 || len(got[0].Members) != 3 {
+		t.Fatalf("got = %+v", got)
+	}
+	assertMember(t, got[0].Members[1], "infra", "infra", "", "")
+	// A member whose git/sha are explicit JSON null must also be tolerated.
+	assertMember(t, got[0].Members[2], "infra-null", "infra", "", "")
 }
 
 // --- GetCatalog --------------------------------------------------------

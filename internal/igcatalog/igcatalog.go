@@ -60,7 +60,20 @@ type Catalog struct {
 	Name    string   `json:"name"`
 	Version string   `json:"version"`
 	BuiltAt string   `json:"built_at"`
-	Members []string `json:"members"`
+	Members []Member `json:"members"`
+}
+
+// Member is the wire shape of one catalog member, mirroring the entries in
+// ig's own metadata.json: a name, a kind ("code" or "infra"), and — for
+// code members — the canonical git URL and the built commit sha. The infra
+// member carries no repo, so Git/SHA are absent or JSON null on the wire;
+// both decode to the empty string. omitempty keeps `praxis ig list --json`
+// output tidy for members without a repo.
+type Member struct {
+	Name string `json:"name"`
+	Kind string `json:"kind,omitempty"`
+	Git  string `json:"git,omitempty"`
+	SHA  string `json:"sha,omitempty"`
 }
 
 // Manifest is the wire shape of a served manifest: the text plus the
