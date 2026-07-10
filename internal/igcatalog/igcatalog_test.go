@@ -86,48 +86,124 @@ func TestClaims_EncodesGitAndReturnsNames(t *testing.T) {
 	}
 }
 
-// --- PublishMember (gzip upload + git/sha query) -----------------------
+// --- PublishMember (multipart/form-data upload) ------------------------
+//
+// Contract (server handler publish_member): multipart/form-data with a file
+// part named "graph" carrying the gzipped graph.json bytes, plus optional
+// "git"/"sha" form fields (Optional[...] = Form(None)). git/sha are NOT
+// query parameters, and are omitted entirely when empty.
 
-func TestPublishMember_UploadsGzipWithGitAndSha(t *testing.T) {
+func gzipOf(t *testing.T, s string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte(s)); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestPublishMember_UploadsMultipartWithGitAndSha(t *testing.T) {
 	const graph = `{"nodes":[{"id":"n1"}]}`
+	gz := gzipOf(t, graph)
+
 	hit := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hit++
 		assertReq(t, r, http.MethodPost, "/ai-api/ig/catalogs/payments/members/api", "tok")
-		if r.URL.Query().Get("git") != "https://github.com/acme/api.git" {
-			t.Errorf("git = %q", r.URL.Query().Get("git"))
+
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "multipart/form-data") {
+			t.Errorf("content-type = %q; want multipart/form-data", ct)
 		}
-		if r.URL.Query().Get("sha") != "abc123" {
-			t.Errorf("sha = %q", r.URL.Query().Get("sha"))
+		// git/sha must travel as form fields, never as query params.
+		if q := r.URL.Query().Get("git"); q != "" {
+			t.Errorf("git leaked into query string: %q", q)
 		}
-		if ct := r.Header.Get("Content-Type"); ct != "application/gzip" {
-			t.Errorf("content-type = %q; want application/gzip", ct)
+		if q := r.URL.Query().Get("sha"); q != "" {
+			t.Errorf("sha leaked into query string: %q", q)
 		}
-		zr, err := gzip.NewReader(r.Body)
+
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("body is not multipart/form-data: %v", err)
+		}
+		if got := r.FormValue("git"); got != "https://github.com/acme/api.git" {
+			t.Errorf("git form value = %q", got)
+		}
+		if got := r.FormValue("sha"); got != "abc123" {
+			t.Errorf("sha form value = %q", got)
+		}
+
+		f, hdr, err := r.FormFile("graph")
 		if err != nil {
-			t.Fatalf("body not gzip: %v", err)
+			t.Fatalf("graph file part missing: %v", err)
+		}
+		defer func() { _ = f.Close() }()
+		if hdr.Filename == "" {
+			t.Error("graph part has no filename")
+		}
+		got, _ := io.ReadAll(f)
+		if !bytes.Equal(got, gz) {
+			t.Errorf("graph part bytes = %q; want the gzipped graph", got)
+		}
+		// The uploaded bytes are the gzip we handed in, decompressible.
+		zr, err := gzip.NewReader(bytes.NewReader(got))
+		if err != nil {
+			t.Fatalf("graph part is not gzip: %v", err)
 		}
 		raw, _ := io.ReadAll(zr)
 		if string(raw) != graph {
-			t.Errorf("decompressed body = %q; want %q", raw, graph)
+			t.Errorf("decompressed graph = %q; want %q", raw, graph)
 		}
 		w.WriteHeader(200)
 	}))
 	defer srv.Close()
 
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	_, _ = zw.Write([]byte(graph))
-	_ = zw.Close()
-
 	// First publish, then a repeat — the server accepts both (idempotent).
 	for i := 0; i < 2; i++ {
-		if err := PublishMember(srv.URL, "tok", "payments", "api", buf.Bytes(), "https://github.com/acme/api.git", "abc123"); err != nil {
+		if err := PublishMember(srv.URL, "tok", "payments", "api", gz, "https://github.com/acme/api.git", "abc123"); err != nil {
 			t.Fatalf("PublishMember #%d: %v", i, err)
 		}
 	}
 	if hit != 2 {
 		t.Errorf("handler hit %d times; want 2", hit)
+	}
+}
+
+func TestPublishMember_OmitsEmptyGitAndSha(t *testing.T) {
+	const graph = `{"nodes":[]}`
+	gz := gzipOf(t, graph)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertReq(t, r, http.MethodPost, "/ai-api/ig/catalogs/payments/members/api", "tok")
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("body is not multipart/form-data: %v", err)
+		}
+		// Empty git/sha are absent — not sent as empty fields.
+		if vals, ok := r.MultipartForm.Value["git"]; ok {
+			t.Errorf("git should be absent when empty, got %v", vals)
+		}
+		if vals, ok := r.MultipartForm.Value["sha"]; ok {
+			t.Errorf("sha should be absent when empty, got %v", vals)
+		}
+		// The graph part is still present and intact.
+		f, _, err := r.FormFile("graph")
+		if err != nil {
+			t.Fatalf("graph file part missing: %v", err)
+		}
+		defer func() { _ = f.Close() }()
+		got, _ := io.ReadAll(f)
+		if !bytes.Equal(got, gz) {
+			t.Errorf("graph part bytes mismatch")
+		}
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	if err := PublishMember(srv.URL, "tok", "payments", "api", gz, "", ""); err != nil {
+		t.Fatalf("PublishMember: %v", err)
 	}
 }
 

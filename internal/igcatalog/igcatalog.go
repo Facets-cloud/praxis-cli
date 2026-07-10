@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -109,22 +110,42 @@ var Claims = func(baseURL, token, git string) ([]string, error) {
 // PublishMember uploads one member's gzipped graph.json to a catalog,
 // stamping the member's canonical git URL and commit sha. Server-side it
 // is idempotent — republishing the same (git, sha) is accepted.
+//
+// The server handler (publish_member) expects multipart/form-data: a file
+// part named "graph" carrying the gzipped graph.json bytes, plus optional
+// "git"/"sha" form fields. On the server those are Optional[...] = Form(None),
+// so they are written only when non-empty; git/sha are NOT query parameters.
 var PublishMember = func(baseURL, token, catalog, member string, gzGraph []byte, git, sha string) error {
 	if catalog == "" || member == "" {
 		return fmt.Errorf("catalog and member are required")
 	}
-	q := url.Values{}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("graph", "graph.json.gz")
+	if err != nil {
+		return err
+	}
+	if _, err := part.Write(gzGraph); err != nil {
+		return err
+	}
 	if git != "" {
-		q.Set("git", git)
+		if err := writer.WriteField("git", git); err != nil {
+			return err
+		}
 	}
 	if sha != "" {
-		q.Set("sha", sha)
+		if err := writer.WriteField("sha", sha); err != nil {
+			return err
+		}
 	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+
+	// FormDataContentType() carries the boundary — never hand-roll it.
 	path := apiPrefix + "/catalogs/" + url.PathEscape(catalog) + "/members/" + url.PathEscape(member)
-	if enc := q.Encode(); enc != "" {
-		path += "?" + enc
-	}
-	return sendBytes(baseURL, token, http.MethodPost, path, "application/gzip", gzGraph)
+	return sendBytes(baseURL, token, http.MethodPost, path, writer.FormDataContentType(), body.Bytes())
 }
 
 // DownloadBundle fetches the assembled catalog as a gzipped tarball.
