@@ -29,7 +29,8 @@ type postAuthState struct {
 	snapshotWarning string
 	// hooksWired is the Claude settings.json path where the use-ig cwd hooks
 	// were wired (SessionStart + CwdChanged), or "" when no claude-code host
-	// was detected. AI hosts read this to know the nudge is live.
+	// was detected. The hooks nudge toward use-ig when cwd is an ig catalog
+	// repo. AI hosts read this to know the nudge is live.
 	hooksWired string
 	// projectScoped is the *effective* install scope after resolving the
 	// active root — not the requested flag. It's false when a forced
@@ -257,11 +258,11 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 }
 
 // wirePraxisHooks installs praxis's SessionStart + CwdChanged hooks into the
-// claude-code host's settings.json so a session inside a remembered ig checkout
-// gets nudged toward the use-ig skill (see internal/claudehooks). Only
-// claude-code has a settings.json hook mechanism; other hosts get skills but no
-// hook. Returns the settings path on a successful wire, "" otherwise. Never
-// fatal: a wire failure warns and returns "".
+// claude-code host's settings.json so a session inside an ig catalog repo gets
+// nudged toward the use-ig skill (see internal/claudehooks + `praxis ig hook`).
+// Only claude-code has a settings.json hook mechanism; other hosts get skills
+// but no hook. Returns the settings path on a successful wire, "" otherwise.
+// Never fatal: a wire failure warns and returns "".
 func wirePraxisHooks(out io.Writer, asJSON bool, hosts []harness.Harness) string {
 	var cc harness.Harness
 	found := false
@@ -294,7 +295,7 @@ func wirePraxisHooks(out io.Writer, asJSON bool, hosts []harness.Harness) string
 		return ""
 	case changed && !asJSON:
 		fmt.Fprintf(out, "✓ claude-code: wired SessionStart + CwdChanged hooks → %s\n", settingsPath)
-		fmt.Fprintln(out, "  (they nudge toward use-ig only inside a remembered ig checkout)")
+		fmt.Fprintln(out, "  (they nudge toward use-ig when cwd is an ig catalog repo)")
 	case !changed && !asJSON:
 		fmt.Fprintf(out, "✓ claude-code: use-ig hooks already wired → %s\n", settingsPath)
 	}
