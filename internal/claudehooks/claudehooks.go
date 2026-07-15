@@ -1,8 +1,10 @@
 // Package claudehooks merges praxis's SessionStart + CwdChanged hooks into a
 // Claude Code settings.json. The hooks call `praxis ig hook <event>`, which
-// nudges toward the use-ig skill when the session's cwd is a remembered ig
-// catalog checkout (see internal/igcheckouts). settings.json hooks are a
-// Claude-Code-specific mechanism, so only that host is wired.
+// nudges toward the use-ig skill when the session's cwd is a repo the catalog
+// server claims as an ig member (membership is resolved from the repo's
+// canonical git identity — see cmd `praxis ig hook`; no agent-maintained file is
+// consulted). settings.json hooks are a Claude-Code-specific mechanism, so only
+// that host is wired.
 //
 // The merge is additive and idempotent: other hooks and top-level keys are left
 // untouched, exactly one praxis entry exists per event, and a moved praxis
@@ -31,9 +33,38 @@ func events() []hookEvent {
 	}
 }
 
-// command is the hook command string for praxisPath and event.
+// command is the hook command string for praxisPath and event. The executable
+// path is shell-quoted so a path containing spaces (e.g. "/Applications/Praxis
+// CLI/praxis") still runs — Claude Code executes the command via a shell.
 func command(praxisPath, event string) string {
-	return praxisPath + " ig hook " + event
+	return shellQuote(praxisPath) + " ig hook " + event
+}
+
+// shellQuote single-quotes s for safe use as one shell word, escaping any
+// embedded single quote.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// hookExecBase returns the basename of a hook command's argv[0], handling both
+// our shell-quoted form and a bare (older, unquoted) install — so an upgrade
+// recognizes and refreshes the prior entry rather than duplicating it.
+func hookExecBase(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return ""
+	}
+	var tok string
+	if cmd[0] == '\'' {
+		if end := strings.IndexByte(cmd[1:], '\''); end >= 0 {
+			tok = cmd[1 : 1+end]
+		} else {
+			tok = cmd[1:]
+		}
+	} else {
+		tok = strings.Fields(cmd)[0]
+	}
+	return filepath.Base(tok)
 }
 
 // isPraxisHookCommand reports whether cmd is OUR hook for event. The event
@@ -44,14 +75,12 @@ func isPraxisHookCommand(cmd, event string) bool {
 	if !strings.HasSuffix(cmd, " ig hook "+event) {
 		return false
 	}
-	fields := strings.Fields(cmd)
-	return len(fields) > 0 && filepath.Base(fields[0]) == "praxis"
+	return hookExecBase(cmd) == "praxis"
 }
 
-// listUpsert ensures list holds exactly one praxis entry for event pointing at
-// praxisPath. An entry from an older install path is refreshed in place.
-func listUpsert(list []any, praxisPath, event, matcher string) ([]any, bool) {
-	want := command(praxisPath, event)
+// praxisCommandsFor returns every praxis hook command string for event in list.
+func praxisCommandsFor(list []any, event string) []string {
+	var out []string
 	for _, item := range list {
 		entry, ok := item.(map[string]any)
 		if !ok {
@@ -62,26 +91,31 @@ func listUpsert(list []any, praxisPath, event, matcher string) ([]any, bool) {
 			continue
 		}
 		for _, hv := range inner {
-			h, ok := hv.(map[string]any)
-			if !ok {
-				continue
+			if h, ok := hv.(map[string]any); ok {
+				if cmd, _ := h["command"].(string); isPraxisHookCommand(cmd, event) {
+					out = append(out, cmd)
+				}
 			}
-			cmd, _ := h["command"].(string)
-			if !isPraxisHookCommand(cmd, event) {
-				continue
-			}
-			if cmd == want {
-				return list, false // ours, already current
-			}
-			h["command"] = want // stale binary path → refresh in place
-			return list, true
 		}
 	}
+	return out
+}
+
+// listUpsert normalizes list to hold EXACTLY ONE praxis entry for event pointing
+// at praxisPath: it is a no-op when that already holds, otherwise it strips every
+// praxis hook for the event (foreign hooks preserved) and appends one fresh
+// entry — collapsing stale-path or accidentally-duplicated entries.
+func listUpsert(list []any, praxisPath, event, matcher string) ([]any, bool) {
+	want := command(praxisPath, event)
+	if found := praxisCommandsFor(list, event); len(found) == 1 && found[0] == want {
+		return list, false // already exactly one, and current
+	}
+	stripped, _ := listRemove(list, event)
 	entry := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": want, "timeout": 5}}}
 	if matcher != "" {
 		entry["matcher"] = matcher
 	}
-	return append(list, entry), true
+	return append(stripped, entry), true
 }
 
 // listRemove strips every praxis entry for event from list. An entry is dropped
@@ -124,7 +158,9 @@ func listRemove(list []any, event string) ([]any, bool) {
 // mutate loads settingsPath, applies fn to its hooks map, and writes back if
 // fn reported a change. A missing file is treated as empty. Invalid JSON is an
 // error (we refuse to overwrite a file we can't parse). The prior file is kept
-// as settings.json.bak.
+// as settings.json.bak. Backup and any newly-created settings file are written
+// 0600 — a Claude settings file can hold credentials/env values, so its copy
+// must not be world-readable.
 func mutate(settingsPath string, fn func(hooks map[string]any) bool) (bool, error) {
 	raw, err := os.ReadFile(settingsPath)
 	if err != nil && !os.IsNotExist(err) {
@@ -145,7 +181,9 @@ func mutate(settingsPath string, fn func(hooks map[string]any) bool) (bool, erro
 	}
 	settings["hooks"] = hooks
 	if len(raw) > 0 {
-		_ = os.WriteFile(settingsPath+".bak", raw, 0o644)
+		if bErr := os.WriteFile(settingsPath+".bak", raw, 0o600); bErr != nil {
+			return false, fmt.Errorf("hooks: writing backup %s.bak: %w", settingsPath, bErr)
+		}
 	}
 	b, mErr := json.MarshalIndent(settings, "", "  ")
 	if mErr != nil {
@@ -154,7 +192,7 @@ func mutate(settingsPath string, fn func(hooks map[string]any) bool) (bool, erro
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		return false, err
 	}
-	return true, os.WriteFile(settingsPath, append(b, '\n'), 0o644)
+	return true, os.WriteFile(settingsPath, append(b, '\n'), 0o600)
 }
 
 // Install merges praxis's SessionStart + CwdChanged hooks into settingsPath,

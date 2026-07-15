@@ -258,21 +258,31 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 }
 
 // wirePraxisHooks installs praxis's SessionStart + CwdChanged hooks into the
-// claude-code host's settings.json so a session inside an ig catalog repo gets
-// nudged toward the use-ig skill (see internal/claudehooks + `praxis ig hook`).
-// Only claude-code has a settings.json hook mechanism; other hosts get skills
-// but no hook. Returns the settings path on a successful wire, "" otherwise.
-// Never fatal: a wire failure warns and returns "".
+// claude-code host's USER-level settings.json so a session inside an ig catalog
+// repo gets nudged toward the use-ig skill (see internal/claudehooks +
+// `praxis ig hook`). Only claude-code has a settings.json hook mechanism; other
+// hosts get skills but no hook. Returns the settings path on a successful wire,
+// "" otherwise. Never fatal: a wire failure warns and returns "".
+//
+// The settings path is ALWAYS user-level, even under `--local` project scope:
+// the hook resolves the active profile per-cwd at run time, so a single
+// user-level hook serves every project — and logout (which unwires the
+// user-level path) can then always clean it up. Deriving the path from the
+// possibly-project-scoped `hosts` entry would strand the hook in a project's
+// settings.json that logout never touches.
 func wirePraxisHooks(out io.Writer, asJSON bool, hosts []harness.Harness) string {
-	var cc harness.Harness
-	found := false
+	detected := false
 	for _, h := range hosts {
 		if h.Name == "claude-code" {
-			cc, found = h, true
+			detected = true
 			break
 		}
 	}
-	if !found {
+	if !detected {
+		return ""
+	}
+	cc, ok := harness.ByName("claude-code") // fresh, unscoped (user-level) harness
+	if !ok {
 		return ""
 	}
 	praxisPath, err := os.Executable()

@@ -107,9 +107,12 @@ NOT contain a backticked `` `ig query` ``, and must mention `ig-checkouts.json`.
 Port ig's `wireClaudeHooks`/`installClaudeHooks` into the login skill-install
 flow, claude-code host only (settings.json hooks are Claude-Code-specific):
 
-- settings.json path = `filepath.Dir(host.SkillDir)/settings.json` — resolves to
-  `~/.claude/settings.json` (user scope) or `<projectDir>/.claude/settings.json`
-  (`--local`), matching the folder-per-login posture.
+- settings.json path is ALWAYS user-level (`~/.claude/settings.json`), derived
+  from a fresh unscoped `harness.ByName("claude-code")` — even under `--local`.
+  The hook resolves the active profile per-cwd at run time, so one user-level
+  hook serves every project, and logout (which cleans the user-level path) can
+  always remove it. Wiring into a project's settings.json would strand a hook
+  logout never touches.
 - Hook command = `<praxisPath> ig hook <event>` (`os.Executable()` +
   `EvalSymlinks`).
 - `SessionStart` (matcher `startup|resume`) + `CwdChanged` (no matcher).
