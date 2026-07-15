@@ -1,6 +1,7 @@
 package skillinstall
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,67 @@ import (
 
 // onboarding is the one embedded multi-file (tree) meta-skill today.
 const onboardingSkill = "praxis-onboarding"
+
+// use-ig is the Praxis-MCP read variant tree skill: it carries ig's graph
+// query mental-model but routes every read through `praxis mcp ig`, so the
+// host needs no local `ig`. Same bare name as ig's native skill (only one is
+// ever present — ig ships its native copy only when praxis is absent).
+const useIGSkill = "use-ig"
+
+func TestMetaSkillNames_IncludesUseIG(t *testing.T) {
+	names := MetaSkillNames()
+	var found bool
+	for _, n := range names {
+		if n == useIGSkill {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("MetaSkillNames() = %v, want it to include %q", names, useIGSkill)
+	}
+	// Still sorted (login relies on deterministic order).
+	for i := 1; i < len(names); i++ {
+		if names[i-1] > names[i] {
+			t.Errorf("MetaSkillNames() not sorted: %v", names)
+			break
+		}
+	}
+}
+
+func TestIsMetaSkill_UseIGPreserved(t *testing.T) {
+	if !IsMetaSkill(useIGSkill) {
+		t.Errorf("IsMetaSkill(%q) = false, want true (tree meta-skills must survive profile switch)", useIGSkill)
+	}
+}
+
+// TestUseIGTreeSkill_IsMCPVariant guards that the embedded use-ig skill is the
+// Praxis-MCP read variant: it queries the graph server-side via `praxis mcp
+// ig` and does NOT carry the native local-`ig` read command surface.
+func TestUseIGTreeSkill_IsMCPVariant(t *testing.T) {
+	fsys, ok := treeSkillFS(useIGSkill)
+	if !ok {
+		t.Fatalf("treeSkillFS(%q) not found; use-ig must be an embedded tree skill", useIGSkill)
+	}
+	raw, err := fs.ReadFile(fsys, "SKILL.md")
+	if err != nil {
+		t.Fatalf("read use-ig SKILL.md: %v", err)
+	}
+	body := string(raw)
+
+	if !strings.Contains(body, "name: use-ig") {
+		t.Errorf("use-ig SKILL.md missing frontmatter `name: use-ig`")
+	}
+	// Reads must route through the Praxis MCP.
+	if !strings.Contains(body, "praxis mcp ig") {
+		t.Errorf("use-ig SKILL.md must invoke reads via `praxis mcp ig` (MCP variant)")
+	}
+	// It must NOT carry the native local-`ig` read command surface. The
+	// backticked `ig query` is the tell of the local-ig variant; this MCP
+	// copy uses `praxis mcp ig ig_query` instead.
+	if strings.Contains(body, "`ig query`") {
+		t.Errorf("use-ig SKILL.md contains local-ig read command `ig query`; this must be the `praxis mcp ig` variant")
+	}
+}
 
 func TestMetaSkillNames_IncludesTreeSkill(t *testing.T) {
 	names := MetaSkillNames()
