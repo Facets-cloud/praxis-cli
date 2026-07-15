@@ -52,13 +52,17 @@ home. A JSON object keyed by the checkout's git remote URL:
   "https://github.com/org/control-plane.git": {
     "path": "/Users/me/src/control-plane",
     "member": "control-plane",
-    "catalog": "capillary-cloud"
+    "catalogs": ["capillary-cloud", "saas-cp"]
   }
 }
 ```
 
 - `path` — absolute checkout root (`git -C <dir> rev-parse --show-toplevel`).
-- `member` / `catalog` — the lens + catalog the path resolves for.
+- `member` — the lens the path resolves for.
+- `catalogs` — a **list**: one checkout can be a member of several catalogs
+  (control-plane is in both capillary-cloud and saas-cp), so the agent unions
+  each catalog it encounters rather than overwriting. Path resolution is
+  catalog-independent; the list only enriches the nudge.
 - The **key** is whatever `git remote get-url origin` prints; the hook
   canonicalizes both sides on read (scheme-less, `.git`-stripped, scp-form
   `git@host:path` → `host/path`, lowercased) so https/ssh forms still match.

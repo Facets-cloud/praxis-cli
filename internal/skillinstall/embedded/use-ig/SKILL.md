@@ -162,6 +162,58 @@ query="<free-text question>"` to BFS from name-matched nodes, or `ig_explain
 follow its edges (more precise when you know the symbol). The node card's source
 file+line is relative to that member's repo root.
 
+## Resolving a node to a local file (and remembering where it lives)
+
+A node card's `source file:line` is **relative to that member's repo root**, and
+the server doesn't know where — or whether — that repo is checked out on this
+machine. To open the real file you need the member's local checkout root. Do this
+in order, and RECORD what you find so you never re-derive it:
+
+1. **Check memory first.** Read `~/.praxis/ig-checkouts.json` — a JSON object
+   keyed by git remote URL. If the member is already there, join its `path` with
+   the node's repo-relative `file` and you have the absolute path. Skip to 4.
+
+   ```json
+   {
+     "https://github.com/org/control-plane.git": {
+       "path": "/Users/me/src/control-plane",
+       "member": "control-plane",
+       "catalogs": ["capillary-cloud", "saas-cp"]
+     }
+   }
+   ```
+
+   `catalogs` is a **list** because one checkout can be a member of several
+   catalogs (`control-plane` lives in both `capillary-cloud` and `saas-cp`).
+
+2. **Discover the checkout** when it isn't remembered:
+   - If your cwd is inside the repo, `git -C . rev-parse --show-toplevel` is the
+     root and `git -C . remote get-url origin` its remote — confirm the remote
+     names this member's repo.
+   - Otherwise scan likely roots (`~`, `~/src`, `~/work`, and any
+     `~/praxis-envs/<profile>/` folder-per-login checkout) for a repo whose
+     `origin` or directory name matches the member.
+   - If you genuinely can't find it, say so — the user may not have it cloned.
+     Don't invent a path.
+
+3. **Remember it.** Merge one entry into `~/.praxis/ig-checkouts.json`, keyed by
+   the checkout's `git remote get-url origin`, with `path` (its
+   `rev-parse --show-toplevel`), `member`, and the current `catalog` added to the
+   `catalogs` list. If the repo is already recorded, **union** the catalog into
+   the existing list rather than overwriting — the same checkout accumulates
+   every catalog it belongs to. Create the file if it's absent; if it's ever
+   corrupt, overwrite it. This is the record the cwd hooks read to nudge you the
+   next time you land in this repo.
+
+4. **Mind staleness.** The catalog was built at some past commit of the member.
+   If the local checkout has advanced well beyond it, treat `L<n>` line numbers as
+   approximate and re-anchor by the **symbol name** ig printed (e.g.
+   `approveRelease`), not the raw line. Line drift means the checkout moved on,
+   not that ig is wrong.
+
+The memory is yours to maintain — nothing writes `ig-checkouts.json` but you, and
+the `praxis mcp ig` reads never touch your working copy.
+
 ## Gotchas (these are where agents lose time)
 
 - **`ig_query` is BFS traversal, not semantic search.** It picks a small set of

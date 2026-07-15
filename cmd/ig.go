@@ -483,6 +483,7 @@ func init() {
 	igCmd.AddCommand(igPublishCmd)
 	igCmd.AddCommand(igClaimsCmd)
 	igCmd.AddCommand(igManifestCmd)
+	igCmd.AddCommand(igHookCmd)
 	rootCmd.AddCommand(igCmd)
 }
 

@@ -2,10 +2,14 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
+	"github.com/Facets-cloud/praxis-cli/internal/claudehooks"
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
@@ -76,6 +80,7 @@ there's no way (and no need) to target a non-active profile directly.`,
 			if p, perr := paths.MCPTools(); perr == nil {
 				_ = os.Remove(p)
 			}
+			unwirePraxisHooks(out, asJSON)
 			if asJSON {
 				envelope := map[string]any{
 					"removed":        "all",
@@ -137,6 +142,7 @@ there's no way (and no need) to target a non-active profile directly.`,
 		if p, perr := paths.MCPTools(); perr == nil {
 			_ = os.Remove(p)
 		}
+		unwirePraxisHooks(out, asJSON)
 
 		if asJSON {
 			envelope := map[string]any{
@@ -205,4 +211,28 @@ func ifTrue(cond bool, v string) any {
 		return v
 	}
 	return nil
+}
+
+// unwirePraxisHooks removes the use-ig SessionStart + CwdChanged hooks from the
+// claude-code host's user-level settings.json, the counterpart to the wiring
+// `praxis login` does. Best-effort and never fatal: logout is a cleanup path,
+// and a dangling hook only ever reads an absent memory file and stays silent.
+// Foreign hooks and other settings keys are left intact.
+func unwirePraxisHooks(out io.Writer, asJSON bool) {
+	cc, ok := harness.ByName("claude-code")
+	if !ok {
+		return
+	}
+	settingsPath := filepath.Join(filepath.Dir(cc.SkillDir), "settings.json")
+	praxisPath, _ := os.Executable()
+	changed, err := claudehooks.Uninstall(settingsPath, praxisPath)
+	if err != nil {
+		if !asJSON {
+			fmt.Fprintf(out, "Warning: removing use-ig hooks failed: %v\n", err)
+		}
+		return
+	}
+	if changed && !asJSON {
+		fmt.Fprintf(out, "✓ Removed use-ig hooks from %s\n", settingsPath)
+	}
 }
