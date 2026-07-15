@@ -19,7 +19,7 @@ credentials; your laptop needs no `ig` binary, no synced tree, no cloud secrets.
 file+line). YOU decide, act, and ask the user. The MCP tools are read-only —
 they never build, never prompt, never touch your working copy.
 
-**Boundary — the four `praxis mcp ig` tools are the whole read interface.** Do
+**Boundary — the six `praxis mcp ig` tools are the whole read interface.** Do
 not reach for a local `ig`/`graphify` binary and do not try to `praxis ig sync`;
 in this route reads execute server-side. (Building/refreshing a catalog is a
 separate CI/setup concern that still uses `ig` on a builder host — not your job
@@ -94,19 +94,30 @@ be spelled differently across catalogs (`service:control-plane-service` in one v
 rediscover it per catalog rather than reusing an id; and a wrong `target` yields
 a plain "no node" with no fuzzy suggestion.
 
-## Command surface (the four `praxis mcp ig` tools)
+## Command surface (the six `praxis mcp ig` tools)
 
-Every read tool takes `--arg catalog=<c>` (from `ig_list_catalogs`), `--arg
-member=<m>` (the lens — see above), and `--arg target=<node>`. Output is
-**token-budgeted TEXT** written for an LLM to read.
+Every read tool takes `--arg catalog=<c>` (from `ig_list_catalogs`) and, except
+`ig_list_catalogs`/`ig_catalog`, `--arg member=<m>` (the lens — see above).
+Output is **token-budgeted TEXT** written for an LLM to read.
 
 ```
-praxis mcp ig ig_list_catalogs                                                            → the org's catalogs (name + version + members); START HERE
-praxis mcp ig ig_explain --arg catalog=<c> --arg member=<m> --arg target=<node>           → node card (source file+line, edges) — the workhorse
-praxis mcp ig ig_impact  --arg catalog=<c> --arg member=<m> --arg target=<node> [--arg depth=N]   → what a change to <node> reaches downstream
-praxis mcp ig ig_query   --arg catalog=<c> --arg member=<m> --arg target="<terms>" [--arg depth=N] → BFS from name-matched start nodes (NOT semantic search)
+praxis mcp ig ig_list_catalogs                                                             → the org's catalogs (name + version + members); START HERE
+praxis mcp ig ig_catalog  --arg catalog=<c>                                                → topology MAP: members + service:* interfaces + deploys_as/provisions/calls edges
+praxis mcp ig ig_explain  --arg catalog=<c> --arg member=<m> --arg target=<node>           → node card (source file+line, edges) — the workhorse
+praxis mcp ig ig_impact   --arg catalog=<c> --arg member=<m> --arg target=<node> [--arg depth=N] [--arg relation=R] [--arg context=C]  → what a change to <node> reaches downstream
+praxis mcp ig ig_query    --arg catalog=<c> --arg member=<m> --arg query="<free text>"  [--arg relation=R] [--arg context=C]           → BFS from name-matched start nodes (NOT semantic search)
+praxis mcp ig ig_path     --arg catalog=<c> --arg member=<m> --arg from_node=<a> --arg to_node=<b>                                     → shortest path between two nodes, hop by hop
 ```
 
+- **`ig_query` takes FREE TEXT.** `--arg query="where does approveRelease reach
+  the DB"` or a symbol name — ig seeds the BFS from the name-matched start nodes.
+  It has NO `depth` (ig hardcodes query depth); scope it instead with `--arg
+  relation=calls` / `--arg context=call` (repeat by passing the arg again) or cap
+  output with `--arg budget=N` (tokens). `ig_impact` takes the same filters plus
+  a real `--arg depth=N`.
+- `ig_catalog` is the map — START HERE for "how do these repos/services connect".
+  It needs no `member` (it IS the cross-member view).
+- `ig_path` answers "how does A reach B" with the concrete hop-by-hop edge chain.
 - `ig_explain` is the workhorse: it lands on a node and prints its source
   file+line, degree, and edges. Reach for it to locate a symbol (in a `<repo>`
   member) or an interface node (in the `catalog` member).
@@ -116,33 +127,39 @@ praxis mcp ig ig_query   --arg catalog=<c> --arg member=<m> --arg target="<terms
 
 ## Recipes
 
-**How do the repos/services connect?** Read the `catalog` member —
-`ig_explain --arg member=catalog --arg target="graph:<repo>"` shows a repo's
-`calls` / `deploys_as` edges to other members; `ig_query --arg member=catalog
---arg target="<name>"` walks the interface layer.
+**How do the repos/services connect?** `ig_catalog --arg catalog=<c>` — the
+one-shot topology map (members + `service:*` interfaces + `deploys_as` /
+`provisions` / `calls` edges). Start here, then drill into a specific interface
+with `ig_explain --arg member=catalog --arg target="service:<name>"`.
 
-**Trace a frontend call to its backend handler.** `ig_explain --arg
-member=catalog --arg target="service:<name>"` (or the `route:` node) to see the
-cross-repo `calls` edge, then drop into the backend `<repo>` member —
-`ig_explain --arg member=<be-repo> --arg target="<handler-symbol>"` — to land on
-the handler. The interface node in the `catalog` member is the join.
+**Trace a frontend call to its backend handler.** From the `ig_catalog` map (or
+`ig_explain --arg member=catalog --arg target="service:<name>"` / the `route:`
+node) find the cross-repo `calls` edge, then drop into the backend `<repo>`
+member — `ig_explain --arg member=<be-repo> --arg target="<handler-symbol>"` — to
+land on the handler. The interface node in the `catalog` member is the join.
+
+**How does A reach B?** `ig_path --arg member=<repo> --arg from_node=<a> --arg
+to_node=<b>` — the concrete hop-by-hop edge chain between two symbols (or "no
+path"). Faster than eyeballing `ig_impact` output when you have both endpoints.
 
 **What breaks if I change a symbol?** `ig_impact --arg member=<repo> --arg
-target="<symbol>"` for internal downstream. For an HTTP endpoint, also
-`ig_explain --arg member=catalog --arg target="route:<METHOD /path>"`: its
-cross-member `calls` edge is the real coupling (a route/contract change forces the
-OpenAPI client + its callers to change), which `ig_impact` alone won't show.
+target="<symbol>"` for internal downstream (scope with `--arg relation=calls` or
+`--arg depth=N`). For an HTTP endpoint, also `ig_explain --arg member=catalog
+--arg target="route:<METHOD /path>"`: its cross-member `calls` edge is the real
+coupling (a route/contract change forces the OpenAPI client + its callers to
+change), which `ig_impact` alone won't show.
 
 **What infra backs a service?** Read the `provisions` connections on the
 `service:*` node in the `catalog` member (`ig_explain --arg member=catalog --arg
 target="service:<name>"`), then enumerate the `infra` member with `ig_query --arg
-member=infra --arg target="<resource>"`. Infra nodes are Facets module types
+member=infra --arg query="<resource>"`. Infra nodes are Facets module types
 (`service/*`, `s3/*`, `mongo`, `artifact/*`) and are often coarse/degree-0 —
 expect module-type + datastore names, not a fully wired topology.
 
-**Where does the code for a concept live?** `ig_explain --arg member=<repo>
---arg target="<name-or-substring>"` to land on a node, then follow its edges —
-more reliable than `ig_query` for locating a symbol. The node card's source
+**Where does the code for a concept live?** `ig_query --arg member=<repo> --arg
+query="<free-text question>"` to BFS from name-matched nodes, or `ig_explain
+--arg member=<repo> --arg target="<name-or-substring>"` to land on one node and
+follow its edges (more precise when you know the symbol). The node card's source
 file+line is relative to that member's repo root.
 
 ## Gotchas (these are where agents lose time)
