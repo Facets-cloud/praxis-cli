@@ -27,18 +27,35 @@ here.)
 
 ## First: list the catalogs
 
-There is **NO default catalog** and every tool needs a `catalog`. Start here:
+There is **NO default catalog** and every read tool needs BOTH a `catalog` and a
+`member`. Start here:
 
 ```
 praxis mcp ig ig_list_catalogs
 ```
 
-It returns the org's catalogs as `name + version`. Pick the `<catalog>` your
-question is about and pass it as `--arg catalog=<name>` to every other tool. A
-repo can be a member of MORE THAN ONE catalog (e.g. `control-plane` in both
-`capillary-cloud` and `saas-cp`); because `calls` edges only appear between
-members present in the SAME catalog, "who calls control-plane" is
-catalog-relative — ask each catalog.
+It returns the org's catalogs as `name + version`, each with its **members**.
+Pick the `<catalog>` your question is about and pass it as `--arg catalog=<name>`
+to every other tool. A repo can be a member of MORE THAN ONE catalog (e.g.
+`control-plane` in both `capillary-cloud` and `saas-cp`); because `calls` edges
+only appear between members present in the SAME catalog, "who calls
+control-plane" is catalog-relative — ask each catalog.
+
+## The `member` arg — pick your lens (REQUIRED)
+
+A catalog is a **graph of graphs**, so a node is addressed *per member*. Every
+read tool takes `--arg member=<m>` and it selects which graph you read:
+
+| `member=` | You reach | Use for |
+|---|---|---|
+| **`catalog`** | the connective tissue: `service:*` / `route:*` / `graph:*` interface nodes + the cross-repo `calls` / `deploys_as` / `provisions` edges | "how do repos/services connect", "what calls X", frontend↔backend, code↔infra |
+| **`<repo>`** (e.g. `control-plane`) | that repo's code graph (functions, files, symbols) | "where does the code for X live", per-repo blast radius |
+| **`infra`** | the Facets infra graph (module types, datastores) | "what infra module backs X" |
+
+The literal member name `catalog` is the graph-of-graphs itself — that is where
+the interface/connection layer lives. `service:*`/`route:*` nodes are NOT inside
+a repo member (`ig_explain --arg member=control-plane --arg target="service:x"`
+returns "no node"); read them with `--arg member=catalog`.
 
 ## The catalog model — read this before running commands
 
@@ -79,46 +96,54 @@ a plain "no node" with no fuzzy suggestion.
 
 ## Command surface (the four `praxis mcp ig` tools)
 
-Every tool takes `--arg catalog=<c>` (from `ig_list_catalogs`) and a `--arg
-target=<node>`. Output is **token-budgeted TEXT** written for an LLM to read.
+Every read tool takes `--arg catalog=<c>` (from `ig_list_catalogs`), `--arg
+member=<m>` (the lens — see above), and `--arg target=<node>`. Output is
+**token-budgeted TEXT** written for an LLM to read.
 
 ```
-praxis mcp ig ig_list_catalogs                                                    → the org's catalogs (name + version); START HERE to get <catalog>
-praxis mcp ig ig_explain  --arg catalog=<c> --arg target=<node>                   → node card (source file+line, edges) — the workhorse
-praxis mcp ig ig_impact   --arg catalog=<c> --arg target=<node> [--arg depth=N]   → what a change to <node> reaches downstream
-praxis mcp ig ig_query    --arg catalog=<c> --arg target="<terms>" [--arg depth=N] → BFS from name-matched start nodes (NOT semantic search)
+praxis mcp ig ig_list_catalogs                                                            → the org's catalogs (name + version + members); START HERE
+praxis mcp ig ig_explain --arg catalog=<c> --arg member=<m> --arg target=<node>           → node card (source file+line, edges) — the workhorse
+praxis mcp ig ig_impact  --arg catalog=<c> --arg member=<m> --arg target=<node> [--arg depth=N]   → what a change to <node> reaches downstream
+praxis mcp ig ig_query   --arg catalog=<c> --arg member=<m> --arg target="<terms>" [--arg depth=N] → BFS from name-matched start nodes (NOT semantic search)
 ```
 
 - `ig_explain` is the workhorse: it lands on a node and prints its source
-  file+line, degree, and edges. Reach for it to locate a symbol or a route.
+  file+line, degree, and edges. Reach for it to locate a symbol (in a `<repo>`
+  member) or an interface node (in the `catalog` member).
 - `ig_impact` traverses code edges downstream from `target` — "what does a change
   to this node reach". `depth` bounds the walk.
 - `ig_query` seeds from name-matched start nodes and walks — see the gotcha below.
 
 ## Recipes
 
-**Trace a frontend call to its backend handler.** `ig_explain` the `route:` node
-on the frontend member (`--arg target="POST /path"`) to see the calling code and
-its `calls` edge → `ig_explain` the same route (or the handler symbol) on the
-backend member to land on the handler via `handled_by`. The shared `route:` node
-is the join.
+**How do the repos/services connect?** Read the `catalog` member —
+`ig_explain --arg member=catalog --arg target="graph:<repo>"` shows a repo's
+`calls` / `deploys_as` edges to other members; `ig_query --arg member=catalog
+--arg target="<name>"` walks the interface layer.
 
-**What breaks if I change a symbol?** `ig_impact --arg target="<symbol>"` for
-internal downstream. For an HTTP endpoint, also `ig_explain` the `route:` node:
-its cross-member `calls` edge is the real coupling (a route/contract change forces
-the OpenAPI client + its callers to change), which `ig_impact` alone won't show —
-see the gotcha.
+**Trace a frontend call to its backend handler.** `ig_explain --arg
+member=catalog --arg target="service:<name>"` (or the `route:` node) to see the
+cross-repo `calls` edge, then drop into the backend `<repo>` member —
+`ig_explain --arg member=<be-repo> --arg target="<handler-symbol>"` — to land on
+the handler. The interface node in the `catalog` member is the join.
+
+**What breaks if I change a symbol?** `ig_impact --arg member=<repo> --arg
+target="<symbol>"` for internal downstream. For an HTTP endpoint, also
+`ig_explain --arg member=catalog --arg target="route:<METHOD /path>"`: its
+cross-member `calls` edge is the real coupling (a route/contract change forces the
+OpenAPI client + its callers to change), which `ig_impact` alone won't show.
 
 **What infra backs a service?** Read the `provisions` connections on the
-`service:*` interface node (`ig_explain --arg target="service:<name>"`), then
-enumerate the infra member with `ig_query --arg target="<resource>"`. Infra nodes
-are Facets module types (`service/*`, `s3/*`, `mongo`, `artifact/*`) and are often
-coarse/degree-0 — expect module-type + datastore names, not a fully wired topology.
+`service:*` node in the `catalog` member (`ig_explain --arg member=catalog --arg
+target="service:<name>"`), then enumerate the `infra` member with `ig_query --arg
+member=infra --arg target="<resource>"`. Infra nodes are Facets module types
+(`service/*`, `s3/*`, `mongo`, `artifact/*`) and are often coarse/degree-0 —
+expect module-type + datastore names, not a fully wired topology.
 
-**Where does the code for a concept live?** `ig_explain --arg
-target="<name-or-substring>"` to land on a node, then follow its edges — more
-reliable than `ig_query` for locating a symbol. The node card's source file+line
-is relative to that member's repo root.
+**Where does the code for a concept live?** `ig_explain --arg member=<repo>
+--arg target="<name-or-substring>"` to land on a node, then follow its edges —
+more reliable than `ig_query` for locating a symbol. The node card's source
+file+line is relative to that member's repo root.
 
 ## Gotchas (these are where agents lose time)
 
@@ -127,6 +152,12 @@ is relative to that member's repo root.
   walks edges. A vague term (`"release"`) starts inside an unrelated node and
   wanders. Seed with ONE specific symbol, or skip it and `ig_explain` the node
   directly.
+- **Wrong `member` = "no node", even for the right target.** Interface nodes
+  (`service:*`, `route:*`, `graph:*`) live ONLY in the `catalog` member; code
+  symbols live only in their `<repo>` member. Asking for a `service:*` in a repo
+  member, or a code symbol in `catalog`, returns "no node". If a target you're
+  sure exists isn't found, you're probably in the wrong lens — switch `member`
+  (`catalog` for connections, `<repo>` for code, `infra` for modules).
 - **A wrong `target` returns "no node" with NO fuzzy suggestion.** Don't guess ids
   blindly — start from `ig_list_catalogs`, then `ig_explain` a label/substring you
   are confident about, and copy the exact `ID:` it prints for follow-up calls.
@@ -147,13 +178,16 @@ is relative to that member's repo root.
 
 ```
 praxis mcp ig ig_list_catalogs
-  → capillary-cloud 2026.07.06-071024 · saas-cp 2026.07.05-…   (pick capillary-cloud)
-praxis mcp ig ig_explain --arg catalog=capillary-cloud \
-  --arg target="POST /cc-ui/v1/clusters/{}/deployments/{}/approveRelease"
-  → Type: route   <-- .approveRelease() [calls]              (frontend call site)
-praxis mcp ig ig_explain --arg catalog=capillary-cloud --arg target="approveRelease"
+  → capillary-cloud 2026.07.06-071024  members: control-plane, control-plane-ui-react, infra
+    saas-cp 2026.07.05-…               (pick capillary-cloud)
+praxis mcp ig ig_explain --arg catalog=capillary-cloud --arg member=catalog \
+  --arg target="service:control-plane-service"
+  → Type: service   <-- infra [provisions]   --> control-plane [deploys_as]   (the join)
+praxis mcp ig ig_explain --arg catalog=capillary-cloud --arg member=control-plane \
+  --arg target="approveRelease"
   → .approveRelease()  UiDeploymentController.java:L449   Degree 6   (backend handler)
-praxis mcp ig ig_impact  --arg catalog=capillary-cloud --arg target="approveRelease"
+praxis mcp ig ig_impact  --arg catalog=capillary-cloud --arg member=control-plane \
+  --arg target="approveRelease"
   → the controller is an HTTP entry point, so internal downstream is minimal — the
     real blast radius is the shared route: node + the calls edge (a contract change
     forces the OpenAPI client + its callers to change).
