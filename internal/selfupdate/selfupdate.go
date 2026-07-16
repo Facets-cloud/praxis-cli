@@ -39,13 +39,36 @@ type Asset struct {
 	Size               int64  `json:"size"`
 }
 
-// LatestRelease returns metadata for the most recent published release.
+// LatestRelease returns full metadata (incl. assets) for the most recent
+// praxis-cli release — used by `praxis update` to self-replace the binary.
 func LatestRelease() (*Release, error) {
 	return fetchRelease(latestReleaseURL())
 }
 
+// LatestReleaseTagFor returns just the newest release tag for any GitHub repo
+// ("owner/name"). Used by the freshness engine to compare a tool's local
+// version against its latest release, without needing the release assets.
+func LatestReleaseTagFor(repo string) (string, error) {
+	return releaseTagFrom(releaseURL(repo))
+}
+
+// releaseURL builds the "latest release" API URL for a "owner/name" repo — the
+// single URL builder both praxis self-update and tool-freshness go through.
+func releaseURL(repo string) string {
+	return fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+}
+
 func latestReleaseURL() string {
-	return fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
+	return releaseURL(repoOwner + "/" + repoName)
+}
+
+// releaseTagFrom fetches url and returns the release's tag (testable seam).
+func releaseTagFrom(url string) (string, error) {
+	r, err := fetchRelease(url)
+	if err != nil {
+		return "", err
+	}
+	return r.TagName, nil
 }
 
 // fetchRelease is the testable seam for LatestRelease — pass a httptest URL
