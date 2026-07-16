@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -284,9 +283,6 @@ func TestCheckForUpdate_ThrottlesFailures(t *testing.T) {
 // TestExecRaptorVersionTimeout proves a wedged `raptor --version` can't hang the
 // freshness check — the context timeout yields ("", false).
 func TestExecRaptorVersionTimeout(t *testing.T) {
-	if _, err := exec.LookPath("raptor"); err != nil {
-		t.Skip("raptor not installed; execRaptorVersion returns early via LookPath")
-	}
 	origCmd := raptorVersionCmd
 	origTO := raptorVersionTimeout
 	t.Cleanup(func() { raptorVersionCmd = origCmd; raptorVersionTimeout = origTO })

@@ -269,13 +269,10 @@ var raptorSemver = regexp.MustCompile(`\d+\.\d+\.\d+`)
 var raptorVersionTimeout = 2 * time.Second
 
 // execRaptorVersion returns raptor's local version and whether raptor is
-// installed, by running `raptor --version` under a short timeout. Not on PATH,
-// timed out, or unparsable → ("", false), so the engine reports it
-// not-installed and never stale.
+// installed, by running `raptor --version` under a short timeout. Not on PATH
+// (the command errors), timed out, or unparsable → ("", false), so the engine
+// reports it not-installed and never stale.
 func execRaptorVersion() (string, bool) {
-	if _, err := exec.LookPath("raptor"); err != nil {
-		return "", false
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), raptorVersionTimeout)
 	defer cancel()
 	out, err := raptorVersionCmd(ctx)
