@@ -313,3 +313,13 @@ Assert: exactly one submit per node; verdict trail non-empty; transcript artifac
 - Spec coverage: D5–D9, D11–D12 all land here; §4a manual claims (Task 9 `ManualClaim` + `--manual`); §5 converge loop (Task 7); §6 envelope (Task 8); §8 owner (Task 9 `Adopt`); §13 redaction (Task 8). Conductor UX (`dag conduct`) is v2 (spec §12) — deliberately absent.
 - Judge blindness is structural at three layers: `JudgePacket` has no transcript field (server filters), `AssembleJudgePrompt` signature can't take one, and the worker never invokes the judge.
 - No stub commands: passthrough verbs land in Task 3; bridge verbs only in Task 9 when their internals are complete.
+
+---
+
+## SUPERSEDED (16 Jul 2026, spec D14)
+
+Substrate-only decision: the entire command surface is `praxis mcp task_dag <fn>`
+(already shipped in cmd/mcp.go). No bridge/spawner/judge/converge/redact Go code;
+praxis-cli ships nothing for task-DAG v1. Execution + judging choreography move to
+skills (agent-factory plan-3); redaction + edge validation move server-side (plan-1).
+This plan is retained for the record. See agent-factory PR #1531.
