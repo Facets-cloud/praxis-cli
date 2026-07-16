@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/claudehooks"
@@ -32,6 +33,9 @@ type postAuthState struct {
 	// was detected. The hooks nudge toward use-ig when cwd is an ig catalog
 	// repo. AI hosts read this to know the nudge is live.
 	hooksWired string
+	// staleTools lists tools (praxis, raptor) found behind their latest release
+	// at login, so the agent can offer an upgrade.
+	staleTools []Freshness
 	// projectScoped is the *effective* install scope after resolving the
 	// active root — not the requested flag. It's false when a forced
 	// project scope couldn't be enabled (e.g. cwd unresolvable or outside
@@ -254,7 +258,30 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 		state.hooksWired = wirePraxisHooks(out, asJSON, hosts)
 	}
 
+	// Step 6: tool-freshness notice (praxis + raptor) via the shared engine.
+	// Login already does network, so a live-if-stale check here also warms the
+	// cache for later `praxis status` reads. Best-effort; never fatal.
+	state.staleTools = noticeFreshness(out, asJSON)
+
 	return state
+}
+
+// noticeFreshness checks every tool's freshness and, for each one behind its
+// latest release, prints a one-line notice (non-JSON) and collects it. Uses the
+// shared engine (freshCachedOrFetch), so it warms the cache too.
+func noticeFreshness(out io.Writer, asJSON bool) []Freshness {
+	var stale []Freshness
+	for _, spec := range freshnessTools() {
+		f := checkTool(spec, time.Now(), freshCachedOrFetch)
+		if !f.Stale {
+			continue
+		}
+		stale = append(stale, f)
+		if !asJSON {
+			fmt.Fprintf(out, "! %s %s is behind %s — %s\n", f.Tool, f.Current, f.Latest, nagAction(spec))
+		}
+	}
+	return stale
 }
 
 // wirePraxisHooks installs praxis's SessionStart + CwdChanged hooks into the

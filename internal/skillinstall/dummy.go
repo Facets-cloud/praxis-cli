@@ -163,6 +163,11 @@ Preflight — once per session, before the first raptor command:
     ` + "`raptor login`" + ` (a browser flow that stores a PAT in
     ` + "`~/.facets/credentials`" + `). Never ask for a token in chat or write
     credentials yourself.
+  - **Up to date?** ` + "`praxis status --json`" + ` reports a ` + "`tools`" + ` block
+    with each tool's version + a ` + "`stale`" + ` flag. If ` + "`raptor.stale`" + `
+    (or praxis's own) is true, tell the user and offer to run ` + "`raptor upgrade`" + `
+    — ask first, never auto-run it. praxis surfaces the versions; you and the
+    user decide.
 
 So when the user asks about projects / resources / environments /
 releases / cloud accounts, reach for ` + "`raptor`" + `, not ` + "`praxis mcp`" + `.

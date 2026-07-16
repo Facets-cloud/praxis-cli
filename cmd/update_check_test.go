@@ -450,6 +450,38 @@ func TestPrintFreshnessBox(t *testing.T) {
 	}
 }
 
+func TestNoticeFreshness(t *testing.T) {
+	fakeHome(t)
+	origDelay := updateCheckRetryDelay
+	updateCheckRetryDelay = 0
+	t.Cleanup(func() { updateCheckRetryDelay = origDelay })
+	withVersion(t, "dev") // praxis not checkable → only raptor can be stale
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+	origV, origF := raptorLocalVersion, fetchRaptorTag
+	t.Cleanup(func() { raptorLocalVersion, fetchRaptorTag = origV, origF })
+	raptorLocalVersion = func() (string, bool) { return "0.1.0", true }
+	fetchRaptorTag = func() (string, error) { return "v0.2.0", nil }
+
+	var buf bytes.Buffer
+	stale := noticeFreshness(&buf, false)
+	if len(stale) != 1 || stale[0].Tool != "raptor" {
+		t.Fatalf("want [raptor] stale, got %+v", stale)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "raptor") || !strings.Contains(out, "raptor upgrade") {
+		t.Errorf("notice missing raptor upgrade prompt: %q", out)
+	}
+
+	// JSON mode prints nothing (envelope carries state.staleTools instead).
+	buf.Reset()
+	if got := noticeFreshness(&buf, true); len(got) != 1 {
+		t.Errorf("JSON mode should still return staleTools, got %+v", got)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("JSON mode must not print a human notice, got %q", buf.String())
+	}
+}
+
 // raptor's nag line must NOT tell the user praxis will run the upgrade.
 func TestNagActionRaptorIsNudgeOnly(t *testing.T) {
 	a := nagAction(raptorSpec())

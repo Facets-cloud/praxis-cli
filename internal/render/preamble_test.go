@@ -25,6 +25,10 @@ func TestExecutionPreambleShape(t *testing.T) {
 	if !strings.Contains(p, "raptor") || !strings.Contains(p, "raptor login") {
 		t.Fatal("preamble should explain raptor is a local CLI run directly (with install/login fallback)")
 	}
+	// Freshness: offer `raptor upgrade` when status reports raptor stale.
+	if !strings.Contains(p, "raptor upgrade") {
+		t.Fatal("preamble should offer `raptor upgrade` when raptor is stale")
+	}
 	if !strings.HasSuffix(p, "\n") {
 		t.Fatal("preamble should end with a trailing newline so callers can concatenate cleanly")
 	}
