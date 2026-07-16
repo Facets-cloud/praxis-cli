@@ -70,6 +70,12 @@ func TestUseIGTreeSkill_IsMCPVariant(t *testing.T) {
 	if strings.Contains(body, "`ig query`") {
 		t.Errorf("use-ig SKILL.md contains local-ig read command `ig query`; this must be the `praxis mcp ig` variant")
 	}
+	// It must teach the local-checkout memory: how the agent resolves a node's
+	// repo-relative path to a real file and remembers where the member lives.
+	// This is the read counterpart the `praxis ig hook` nudge relies on.
+	if !strings.Contains(body, "ig-checkouts.json") {
+		t.Errorf("use-ig SKILL.md must teach the ~/.praxis/ig-checkouts.json local-checkout memory")
+	}
 }
 
 func TestMetaSkillNames_IncludesTreeSkill(t *testing.T) {

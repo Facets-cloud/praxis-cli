@@ -162,6 +162,25 @@ query="<free-text question>"` to BFS from name-matched nodes, or `ig_explain
 follow its edges (more precise when you know the symbol). The node card's source
 file+line is relative to that member's repo root.
 
+## Resolving a node to a local file
+
+A node card's `source file:line` is **relative to the member's build root** —
+which for a monorepo member is a *subdirectory*, not the git repo root. To open
+it:
+
+- **Find the checkout.** If cwd is inside the repo, `git rev-parse --show-toplevel`
+  is the root; otherwise look under the usual places (`~/src`, `~/work`,
+  `~/praxis-envs/<profile>/…`). If it isn't cloned, say so — don't invent a path.
+- **Prepend the member's subdir:** `abs = <checkout>/<member-subdir>/<file>` —
+  `.` for a whole-repo member, e.g. `services/billing` for a monorepo one (find
+  it by locating the node's `file` under the checkout).
+- **Mind drift.** The catalog was built at a past commit; if the checkout moved
+  on, treat `L<n>` as approximate and re-anchor by the symbol name ig printed.
+
+To avoid re-finding a checkout, you may jot it in `~/.praxis/ig-checkouts.json`
+(your own notes, e.g. `"<catalog>/<member>": {repo, path, dir}`) — an optional
+convenience, nothing depends on it being present or correct.
+
 ## Gotchas (these are where agents lose time)
 
 - **`ig_query` is BFS traversal, not semantic search.** It picks a small set of

@@ -3,9 +3,11 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 
 	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
+	"github.com/Facets-cloud/praxis-cli/internal/claudehooks"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
@@ -25,6 +27,11 @@ type postAuthState struct {
 	removedAgents   []agentInstallationLite
 	snapshotPath    string
 	snapshotWarning string
+	// hooksWired is the Claude settings.json path where the use-ig cwd hooks
+	// were wired (SessionStart + CwdChanged), or "" when no claude-code host
+	// was detected. The hooks nudge toward use-ig when cwd is an ig catalog
+	// repo. AI hosts read this to know the nudge is live.
+	hooksWired string
 	// projectScoped is the *effective* install scope after resolving the
 	// active root — not the requested flag. It's false when a forced
 	// project scope couldn't be enabled (e.g. cwd unresolvable or outside
@@ -241,7 +248,68 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 	// and by future `praxis mcp` calls).
 	state.snapshotPath, state.snapshotWarning = refreshMCPSnapshot(out, asJSON, baseURL, token)
 
+	// Step 5: wire the use-ig cwd hooks (claude-code only). Never fatal — a
+	// failed wire must not fail login; skills still installed above.
+	if !noHosts {
+		state.hooksWired = wirePraxisHooks(out, asJSON, hosts)
+	}
+
 	return state
+}
+
+// wirePraxisHooks installs praxis's SessionStart + CwdChanged hooks into the
+// claude-code host's USER-level settings.json so a session inside an ig catalog
+// repo gets nudged toward the use-ig skill (see internal/claudehooks +
+// `praxis ig hook`). Only claude-code has a settings.json hook mechanism; other
+// hosts get skills but no hook. Returns the settings path on a successful wire,
+// "" otherwise. Never fatal: a wire failure warns and returns "".
+//
+// The settings path is ALWAYS user-level, even under `--local` project scope:
+// the hook resolves the active profile per-cwd at run time, so a single
+// user-level hook serves every project — and logout (which unwires the
+// user-level path) can then always clean it up. Deriving the path from the
+// possibly-project-scoped `hosts` entry would strand the hook in a project's
+// settings.json that logout never touches.
+func wirePraxisHooks(out io.Writer, asJSON bool, hosts []harness.Harness) string {
+	detected := false
+	for _, h := range hosts {
+		if h.Name == "claude-code" {
+			detected = true
+			break
+		}
+	}
+	if !detected {
+		return ""
+	}
+	cc, ok := harness.ByName("claude-code") // fresh, unscoped (user-level) harness
+	if !ok {
+		return ""
+	}
+	praxisPath, err := os.Executable()
+	if err != nil {
+		if !asJSON {
+			fmt.Fprintf(out, "Warning: could not resolve praxis binary for hook wiring: %v\n", err)
+		}
+		return ""
+	}
+	if resolved, rErr := filepath.EvalSymlinks(praxisPath); rErr == nil {
+		praxisPath = resolved
+	}
+	settingsPath := filepath.Join(filepath.Dir(cc.SkillDir), "settings.json")
+	changed, err := claudehooks.Install(settingsPath, praxisPath)
+	switch {
+	case err != nil:
+		if !asJSON {
+			fmt.Fprintf(out, "Warning: use-ig hooks not wired (skills installed; wire by hand or re-run): %v\n", err)
+		}
+		return ""
+	case changed && !asJSON:
+		fmt.Fprintf(out, "✓ claude-code: wired SessionStart + CwdChanged hooks → %s\n", settingsPath)
+		fmt.Fprintln(out, "  (they nudge toward use-ig when cwd is an ig catalog repo)")
+	case !changed && !asJSON:
+		fmt.Fprintf(out, "✓ claude-code: use-ig hooks already wired → %s\n", settingsPath)
+	}
+	return settingsPath
 }
 
 // resolveProjectScope reads the already-resolved active root and reports the

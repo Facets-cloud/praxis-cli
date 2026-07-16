@@ -33,6 +33,11 @@ Run 'praxis <command> --help' for details on any command.`,
 
 // Execute runs the root command. Called from main.
 func Execute() {
+	// First-run: land the pre-login GTM skill into the AI host so a freshly
+	// installed praxis is discoverable before any login. Marker-gated (one
+	// stat() after the first time) and skipped for machine-invoked commands;
+	// never blocks the command it precedes.
+	maybeFirstRunBootstrap(os.Args[1:])
 	// Fire a background check for a newer release, but only for an interactive
 	// human (stderr is a TTY). When praxis is spawned by an AI host or a script,
 	// stderr is piped — we skip entirely so the check never delays automation

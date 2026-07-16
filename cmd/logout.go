@@ -3,9 +3,12 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
+	"github.com/Facets-cloud/praxis-cli/internal/claudehooks"
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
@@ -76,6 +79,14 @@ there's no way (and no need) to target a non-active profile directly.`,
 			if p, perr := paths.MCPTools(); perr == nil {
 				_ = os.Remove(p)
 			}
+			if hooksRemoved, hookWarn := unwirePraxisHooks(); hookWarn != "" {
+				warnings = append(warnings, hookWarn)
+				if !asJSON {
+					fmt.Fprintf(out, "Warning: %s\n", hookWarn)
+				}
+			} else if hooksRemoved && !asJSON {
+				fmt.Fprintln(out, "✓ Removed use-ig hooks.")
+			}
 			if asJSON {
 				envelope := map[string]any{
 					"removed":        "all",
@@ -136,6 +147,14 @@ there's no way (and no need) to target a non-active profile directly.`,
 		}
 		if p, perr := paths.MCPTools(); perr == nil {
 			_ = os.Remove(p)
+		}
+		if hooksRemoved, hookWarn := unwirePraxisHooks(); hookWarn != "" {
+			warnings = append(warnings, hookWarn)
+			if !asJSON {
+				fmt.Fprintf(out, "Warning: %s\n", hookWarn)
+			}
+		} else if hooksRemoved && !asJSON {
+			fmt.Fprintln(out, "✓ Removed use-ig hooks.")
 		}
 
 		if asJSON {
@@ -205,4 +224,25 @@ func ifTrue(cond bool, v string) any {
 		return v
 	}
 	return nil
+}
+
+// unwirePraxisHooks removes the use-ig SessionStart + CwdChanged hooks from the
+// claude-code host's user-level settings.json, the counterpart to the wiring
+// `praxis login` does. Never fatal: logout is a cleanup path. Returns whether it
+// removed anything and a non-empty warning string on failure, so the caller can
+// surface it in both text and the JSON warnings envelope (a silent JSON success
+// while hooks remain installed would mislead automation). Foreign hooks and
+// other settings keys are left intact.
+func unwirePraxisHooks() (removed bool, warning string) {
+	cc, ok := harness.ByName("claude-code")
+	if !ok {
+		return false, ""
+	}
+	settingsPath := filepath.Join(filepath.Dir(cc.SkillDir), "settings.json")
+	praxisPath, _ := os.Executable()
+	changed, err := claudehooks.Uninstall(settingsPath, praxisPath)
+	if err != nil {
+		return false, fmt.Sprintf("removing use-ig hooks failed: %v", err)
+	}
+	return changed, ""
 }
