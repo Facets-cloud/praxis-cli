@@ -321,7 +321,7 @@ func TestCheckTool_Raptor(t *testing.T) {
 			raptorLocalVersion = func() (string, bool) { return tc.local, tc.installed }
 			fetched := false
 			fetchRaptorTag = func() (string, error) { fetched = true; return tc.latest, tc.latestErr }
-			f := checkTool(raptorSpec(), time.Now(), true) // live → bypass cache
+			f := checkTool(raptorSpec(), time.Now(), freshLive) // bypass cache
 			if f.Installed != tc.wantInstalled {
 				t.Errorf("Installed = %v, want %v", f.Installed, tc.wantInstalled)
 			}
@@ -356,7 +356,7 @@ func TestCheckTool_PerToolCacheIsolation(t *testing.T) {
 	fetched := false
 	fetchRaptorTag = func() (string, error) { fetched = true; return "v0.2.0", nil }
 
-	f := checkTool(raptorSpec(), time.Now(), false) // NOT live → cache-first
+	f := checkTool(raptorSpec(), time.Now(), freshCachedOrFetch) // cache-first
 	if !fetched {
 		t.Error("raptor must fetch when only praxis is cached (per-tool isolation)")
 	}
@@ -413,28 +413,48 @@ func TestNewerThan(t *testing.T) {
 	}
 }
 
-func TestPrintUpdateNotification(t *testing.T) {
-	withVersion(t, "1.0.0")
-	var buf bytes.Buffer
-	printUpdateNotification("v1.2.0", &buf)
-	out := buf.String()
-
-	for _, want := range []string{"1.0.0", "v1.2.0", "praxis update", "PRAXIS_NO_UPDATE_CHECK"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("notification missing %q\n%s", want, out)
-		}
+func TestPrintFreshnessBox(t *testing.T) {
+	cases := []struct {
+		name   string
+		f      Freshness
+		action string
+		want   []string
+	}{
+		{"praxis", Freshness{Tool: "praxis", Current: "1.0.0", Latest: "v1.2.0"},
+			nagAction(praxisSpec()), []string{"praxis", "1.0.0", "v1.2.0", "praxis update", "PRAXIS_NO_UPDATE_CHECK"}},
+		{"raptor", Freshness{Tool: "raptor", Current: "0.1.0", Latest: "v0.2.0"},
+			nagAction(raptorSpec()), []string{"raptor", "0.1.0", "v0.2.0", "raptor upgrade", "PRAXIS_NO_UPDATE_CHECK"}},
 	}
-
-	// Every box line must be the same display width so the right border lines
-	// up — this is what the wide-rune handling exists for (⚡ and → are wide).
-	var widths []int
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		widths = append(widths, displayWidth(line))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			printFreshnessBox(tc.f, tc.action, &buf)
+			out := buf.String()
+			for _, want := range tc.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("box missing %q\n%s", want, out)
+				}
+			}
+			// Every box line must be the same display width so the right border
+			// aligns (⚡ and → are wide runes).
+			var widths []int
+			for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+				widths = append(widths, displayWidth(line))
+			}
+			for i, w := range widths {
+				if w != widths[0] {
+					t.Errorf("line %d width = %d, want %d (misaligned)\n%s", i, w, widths[0], out)
+				}
+			}
+		})
 	}
-	for i, w := range widths {
-		if w != widths[0] {
-			t.Errorf("line %d display width = %d, want %d (misaligned box)\n%s", i, w, widths[0], out)
-		}
+}
+
+// raptor's nag line must NOT tell the user praxis will run the upgrade.
+func TestNagActionRaptorIsNudgeOnly(t *testing.T) {
+	a := nagAction(raptorSpec())
+	if !strings.Contains(a, "raptor upgrade") || !strings.Contains(a, "won't run it") {
+		t.Errorf("raptor nag must be nudge-only: %q", a)
 	}
 }
 

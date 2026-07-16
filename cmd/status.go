@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
@@ -66,6 +67,15 @@ verification result.`,
 				state["project_root"] = root
 			}
 		}
+
+		// Tool freshness (praxis + raptor) from the shared engine. Plain status
+		// is a local-only snapshot → cached latest, no network; --refresh forces
+		// a live re-check alongside the token check below.
+		freshnessMode := freshCached
+		if statusRefresh {
+			freshnessMode = freshLive
+		}
+		state["tools"] = toolsFreshness(time.Now(), freshnessMode)
 		if asJSON {
 			if statusFull {
 				// Same shaped schema as `list-skills --json` and

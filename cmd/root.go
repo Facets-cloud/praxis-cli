@@ -49,13 +49,13 @@ func Execute() {
 	// cold network fetch waits, bounded by updateCheckMaxWait.
 	var notify func()
 	if render.IsTTY(os.Stderr) && !skipUpdateCheck(os.Args[1:]) {
-		ch := make(chan string, 1)
-		go func() { ch <- checkForUpdate() }()
+		ch := make(chan []staleNag, 1)
+		go func() { ch <- collectStaleNags() }()
 		notify = func() {
 			select {
-			case latest := <-ch:
-				if latest != "" {
-					printUpdateNotification(latest, os.Stderr)
+			case nags := <-ch:
+				for _, n := range nags {
+					printFreshnessBox(n.Freshness, n.Action, os.Stderr)
 				}
 			case <-time.After(updateCheckMaxWait):
 				// Cold fetch still in flight — skip the notice for this run.
