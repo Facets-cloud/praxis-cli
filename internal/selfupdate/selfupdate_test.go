@@ -77,11 +77,16 @@ func TestReleaseTagFrom(t *testing.T) {
 		t.Errorf("tag = %q, want v2.3.4", tag)
 	}
 
-	// Errors propagate (so the freshness engine treats it as "not stale").
+	// Errors propagate (so the freshness engine treats it as "not stale"), and
+	// the 404 "no releases published yet" contract is preserved.
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404) }))
 	defer bad.Close()
-	if _, err := releaseTagFrom(bad.URL); err == nil {
-		t.Error("expected error on 404")
+	_, err = releaseTagFrom(bad.URL)
+	if err == nil {
+		t.Fatal("expected error on 404")
+	}
+	if !strings.Contains(err.Error(), "no releases") {
+		t.Errorf("404 error = %v, want substring 'no releases'", err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
@@ -90,6 +91,14 @@ func TestStatusCmd_RefreshDoesLiveFreshness(t *testing.T) {
 	origV, origF := raptorLocalVersion, fetchRaptorTag
 	t.Cleanup(func() { raptorLocalVersion, fetchRaptorTag = origV, origF })
 	raptorLocalVersion = func() (string, bool) { return "0.1.0", true }
+	// Seed a FRESH raptor cache entry: without this, freshCachedOrFetch would
+	// also fetch, so the test would pass even if --refresh stopped using
+	// freshLive. A fresh entry is only bypassed by a genuine live check.
+	if err := saveFreshnessCache(freshnessCache{
+		"raptor": {CheckedAt: time.Now(), LatestVersion: "v0.1.0"},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	fetched := false
 	fetchRaptorTag = func() (string, error) { fetched = true; return "v0.2.0", nil }
 
@@ -99,7 +108,7 @@ func TestStatusCmd_RefreshDoesLiveFreshness(t *testing.T) {
 		t.Fatalf("RunE err = %v", err)
 	}
 	if !fetched {
-		t.Error("status --refresh must trigger a live raptor freshness fetch")
+		t.Error("status --refresh must trigger a live raptor freshness fetch (freshLive bypasses a fresh cache)")
 	}
 }
 

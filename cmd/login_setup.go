@@ -266,19 +266,19 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 	return state
 }
 
-// noticeFreshness checks every tool's freshness and, for each one behind its
+// noticeFreshness checks tool freshness (concurrently + bounded, so an offline
+// login isn't stalled by slow release lookups) and, for each tool behind its
 // latest release, prints a one-line notice (non-JSON) and collects it. Uses the
 // shared engine (freshCachedOrFetch), so it warms the cache too.
 func noticeFreshness(out io.Writer, asJSON bool) []Freshness {
 	var stale []Freshness
-	for _, spec := range freshnessTools() {
-		f := checkTool(spec, time.Now(), freshCachedOrFetch)
+	for _, f := range checkToolsBounded(time.Now(), freshCachedOrFetch) {
 		if !f.Stale {
 			continue
 		}
 		stale = append(stale, f)
 		if !asJSON {
-			fmt.Fprintf(out, "! %s %s is behind %s — %s\n", f.Tool, f.Current, f.Latest, nagAction(spec))
+			fmt.Fprintf(out, "! %s %s is behind %s — %s\n", f.Tool, f.Current, f.Latest, nagActionForTool(f.Tool))
 		}
 	}
 	return stale

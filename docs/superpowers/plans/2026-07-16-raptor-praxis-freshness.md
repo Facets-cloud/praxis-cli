@@ -96,10 +96,10 @@ func checkTool(spec toolSpec, now time.Time) Freshness  // uses the SHARED cache
 **Files:** `cmd/root.go`, `cmd/update_check.go`, tests
 
 Generalize `printUpdateNotification(latest)` → `printToolNotification(Freshness)`
-(parameterized name / current→latest / hint line: `Run \`praxis update\`` vs
-`Ask me to run \`raptor upgrade\``). Execute() loops `tools()`, runs the shared
-check in the existing background/TTY/maxWait pattern, prints one box per stale
-tool. `skipUpdateCheck` and the kill-switch unchanged.
+(parameterized name / current→latest / hint line: "Run praxis update" vs "Ask me
+to run raptor upgrade"). Execute() loops the tool registry, runs the shared check
+in the existing background/TTY/maxWait pattern, prints one box per stale tool.
+`skipUpdateCheck` and the kill-switch unchanged.
 
 - [ ] Test: `printToolNotification` renders praxis box identical to today (golden), and a raptor box with the `raptor upgrade` hint.
 - [ ] Test: Execute nag path emits raptor box when raptor stale (injected), nothing when fresh, skipped non-TTY.

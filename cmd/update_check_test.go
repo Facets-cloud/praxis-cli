@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -276,6 +278,25 @@ func TestCheckForUpdate_ThrottlesFailures(t *testing.T) {
 	}
 	if calls != firstCalls {
 		t.Errorf("second call re-fetched (%d → %d); throttle not honored", firstCalls, calls)
+	}
+}
+
+// TestExecRaptorVersionTimeout proves a wedged `raptor --version` can't hang the
+// freshness check — the context timeout yields ("", false).
+func TestExecRaptorVersionTimeout(t *testing.T) {
+	if _, err := exec.LookPath("raptor"); err != nil {
+		t.Skip("raptor not installed; execRaptorVersion returns early via LookPath")
+	}
+	origCmd := raptorVersionCmd
+	origTO := raptorVersionTimeout
+	t.Cleanup(func() { raptorVersionCmd = origCmd; raptorVersionTimeout = origTO })
+	raptorVersionTimeout = 10 * time.Millisecond
+	raptorVersionCmd = func(ctx context.Context) ([]byte, error) {
+		<-ctx.Done() // simulate a hung binary: block until the timeout fires
+		return nil, ctx.Err()
+	}
+	if v, ok := execRaptorVersion(); ok || v != "" {
+		t.Errorf("a hung raptor must yield (\"\", false), got (%q, %v)", v, ok)
 	}
 }
 

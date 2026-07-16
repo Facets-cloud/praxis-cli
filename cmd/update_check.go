@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -263,19 +264,32 @@ func fetchTagWithRetry(fetch func() (string, error)) string {
 // (e.g. "raptor version 0.1.81").
 var raptorSemver = regexp.MustCompile(`\d+\.\d+\.\d+`)
 
+// raptorVersionTimeout bounds the local `raptor --version` call so a wedged
+// raptor binary can never hang a login/nag freshness check.
+var raptorVersionTimeout = 2 * time.Second
+
 // execRaptorVersion returns raptor's local version and whether raptor is
-// installed, by running `raptor --version`. Not on PATH or unparsable →
-// ("", false), so the engine reports it not-installed and never stale.
+// installed, by running `raptor --version` under a short timeout. Not on PATH,
+// timed out, or unparsable → ("", false), so the engine reports it
+// not-installed and never stale.
 func execRaptorVersion() (string, bool) {
 	if _, err := exec.LookPath("raptor"); err != nil {
 		return "", false
 	}
-	out, err := exec.Command("raptor", "--version").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), raptorVersionTimeout)
+	defer cancel()
+	out, err := raptorVersionCmd(ctx)
 	if err != nil {
 		return "", false
 	}
 	v := raptorSemver.FindString(string(out))
 	return v, v != ""
+}
+
+// raptorVersionCmd runs `raptor --version` under ctx — a seam so tests can
+// simulate a hung binary.
+var raptorVersionCmd = func(ctx context.Context) ([]byte, error) {
+	return exec.CommandContext(ctx, "raptor", "--version").Output()
 }
 
 // readFreshnessCache reads the per-tool throttle cache from disk.
@@ -295,7 +309,12 @@ func readFreshnessCache() (freshnessCache, error) {
 	return c, nil
 }
 
-// saveFreshnessCache persists the whole cache, creating ~/.praxis if needed.
+// saveFreshnessCache persists the whole cache ATOMICALLY (temp file + rename),
+// creating ~/.praxis if needed. The atomic rename means a concurrent praxis
+// process never reads a torn/half-written cache. Concurrent merges are
+// last-writer-wins, which is benign for a throttle cache: the worst case is one
+// process's fresh entry being overwritten, costing at most one extra GitHub
+// call before the next write settles — no corruption, no lost correctness.
 func saveFreshnessCache(c freshnessCache) error {
 	dir, err := paths.Dir()
 	if err != nil {
@@ -312,7 +331,24 @@ func saveFreshnessCache(c freshnessCache) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	tmp, err := os.CreateTemp(dir, ".freshness-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // putCacheEntry merges one tool's entry into the shared cache (best-effort).
@@ -331,17 +367,56 @@ type staleNag struct {
 	Action    string
 }
 
-// collectStaleNags checks every registered tool and returns the stale ones with
-// their upgrade instruction. Best-effort (each checkTool is), used by the
-// Execute-time TTY nag so praxis and raptor surface through ONE path.
-func collectStaleNags() []staleNag {
-	var out []staleNag
-	for _, spec := range freshnessTools() {
-		if f := checkTool(spec, time.Now(), freshCachedOrFetch); f.Stale {
-			out = append(out, staleNag{Freshness: f, Action: nagAction(spec)})
+// freshnessDeadline bounds a freshness pass (nag/login): a tool whose check
+// doesn't finish in time is simply omitted, so a slow raptor lookup never
+// suppresses a fast/cached praxis nag nor stalls login.
+var freshnessDeadline = 4 * time.Second
+
+// checkToolsBounded runs each tool's check CONCURRENTLY and returns those that
+// finish within freshnessDeadline. This bounds aggregate latency and stops one
+// slow tool from blocking the others (findings: login latency, nag suppression).
+// A tool that misses the deadline is omitted (best-effort); its goroutine
+// finishes on its own (and warms the cache for next time).
+func checkToolsBounded(now time.Time, mode freshMode) []Freshness {
+	specs := freshnessTools()
+	ch := make(chan Freshness, len(specs))
+	for _, spec := range specs {
+		go func(s toolSpec) { ch <- checkTool(s, now, mode) }(spec)
+	}
+	out := make([]Freshness, 0, len(specs))
+	timer := time.NewTimer(freshnessDeadline)
+	defer timer.Stop()
+	for range specs {
+		select {
+		case f := <-ch:
+			out = append(out, f)
+		case <-timer.C:
+			return out // partial — return whatever completed in time
 		}
 	}
 	return out
+}
+
+// collectStaleNags returns the stale tools (concurrent, bounded) with their
+// upgrade instruction — the Execute-time TTY nag source.
+func collectStaleNags() []staleNag {
+	var out []staleNag
+	for _, f := range checkToolsBounded(time.Now(), freshCachedOrFetch) {
+		if f.Stale {
+			out = append(out, staleNag{Freshness: f, Action: nagActionForTool(f.Tool)})
+		}
+	}
+	return out
+}
+
+// specByName looks up a tool's spec by name.
+func specByName(name string) (toolSpec, bool) {
+	for _, s := range freshnessTools() {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return toolSpec{}, false
 }
 
 // nagAction is the upgrade instruction per tool: praxis self-updates; raptor is
@@ -351,6 +426,15 @@ func nagAction(spec toolSpec) string {
 		return "Run `praxis update` to install the latest version"
 	}
 	return fmt.Sprintf("Ask your user, then run `%s` (praxis won't run it for you)", spec.UpgradeHint)
+}
+
+// nagActionForTool is nagAction keyed by tool name (post-bounded, where we hold
+// a Freshness rather than a spec).
+func nagActionForTool(name string) string {
+	if s, ok := specByName(name); ok {
+		return nagAction(s)
+	}
+	return ""
 }
 
 // printFreshnessBox writes the "update available" box for a stale tool to w

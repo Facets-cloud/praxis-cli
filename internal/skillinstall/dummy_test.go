@@ -44,4 +44,8 @@ func TestPraxisMetaSkill_RaptorIsLocalNotGateway(t *testing.T) {
 			t.Errorf("meta-skill missing raptor-freshness guidance %q", want)
 		}
 	}
+	// `tools` is a JSON array, so the object path `raptor.stale` is wrong.
+	if strings.Contains(body, "raptor.stale") {
+		t.Error("meta-skill uses the wrong shape `raptor.stale`; tools is an array — find the raptor entry")
+	}
 }

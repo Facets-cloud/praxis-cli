@@ -22,7 +22,7 @@ var (
 func init() {
 	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "JSON output")
 	statusCmd.Flags().BoolVar(&statusRefresh, "refresh", false,
-		"also call /ai-api/auth/me to verify the token is still valid")
+		"live checks: verify the token via /ai-api/auth/me AND re-fetch tool (praxis/raptor) latest versions")
 	statusCmd.Flags().BoolVar(&statusFull, "full", false,
 		"include per-harness install detail (paths) in JSON output")
 	rootCmd.AddCommand(statusCmd)
@@ -34,10 +34,11 @@ var statusCmd = &cobra.Command{
 	Long: `Read-only snapshot for AI hosts to inspect: which profile is
 active, whether it has credentials, and which skills are installed.
 
-By default this is a LOCAL-ONLY snapshot (no network calls). Pass
---refresh to also hit /ai-api/auth/me, which catches expired/revoked
-tokens. The JSON output gains an "auth_check" field describing the
-verification result.`,
+By default this is a LOCAL-ONLY snapshot (no network calls): the "tools"
+freshness block is served from cache. Pass --refresh to make live calls —
+/ai-api/auth/me (catches expired/revoked tokens; adds an "auth_check"
+field) AND a re-fetch of each tool's latest release so "tools" reflects
+current staleness.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
