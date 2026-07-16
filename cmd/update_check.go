@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,7 +14,6 @@ import (
 	"unicode"
 
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
-	"github.com/Facets-cloud/praxis-cli/internal/selfupdate"
 )
 
 // updateCheckInterval throttles how often the background check hits GitHub.
@@ -31,56 +32,132 @@ const updateCheckMaxWait = 3 * time.Second
 // a const) so tests can zero it out and not sleep.
 var updateCheckRetryDelay = 2 * time.Second
 
-// updateCheckCache is the on-disk throttle state at paths.UpdateCheckCache().
-type updateCheckCache struct {
+// toolCacheEntry is the per-tool throttle state persisted at
+// paths.UpdateCheckCache(). freshnessCache maps tool name → entry: ONE file for
+// all tools, so praxis and raptor never fragment into separate caches.
+type toolCacheEntry struct {
 	CheckedAt     time.Time `json:"checked_at"`
 	LatestVersion string    `json:"latest_version"`
 }
+type freshnessCache map[string]toolCacheEntry
 
-// checkForUpdate returns the latest release tag when a newer version is
-// available, otherwise an empty string. It is best-effort: any error (network,
-// disk, API) yields "" so the calling command is never disturbed. A 24h file
-// cache avoids hammering GitHub; on a cold/stale cache it performs one live
-// fetch with one silent retry.
-//
-// The live fetch reuses cmd/update.go's fetchLatestRelease seam
-// (= selfupdate.LatestRelease), so tests stub both flows the same way.
+// toolSpec describes a tool whose freshness praxis tracks. praxis and raptor
+// differ ONLY here — the cache, comparator, renderer, and throttle are all
+// shared. UpgradeHint is the command the user runs to upgrade; praxis's
+// `praxis update` self-replaces the binary, raptor's `raptor upgrade` is
+// nudge-only (praxis never runs it).
+type toolSpec struct {
+	Name        string
+	UpgradeHint string
+	// current returns (localVersion, installed, checkable): praxis is always
+	// installed and checkable unless it's a dev build; raptor is installed iff
+	// `raptor` is on PATH, and checkable iff installed.
+	current func() (version string, installed, checkable bool)
+	// fetchTag returns the tool's latest published tag (a network call routed
+	// through a package-var seam so tests stub it).
+	fetchTag func() (string, error)
+}
+
+func praxisSpec() toolSpec {
+	return toolSpec{
+		Name: "praxis", UpgradeHint: "praxis update",
+		current: func() (string, bool, bool) { return version, true, !isDevBuild(version) },
+		fetchTag: func() (string, error) {
+			r, err := fetchLatestRelease()
+			if err != nil || r == nil {
+				return "", err
+			}
+			return r.TagName, nil
+		},
+	}
+}
+
+func raptorSpec() toolSpec {
+	return toolSpec{
+		Name: "raptor", UpgradeHint: "raptor upgrade",
+		current:  func() (string, bool, bool) { v, ok := raptorLocalVersion(); return v, ok, ok },
+		fetchTag: fetchRaptorTag,
+	}
+}
+
+// freshnessTools is the registry every surface (nag, status, login) iterates.
+func freshnessTools() []toolSpec { return []toolSpec{praxisSpec(), raptorSpec()} }
+
+// Freshness is one tool's freshness result, surfaced to status/login/nag.
+type Freshness struct {
+	Tool      string `json:"tool"`
+	Installed bool   `json:"installed"`
+	Current   string `json:"current,omitempty"`
+	Latest    string `json:"latest,omitempty"`
+	Stale     bool   `json:"stale"`
+}
+
+// freshMode controls whether checkTool may hit the network.
+type freshMode int
+
+const (
+	// freshCached reads the cache only — NO network. Used by `praxis status`,
+	// which is a local-only snapshot; a cache miss yields "" (not stale).
+	freshCached freshMode = iota
+	// freshCachedOrFetch serves a <24h cache entry, else fetches once. Used by
+	// the Execute nag and login.
+	freshCachedOrFetch
+	// freshLive always fetches. Used by `praxis status --refresh`.
+	freshLive
+)
+
+// checkTool resolves one tool's freshness: best-effort, never fatal. The
+// kill-switch and non-checkable tools (praxis dev build / raptor absent)
+// short-circuit to "not stale".
+func checkTool(spec toolSpec, now time.Time, mode freshMode) Freshness {
+	cur, installed, checkable := spec.current()
+	f := Freshness{Tool: spec.Name, Installed: installed, Current: cur}
+	if os.Getenv("PRAXIS_NO_UPDATE_CHECK") != "" || !checkable {
+		return f
+	}
+	f.Latest = latestTagFor(spec, now, mode)
+	f.Stale = f.Latest != "" && compareSemver(cur, f.Latest) < 0
+	return f
+}
+
+// checkForUpdate preserves praxis's original nag entry point: the latest tag
+// when praxis itself is behind, else "". Now a thin call over the shared engine.
 func checkForUpdate() string {
-	if os.Getenv("PRAXIS_NO_UPDATE_CHECK") != "" {
-		return ""
+	if f := checkTool(praxisSpec(), time.Now(), freshCachedOrFetch); f.Stale {
+		return f.Latest
 	}
+	return ""
+}
 
-	// Skip development builds. Released binaries are stamped with a clean
-	// semver by goreleaser (e.g. "1.0.0"); local `make build` uses
-	// `git describe --tags --always --dirty`, which yields "dev" (no tag),
-	// a "-dirty" suffix on a modified tree, or a "-<n>-g<sha>" suffix when
-	// ahead of the last tag. Nagging those would be noise.
-	if isDevBuild(version) {
-		return ""
+// toolsFreshness reports every registered tool's freshness in one pass — the
+// source for `praxis status`'s "tools" block. mode is freshCached for a plain
+// status (local-only) and freshLive for `--refresh`.
+func toolsFreshness(now time.Time, mode freshMode) []Freshness {
+	specs := freshnessTools()
+	out := make([]Freshness, 0, len(specs))
+	for _, spec := range specs {
+		out = append(out, checkTool(spec, now, mode))
 	}
+	return out
+}
 
-	// Serve from cache while fresh.
-	if cached, err := readUpdateCache(); err == nil && time.Since(cached.CheckedAt) < updateCheckInterval {
-		return newerThan(version, cached.LatestVersion)
+// latestTagFor returns a tool's latest tag per mode. A failed fetch caches an
+// empty tag so an offline/API outage honors the 24h throttle (compareSemver
+// treats "" as not-stale) instead of re-fetching every run.
+func latestTagFor(spec toolSpec, now time.Time, mode freshMode) string {
+	if mode != freshLive {
+		if c, err := readFreshnessCache(); err == nil {
+			if e, ok := c[spec.Name]; ok && (mode == freshCached || now.Sub(e.CheckedAt) < updateCheckInterval) {
+				return e.LatestVersion
+			}
+		}
 	}
-
-	// Live fetch with one silent retry on any error.
-	rel := fetchLatestReleaseWithRetry()
-	if rel == nil {
-		// Record the attempt (empty LatestVersion) so an offline/API outage
-		// honors the 24h throttle instead of re-fetching on every invocation.
-		// The fresh-cache branch above treats an empty LatestVersion as "no
-		// update" via newerThan, so this stays silent until the cache expires.
-		_ = saveUpdateCache(updateCheckCache{CheckedAt: time.Now()})
-		return "" // best-effort — stay silent
+	if mode == freshCached {
+		return "" // status default: local-only, never fetch
 	}
-
-	_ = saveUpdateCache(updateCheckCache{
-		CheckedAt:     time.Now(),
-		LatestVersion: rel.TagName,
-	})
-
-	return newerThan(version, rel.TagName)
+	tag := fetchTagWithRetry(spec.fetchTag)
+	putCacheEntry(spec.Name, toolCacheEntry{CheckedAt: now, LatestVersion: tag})
+	return tag
 }
 
 // gitDescribeAhead matches the "-<n>-g<sha>" suffix git describe appends when
@@ -169,37 +246,73 @@ func splitVersion(v string) ([3]int, string) {
 	return nums, pre
 }
 
-// fetchLatestReleaseWithRetry calls the fetchLatestRelease seam up to twice,
-// pausing briefly between attempts. Returns nil if both attempts fail.
-func fetchLatestReleaseWithRetry() *selfupdate.Release {
+// fetchTagWithRetry calls a tool's fetchTag seam up to twice, pausing briefly
+// between attempts. Returns "" if both attempts fail or yield an empty tag.
+func fetchTagWithRetry(fetch func() (string, error)) string {
 	for attempt := 1; attempt <= 2; attempt++ {
-		rel, err := fetchLatestRelease()
-		if err == nil && rel != nil {
-			return rel
+		if tag, err := fetch(); err == nil && tag != "" {
+			return tag
 		}
 		if attempt < 2 {
 			time.Sleep(updateCheckRetryDelay)
 		}
 	}
-	return nil
+	return ""
 }
 
-// readUpdateCache reads the throttle cache from disk.
-func readUpdateCache() (updateCheckCache, error) {
+// raptorSemver extracts the numeric version from `raptor --version` output
+// (e.g. "raptor version 0.1.81").
+var raptorSemver = regexp.MustCompile(`\d+\.\d+\.\d+`)
+
+// raptorVersionTimeout bounds the local `raptor --version` call so a wedged
+// raptor binary can never hang a login/nag freshness check.
+var raptorVersionTimeout = 2 * time.Second
+
+// execRaptorVersion returns raptor's local version and whether raptor is
+// installed, by running `raptor --version` under a short timeout. Not on PATH
+// (the command errors), timed out, or unparsable → ("", false), so the engine
+// reports it not-installed and never stale.
+func execRaptorVersion() (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), raptorVersionTimeout)
+	defer cancel()
+	out, err := raptorVersionCmd(ctx)
+	if err != nil {
+		return "", false
+	}
+	v := raptorSemver.FindString(string(out))
+	return v, v != ""
+}
+
+// raptorVersionCmd runs `raptor --version` under ctx — a seam so tests can
+// simulate a hung binary.
+var raptorVersionCmd = func(ctx context.Context) ([]byte, error) {
+	return exec.CommandContext(ctx, "raptor", "--version").Output()
+}
+
+// readFreshnessCache reads the per-tool throttle cache from disk.
+func readFreshnessCache() (freshnessCache, error) {
 	path, err := paths.UpdateCheckCache()
 	if err != nil {
-		return updateCheckCache{}, err
+		return nil, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return updateCheckCache{}, err
+		return nil, err
 	}
-	var c updateCheckCache
-	return c, json.Unmarshal(data, &c)
+	var c freshnessCache
+	if err := json.Unmarshal(data, &c); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
-// saveUpdateCache persists the throttle cache, creating ~/.praxis if needed.
-func saveUpdateCache(c updateCheckCache) error {
+// saveFreshnessCache persists the whole cache ATOMICALLY (temp file + rename),
+// creating ~/.praxis if needed. The atomic rename means a concurrent praxis
+// process never reads a torn/half-written cache. Concurrent merges are
+// last-writer-wins, which is benign for a throttle cache: the worst case is one
+// process's fresh entry being overwritten, costing at most one extra GitHub
+// call before the next write settles — no corruption, no lost correctness.
+func saveFreshnessCache(c freshnessCache) error {
 	dir, err := paths.Dir()
 	if err != nil {
 		return err
@@ -215,15 +328,119 @@ func saveUpdateCache(c updateCheckCache) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	tmp, err := os.CreateTemp(dir, ".freshness-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
-// printUpdateNotification writes the "update available" box to w (os.Stderr in
-// production). Kept on stderr so it never pollutes a command's parseable
-// stdout when an AI host spawns praxis as a subprocess.
-func printUpdateNotification(latestVersion string, w io.Writer) {
-	line1 := fmt.Sprintf("  ⚡ Update available: %s → %s", version, latestVersion)
-	line2 := "  Run `praxis update` to install the latest version"
+// putCacheEntry merges one tool's entry into the shared cache (best-effort).
+func putCacheEntry(tool string, e toolCacheEntry) {
+	c, err := readFreshnessCache()
+	if err != nil || c == nil {
+		c = freshnessCache{}
+	}
+	c[tool] = e
+	_ = saveFreshnessCache(c)
+}
+
+// staleNag pairs a stale tool's freshness with its rendered upgrade line.
+type staleNag struct {
+	Freshness Freshness
+	Action    string
+}
+
+// freshnessDeadline bounds a freshness pass (nag/login): a tool whose check
+// doesn't finish in time is simply omitted, so a slow raptor lookup never
+// suppresses a fast/cached praxis nag nor stalls login.
+var freshnessDeadline = 4 * time.Second
+
+// checkToolsBounded runs each tool's check CONCURRENTLY and returns those that
+// finish within freshnessDeadline. This bounds aggregate latency and stops one
+// slow tool from blocking the others (findings: login latency, nag suppression).
+// A tool that misses the deadline is omitted (best-effort); its goroutine
+// finishes on its own (and warms the cache for next time).
+func checkToolsBounded(now time.Time, mode freshMode) []Freshness {
+	specs := freshnessTools()
+	ch := make(chan Freshness, len(specs))
+	for _, spec := range specs {
+		go func(s toolSpec) { ch <- checkTool(s, now, mode) }(spec)
+	}
+	out := make([]Freshness, 0, len(specs))
+	timer := time.NewTimer(freshnessDeadline)
+	defer timer.Stop()
+	for range specs {
+		select {
+		case f := <-ch:
+			out = append(out, f)
+		case <-timer.C:
+			return out // partial — return whatever completed in time
+		}
+	}
+	return out
+}
+
+// collectStaleNags returns the stale tools (concurrent, bounded) with their
+// upgrade instruction — the Execute-time TTY nag source.
+func collectStaleNags() []staleNag {
+	var out []staleNag
+	for _, f := range checkToolsBounded(time.Now(), freshCachedOrFetch) {
+		if f.Stale {
+			out = append(out, staleNag{Freshness: f, Action: nagActionForTool(f.Tool)})
+		}
+	}
+	return out
+}
+
+// specByName looks up a tool's spec by name.
+func specByName(name string) (toolSpec, bool) {
+	for _, s := range freshnessTools() {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return toolSpec{}, false
+}
+
+// nagAction is the upgrade instruction per tool: praxis self-updates; raptor is
+// nudge-only — praxis surfaces staleness but never runs `raptor upgrade`.
+func nagAction(spec toolSpec) string {
+	if spec.Name == "praxis" {
+		return "Run `praxis update` to install the latest version"
+	}
+	return fmt.Sprintf("Ask your user, then run `%s` (praxis won't run it for you)", spec.UpgradeHint)
+}
+
+// nagActionForTool is nagAction keyed by tool name (post-bounded, where we hold
+// a Freshness rather than a spec).
+func nagActionForTool(name string) string {
+	if s, ok := specByName(name); ok {
+		return nagAction(s)
+	}
+	return ""
+}
+
+// printFreshnessBox writes the "update available" box for a stale tool to w
+// (os.Stderr in production, so it never pollutes a command's parseable stdout
+// when an AI host spawns praxis as a subprocess). actionLine is the tool's
+// upgrade instruction.
+func printFreshnessBox(f Freshness, actionLine string, w io.Writer) {
+	line1 := fmt.Sprintf("  ⚡ %s update available: %s → %s", f.Tool, f.Current, f.Latest)
+	line2 := "  " + actionLine
 	line3 := "  Set PRAXIS_NO_UPDATE_CHECK=1 to silence this notice"
 
 	// Use display-column width, not byte length, so wide characters (⚡, →)

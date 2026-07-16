@@ -53,6 +53,43 @@ func TestFetchRelease_Success(t *testing.T) {
 	}
 }
 
+func TestReleaseURL(t *testing.T) {
+	if got := releaseURL("Facets-cloud/raptor-releases"); got != "https://api.github.com/repos/Facets-cloud/raptor-releases/releases/latest" {
+		t.Errorf("releaseURL = %q", got)
+	}
+	// praxis's own URL must still route through the shared builder.
+	if latestReleaseURL() != releaseURL("Facets-cloud/praxis-cli") {
+		t.Errorf("latestReleaseURL not built from releaseURL: %q", latestReleaseURL())
+	}
+}
+
+func TestReleaseTagFrom(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(fakeReleaseJSON("v2.3.4")))
+	}))
+	defer srv.Close()
+	tag, err := releaseTagFrom(srv.URL)
+	if err != nil {
+		t.Fatalf("releaseTagFrom err = %v", err)
+	}
+	if tag != "v2.3.4" {
+		t.Errorf("tag = %q, want v2.3.4", tag)
+	}
+
+	// Errors propagate (so the freshness engine treats it as "not stale"), and
+	// the 404 "no releases published yet" contract is preserved.
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404) }))
+	defer bad.Close()
+	_, err = releaseTagFrom(bad.URL)
+	if err == nil {
+		t.Fatal("expected error on 404")
+	}
+	if !strings.Contains(err.Error(), "no releases") {
+		t.Errorf("404 error = %v, want substring 'no releases'", err)
+	}
+}
+
 func TestFetchRelease_404(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(404)

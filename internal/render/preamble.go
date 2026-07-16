@@ -35,7 +35,10 @@ const ExecutionPreamble = "" +
 	"> Run `raptor …` commands directly in your shell; never route them\n" +
 	"> through `praxis mcp` (there is no `raptor_cli` gateway tool). If\n" +
 	"> `command -v raptor` finds nothing, ask the user to install it; if\n" +
-	"> `raptor whoami` fails, ask the user to run `raptor login` first.\n" +
+	"> `raptor whoami` fails, ask the user to run `raptor login` first. In\n" +
+	"> `praxis status --json`, `tools` is an ARRAY — find the entry whose\n" +
+	"> `tool` is `raptor`; if that entry's `stale` is true, offer to run\n" +
+	"> `raptor upgrade` (ask first — never auto-run it).\n" +
 	">\n" +
 	"> **Discovering what's available** — to see every MCP and function the\n" +
 	"> gateway exposes, run `praxis mcp --json` (live fetch). A snapshot\n" +

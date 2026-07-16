@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
@@ -45,6 +46,69 @@ func TestStatusCmd_LocalMode_ReportsProjectRootAndSource(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("status in local mode missing %q\nfull: %s", want, out)
 		}
+	}
+}
+
+func TestStatusCmd_IncludesToolsFreshness(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	resetStatusFlags()
+	withVersion(t, "dev") // praxis not checkable → no network in freshCached
+	origV := raptorLocalVersion
+	t.Cleanup(func() { raptorLocalVersion = origV })
+	raptorLocalVersion = func() (string, bool) { return "0.1.0", true }
+
+	var buf bytes.Buffer
+	statusCmd.SetOut(&buf)
+	if err := statusCmd.RunE(statusCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	var s map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &s); err != nil {
+		t.Fatalf("status not JSON: %v\n%s", err, buf.String())
+	}
+	tools, ok := s["tools"].([]any)
+	if !ok || len(tools) != 2 {
+		t.Fatalf("tools block missing or wrong size: %v", s["tools"])
+	}
+	names := map[string]bool{}
+	for _, tv := range tools {
+		names[tv.(map[string]any)["tool"].(string)] = true
+	}
+	if !names["praxis"] || !names["raptor"] {
+		t.Errorf("tools must include praxis + raptor, got %v", names)
+	}
+}
+
+func TestStatusCmd_RefreshDoesLiveFreshness(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	resetStatusFlags()
+	statusRefresh = true
+	t.Cleanup(func() { statusRefresh = false })
+	origDelay := updateCheckRetryDelay
+	updateCheckRetryDelay = 0
+	t.Cleanup(func() { updateCheckRetryDelay = origDelay })
+	withVersion(t, "dev") // praxis not checkable → only raptor fetches
+	origV, origF := raptorLocalVersion, fetchRaptorTag
+	t.Cleanup(func() { raptorLocalVersion, fetchRaptorTag = origV, origF })
+	raptorLocalVersion = func() (string, bool) { return "0.1.0", true }
+	// Seed a FRESH raptor cache entry: without this, freshCachedOrFetch would
+	// also fetch, so the test would pass even if --refresh stopped using
+	// freshLive. A fresh entry is only bypassed by a genuine live check.
+	if err := saveFreshnessCache(freshnessCache{
+		"raptor": {CheckedAt: time.Now(), LatestVersion: "v0.1.0"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fetched := false
+	fetchRaptorTag = func() (string, error) { fetched = true; return "v0.2.0", nil }
+
+	var buf bytes.Buffer
+	statusCmd.SetOut(&buf)
+	if err := statusCmd.RunE(statusCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	if !fetched {
+		t.Error("status --refresh must trigger a live raptor freshness fetch (freshLive bypasses a fresh cache)")
 	}
 }
 

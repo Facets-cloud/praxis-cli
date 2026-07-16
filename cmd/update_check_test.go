@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -30,14 +31,13 @@ func fakeHome(t *testing.T) string {
 	return home
 }
 
-// writeCache writes a throttle cache with the given age and latest version.
+// writeCache seeds praxis's throttle entry with the given age and latest version.
 func writeCache(t *testing.T, age time.Duration, latest string) {
 	t.Helper()
-	if err := saveUpdateCache(updateCheckCache{
-		CheckedAt:     time.Now().Add(-age),
-		LatestVersion: latest,
+	if err := saveFreshnessCache(freshnessCache{
+		"praxis": {CheckedAt: time.Now().Add(-age), LatestVersion: latest},
 	}); err != nil {
-		t.Fatalf("saveUpdateCache: %v", err)
+		t.Fatalf("saveFreshnessCache: %v", err)
 	}
 }
 
@@ -219,15 +219,15 @@ func TestCheckForUpdate_PersistsCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cache not written: %v", err)
 	}
-	var c updateCheckCache
+	var c freshnessCache
 	if err := json.Unmarshal(data, &c); err != nil {
 		t.Fatalf("cache not valid JSON: %v", err)
 	}
-	if c.LatestVersion != "v4.0.0" {
-		t.Errorf("cached LatestVersion = %q, want v4.0.0", c.LatestVersion)
+	if c["praxis"].LatestVersion != "v4.0.0" {
+		t.Errorf("cached praxis LatestVersion = %q, want v4.0.0", c["praxis"].LatestVersion)
 	}
-	if time.Since(c.CheckedAt) > time.Minute {
-		t.Errorf("cached CheckedAt = %v, want ~now", c.CheckedAt)
+	if time.Since(c["praxis"].CheckedAt) > time.Minute {
+		t.Errorf("cached CheckedAt = %v, want ~now", c["praxis"].CheckedAt)
 	}
 }
 
@@ -260,12 +260,15 @@ func TestCheckForUpdate_ThrottlesFailures(t *testing.T) {
 		t.Fatal("expected the first call to attempt a live fetch")
 	}
 
-	c, err := readUpdateCache()
+	c, err := readFreshnessCache()
 	if err != nil {
 		t.Fatalf("throttle marker not written: %v", err)
 	}
-	if c.LatestVersion != "" {
-		t.Errorf("LatestVersion = %q, want empty on a failed fetch", c.LatestVersion)
+	if _, ok := c["praxis"]; !ok {
+		t.Fatal("praxis throttle entry not written on a failed fetch")
+	}
+	if c["praxis"].LatestVersion != "" {
+		t.Errorf("LatestVersion = %q, want empty on a failed fetch", c["praxis"].LatestVersion)
 	}
 
 	// Second call within the interval: must be served from cache, no re-fetch.
@@ -274,6 +277,115 @@ func TestCheckForUpdate_ThrottlesFailures(t *testing.T) {
 	}
 	if calls != firstCalls {
 		t.Errorf("second call re-fetched (%d → %d); throttle not honored", firstCalls, calls)
+	}
+}
+
+// TestExecRaptorVersionTimeout proves a wedged `raptor --version` can't hang the
+// freshness check — the context timeout yields ("", false).
+func TestExecRaptorVersionTimeout(t *testing.T) {
+	origCmd := raptorVersionCmd
+	origTO := raptorVersionTimeout
+	t.Cleanup(func() { raptorVersionCmd = origCmd; raptorVersionTimeout = origTO })
+	raptorVersionTimeout = 10 * time.Millisecond
+	raptorVersionCmd = func(ctx context.Context) ([]byte, error) {
+		<-ctx.Done() // simulate a hung binary: block until the timeout fires
+		return nil, ctx.Err()
+	}
+	if v, ok := execRaptorVersion(); ok || v != "" {
+		t.Errorf("a hung raptor must yield (\"\", false), got (%q, %v)", v, ok)
+	}
+}
+
+func TestRaptorSemverParse(t *testing.T) {
+	for in, want := range map[string]string{
+		"raptor version 0.1.81": "0.1.81",
+		"0.2.0":                 "0.2.0",
+		"no version here":       "",
+	} {
+		if got := raptorSemver.FindString(in); got != want {
+			t.Errorf("parse(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestCheckTool_Raptor exercises the shared engine for the raptor toolSpec via
+// stubbed seams — the same engine praxis's own check runs through.
+func TestCheckTool_Raptor(t *testing.T) {
+	origDelay := updateCheckRetryDelay
+	updateCheckRetryDelay = 0
+	t.Cleanup(func() { updateCheckRetryDelay = origDelay })
+	origV, origF := raptorLocalVersion, fetchRaptorTag
+	t.Cleanup(func() { raptorLocalVersion, fetchRaptorTag = origV, origF })
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+
+	cases := []struct {
+		name                     string
+		local                    string
+		installed                bool
+		latest                   string
+		latestErr                error
+		wantInstalled, wantStale bool
+	}{
+		{"stale", "0.1.81", true, "v0.2.0", nil, true, true},
+		{"current", "0.2.0", true, "v0.2.0", nil, true, false},
+		{"ahead", "0.3.0", true, "v0.2.0", nil, true, false},
+		{"not-installed", "", false, "v9.9.9", nil, false, false},
+		{"fetch-error", "0.1.0", true, "", errors.New("offline"), true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeHome(t) // fresh cache per case
+			raptorLocalVersion = func() (string, bool) { return tc.local, tc.installed }
+			fetched := false
+			fetchRaptorTag = func() (string, error) { fetched = true; return tc.latest, tc.latestErr }
+			f := checkTool(raptorSpec(), time.Now(), freshLive) // bypass cache
+			if f.Installed != tc.wantInstalled {
+				t.Errorf("Installed = %v, want %v", f.Installed, tc.wantInstalled)
+			}
+			if f.Stale != tc.wantStale {
+				t.Errorf("Stale = %v, want %v (latest=%q)", f.Stale, tc.wantStale, f.Latest)
+			}
+			if !tc.installed && fetched {
+				t.Error("must not fetch latest when raptor is not installed")
+			}
+		})
+	}
+}
+
+// TestCheckTool_PerToolCacheIsolation proves praxis and raptor share ONE cache
+// file without interfering: a fresh praxis entry doesn't suppress a raptor fetch.
+func TestCheckTool_PerToolCacheIsolation(t *testing.T) {
+	origDelay := updateCheckRetryDelay
+	updateCheckRetryDelay = 0
+	t.Cleanup(func() { updateCheckRetryDelay = origDelay })
+	origV, origF := raptorLocalVersion, fetchRaptorTag
+	t.Cleanup(func() { raptorLocalVersion, fetchRaptorTag = origV, origF })
+	fakeHome(t)
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+
+	// A FRESH praxis entry is in the cache.
+	if err := saveFreshnessCache(freshnessCache{
+		"praxis": {CheckedAt: time.Now(), LatestVersion: "v9.9.9"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raptorLocalVersion = func() (string, bool) { return "0.1.0", true }
+	fetched := false
+	fetchRaptorTag = func() (string, error) { fetched = true; return "v0.2.0", nil }
+
+	f := checkTool(raptorSpec(), time.Now(), freshCachedOrFetch) // cache-first
+	if !fetched {
+		t.Error("raptor must fetch when only praxis is cached (per-tool isolation)")
+	}
+	if !f.Stale {
+		t.Error("raptor 0.1.0 < 0.2.0 must be stale")
+	}
+	c, _ := readFreshnessCache()
+	if c["praxis"].LatestVersion != "v9.9.9" {
+		t.Error("praxis cache entry was clobbered by the raptor check")
+	}
+	if _, ok := c["raptor"]; !ok {
+		t.Error("raptor entry not persisted to the shared cache")
 	}
 }
 
@@ -318,28 +430,80 @@ func TestNewerThan(t *testing.T) {
 	}
 }
 
-func TestPrintUpdateNotification(t *testing.T) {
-	withVersion(t, "1.0.0")
+func TestPrintFreshnessBox(t *testing.T) {
+	cases := []struct {
+		name   string
+		f      Freshness
+		action string
+		want   []string
+	}{
+		{"praxis", Freshness{Tool: "praxis", Current: "1.0.0", Latest: "v1.2.0"},
+			nagAction(praxisSpec()), []string{"praxis", "1.0.0", "v1.2.0", "praxis update", "PRAXIS_NO_UPDATE_CHECK"}},
+		{"raptor", Freshness{Tool: "raptor", Current: "0.1.0", Latest: "v0.2.0"},
+			nagAction(raptorSpec()), []string{"raptor", "0.1.0", "v0.2.0", "raptor upgrade", "PRAXIS_NO_UPDATE_CHECK"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			printFreshnessBox(tc.f, tc.action, &buf)
+			out := buf.String()
+			for _, want := range tc.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("box missing %q\n%s", want, out)
+				}
+			}
+			// Every box line must be the same display width so the right border
+			// aligns (⚡ and → are wide runes).
+			var widths []int
+			for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+				widths = append(widths, displayWidth(line))
+			}
+			for i, w := range widths {
+				if w != widths[0] {
+					t.Errorf("line %d width = %d, want %d (misaligned)\n%s", i, w, widths[0], out)
+				}
+			}
+		})
+	}
+}
+
+func TestNoticeFreshness(t *testing.T) {
+	fakeHome(t)
+	origDelay := updateCheckRetryDelay
+	updateCheckRetryDelay = 0
+	t.Cleanup(func() { updateCheckRetryDelay = origDelay })
+	withVersion(t, "dev") // praxis not checkable → only raptor can be stale
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+	origV, origF := raptorLocalVersion, fetchRaptorTag
+	t.Cleanup(func() { raptorLocalVersion, fetchRaptorTag = origV, origF })
+	raptorLocalVersion = func() (string, bool) { return "0.1.0", true }
+	fetchRaptorTag = func() (string, error) { return "v0.2.0", nil }
+
 	var buf bytes.Buffer
-	printUpdateNotification("v1.2.0", &buf)
+	stale := noticeFreshness(&buf, false)
+	if len(stale) != 1 || stale[0].Tool != "raptor" {
+		t.Fatalf("want [raptor] stale, got %+v", stale)
+	}
 	out := buf.String()
-
-	for _, want := range []string{"1.0.0", "v1.2.0", "praxis update", "PRAXIS_NO_UPDATE_CHECK"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("notification missing %q\n%s", want, out)
-		}
+	if !strings.Contains(out, "raptor") || !strings.Contains(out, "raptor upgrade") {
+		t.Errorf("notice missing raptor upgrade prompt: %q", out)
 	}
 
-	// Every box line must be the same display width so the right border lines
-	// up — this is what the wide-rune handling exists for (⚡ and → are wide).
-	var widths []int
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		widths = append(widths, displayWidth(line))
+	// JSON mode prints nothing (envelope carries state.staleTools instead).
+	buf.Reset()
+	if got := noticeFreshness(&buf, true); len(got) != 1 {
+		t.Errorf("JSON mode should still return staleTools, got %+v", got)
 	}
-	for i, w := range widths {
-		if w != widths[0] {
-			t.Errorf("line %d display width = %d, want %d (misaligned box)\n%s", i, w, widths[0], out)
-		}
+	if buf.Len() != 0 {
+		t.Errorf("JSON mode must not print a human notice, got %q", buf.String())
+	}
+}
+
+// raptor's nag line must NOT tell the user praxis will run the upgrade.
+func TestNagActionRaptorIsNudgeOnly(t *testing.T) {
+	a := nagAction(raptorSpec())
+	if !strings.Contains(a, "raptor upgrade") || !strings.Contains(a, "won't run it") {
+		t.Errorf("raptor nag must be nudge-only: %q", a)
 	}
 }
 

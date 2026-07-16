@@ -25,6 +25,13 @@ var (
 	verifyChecksum     = selfupdate.VerifyChecksum
 	parseChecksums     = selfupdate.ParseChecksums
 	atomicReplace      = selfupdate.AtomicReplace
+
+	// Freshness-engine seams (see cmd/update_check.go). raptor is a second tool
+	// the same engine tracks; these let tests stub its release + local version.
+	fetchRaptorTag = func() (string, error) {
+		return selfupdate.LatestReleaseTagFor("Facets-cloud/raptor-releases")
+	}
+	raptorLocalVersion = execRaptorVersion // (version, installed) from `raptor --version`
 )
 
 func init() {

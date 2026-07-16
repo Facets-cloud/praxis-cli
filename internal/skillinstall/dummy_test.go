@@ -36,4 +36,16 @@ func TestPraxisMetaSkill_RaptorIsLocalNotGateway(t *testing.T) {
 	if strings.Contains(body, "`catalog_ops`, `raptor_cli`") {
 		t.Error("meta-skill still lists `raptor_cli` as a gateway MCP namespace; it was removed from the gateway and is a local CLI")
 	}
+
+	// Must teach the freshness step: check status tools, offer `raptor upgrade`,
+	// ask first (nudge-only).
+	for _, want := range []string{"raptor upgrade", "stale", "ask first"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("meta-skill missing raptor-freshness guidance %q", want)
+		}
+	}
+	// `tools` is a JSON array, so the object path `raptor.stale` is wrong.
+	if strings.Contains(body, "raptor.stale") {
+		t.Error("meta-skill uses the wrong shape `raptor.stale`; tools is an array — find the raptor entry")
+	}
 }
