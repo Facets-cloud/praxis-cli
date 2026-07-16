@@ -57,7 +57,10 @@ and via the Homebrew post-install hook.
 		if err != nil {
 			return err
 		}
-		markBootstrapDone() // don't re-run first-run after an explicit setup
+		if n > 0 {
+			markBootstrapDone() // mark ONLY after a real install; a no-host run
+			// stays retryable so first-run installs once a host appears.
+		}
 		if asJSON {
 			return render.JSON(out, map[string]any{"installed": n})
 		}
@@ -115,11 +118,29 @@ func markBootstrapDone() {
 	}
 }
 
+// valueTakingFlags are the persistent/global flags whose VALUE is a separate
+// token (`--profile prod`), which must not be mistaken for the command name.
+// The `--flag=value` form is self-contained and needs no special handling.
+var valueTakingFlags = map[string]bool{
+	"--profile": true, "-p": true,
+	"--url": true, "--token": true, "--timeout": true,
+}
+
 // firstPositional returns the first non-flag argument (the command name), or ""
-// when the invocation is flags-only (bare `praxis`, `praxis --help`).
+// when the invocation is flags-only (bare `praxis`, `praxis --help`). It skips
+// the value of value-taking flags so `praxis --profile prod ig hook` resolves to
+// `ig`, not `prod`.
 func firstPositional(args []string) string {
+	skipNext := false
 	for _, a := range args {
+		if skipNext {
+			skipNext = false
+			continue
+		}
 		if strings.HasPrefix(a, "-") {
+			if valueTakingFlags[a] && !strings.Contains(a, "=") {
+				skipNext = true // consume the following value token
+			}
 			continue
 		}
 		return a
@@ -140,18 +161,21 @@ func firstRunSkipped(args []string) bool {
 }
 
 // firstRunBootstrap installs bootstrap skills once, gated by markerPath, unless
-// the command is machine-invoked. install() does the work; a failure is
-// swallowed (never blocks the real command) and leaves the marker UNWRITTEN so
-// the next human invocation retries. Returns whether it installed.
-func firstRunBootstrap(args []string, markerPath string, install func() error) bool {
+// the command is machine-invoked. install() reports how many (skill × host)
+// installs happened. The marker is written ONLY after a real install (n > 0): a
+// no-host machine (0) or a failure leaves it UNWRITTEN so first-run retries once
+// a host is installed or the network/state recovers. Returns whether it
+// installed. Never blocks the real command.
+func firstRunBootstrap(args []string, markerPath string, install func() (int, error)) bool {
 	if firstRunSkipped(args) || markerPath == "" {
 		return false
 	}
 	if _, err := os.Stat(markerPath); err == nil {
 		return false // already bootstrapped
 	}
-	if err := install(); err != nil {
-		return false // non-fatal; retry next time (marker not written)
+	n, err := install()
+	if err != nil || n == 0 {
+		return false // failure or no host yet — do not mark; retry next time
 	}
 	_ = os.MkdirAll(filepath.Dir(markerPath), 0o755)
 	_ = os.WriteFile(markerPath, []byte("1"), 0o644)
@@ -165,8 +189,7 @@ func maybeFirstRunBootstrap(args []string) {
 	if err != nil {
 		return
 	}
-	firstRunBootstrap(args, mp, func() error {
-		_, iErr := installBootstrapSkills(io.Discard, true)
-		return iErr
+	firstRunBootstrap(args, mp, func() (int, error) {
+		return installBootstrapSkills(io.Discard, true)
 	})
 }

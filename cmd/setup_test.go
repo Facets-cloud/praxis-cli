@@ -27,10 +27,14 @@ func TestFirstRunSkipped(t *testing.T) {
 		"setup":                 true,
 		"version":               true,
 		"update":                true,
+		// value-taking flag before the command must not misclassify
+		"--profile prod ig hook session-start": true,
+		"--profile=prod mcp k8s_cli run":       true,
 		// human GTM entry points → bootstrap
 		"status --json":         false,
 		"login --url https://x": false,
 		"list-skills":           false,
+		"--profile prod status": false,
 		"":                      false, // bare `praxis`
 		"--help":                false, // flags-only
 	}
@@ -75,7 +79,7 @@ func splitFields(s string) []string {
 func TestFirstRunBootstrapGating(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), ".bootstrap-v1")
 	calls := 0
-	install := func() error { calls++; return nil }
+	install := func() (int, error) { calls++; return 4, nil } // 4 host installs
 
 	// Machine command → never installs.
 	if firstRunBootstrap([]string{"ig", "hook", "session-start"}, marker, install) {
@@ -107,13 +111,27 @@ func TestFirstRunBootstrapGating(t *testing.T) {
 
 func TestFirstRunBootstrapFailureIsRetryable(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), ".bootstrap-v1")
-	failing := func() error { return io.ErrUnexpectedEOF }
+	failing := func() (int, error) { return 0, io.ErrUnexpectedEOF }
 
 	if firstRunBootstrap([]string{"status"}, marker, failing) {
 		t.Error("a failed install must report false, not block")
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Error("a failed install must NOT write the marker (so it retries)")
+	}
+}
+
+// No AI host yet (n == 0) must NOT write the marker, else installing a host
+// later would be permanently skipped by first-run.
+func TestFirstRunBootstrapNoHostStaysRetryable(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), ".bootstrap-v1")
+	noHost := func() (int, error) { return 0, nil }
+
+	if firstRunBootstrap([]string{"status"}, marker, noHost) {
+		t.Error("no-host bootstrap must report false")
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("no-host bootstrap must NOT write the marker (retry when a host appears)")
 	}
 }
 
