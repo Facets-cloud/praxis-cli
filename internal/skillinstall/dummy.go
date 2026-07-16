@@ -1,9 +1,18 @@
 package skillinstall
 
 import (
+	_ "embed"
 	"fmt"
 	"sort"
 )
+
+// gettingStartedSkill is the pre-login GTM meta-skill (Praxis by Facets): it
+// teaches a freshly-installed host what Praxis can do, where to sign up, and how
+// to log in. Embedded from a .md file so the (long, backtick-heavy) copy is
+// authored as plain markdown rather than an escaped Go string.
+//
+//go:embed getting-started.md
+var gettingStartedSkill string
 
 // dummySkills is the binary-embedded catalog of meta-skills. Two
 // entries today — "praxis" (drives the CLI surface) and
@@ -14,6 +23,7 @@ import (
 // UninstallByPrefix keeps the prefix-shaped "praxis-memory" from
 // being wiped during profile switches.
 var dummySkills = map[string]string{
+	"praxis-getting-started": gettingStartedSkill,
 	"praxis": `---
 name: praxis
 description: Praxis CLI is installed locally. Use whenever the user asks about Praxis, Facets infrastructure, or wants infra/cloud/release operations done. Run praxis commands directly — don't ask the user to run them.
@@ -415,4 +425,18 @@ func MetaSkillNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// bootstrapSkills is the subset of meta-skills that can be installed WITHOUT a
+// login — the pre-login GTM surface. They must resolve entirely from the binary
+// (no network, no credentials) so `praxis init` / the cask hook / first-run can
+// land them the moment praxis is installed. Every entry MUST also be a
+// meta-skill (so login refreshes it and logout preserves it).
+var bootstrapSkills = []string{"praxis-getting-started"}
+
+// BootstrapSkillNames returns the no-auth-installable meta-skills, sorted.
+func BootstrapSkillNames() []string {
+	out := append([]string(nil), bootstrapSkills...)
+	sort.Strings(out)
+	return out
 }

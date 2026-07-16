@@ -88,6 +88,11 @@ homebrew_casks:
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", staged_path.to_s]
           end
+          # Land the pre-login "getting started" skill so the user's AI host
+          # knows what Praxis is + how to sign up / log in, without waiting for a
+          # first `praxis` run. Best-effort: never fail `brew install`, and the
+          # binary's own first-run auto-install covers non-brew installs.
+          system_command "#{HOMEBREW_PREFIX}/bin/praxis", args: ["setup"], must_succeed: false
     commit_author:
       name: praxis-bot
       email: bot@askpraxis.ai
