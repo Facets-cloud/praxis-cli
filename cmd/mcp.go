@@ -94,7 +94,7 @@ Examples:
 			os.Exit(exitcode.Usage)
 		}
 
-		resp, status, err := callMCP(active.Profile.URL, active.Profile.Token, mcpName, fnName, body, mcpTimeout)
+		resp, status, err := callMCP(active.Profile.URL, active.Profile.AuthHeader(), mcpName, fnName, body, mcpTimeout)
 		if err != nil {
 			render.PrintError(out, asJSON,
 				fmt.Sprintf("network error: %v", err),
@@ -209,7 +209,7 @@ func buildMCPBody(argFlags []string, bodyFlag string, stdin io.Reader) ([]byte, 
 // wants the structured detail they can pipe `praxis mcp --json` through
 // jq instead.
 func runManifestList(out io.Writer, asJSON bool, active credentials.Active) error {
-	raw, err := mcpmanifest.Fetch(active.Profile.URL, active.Profile.Token, mcpTimeout)
+	raw, err := mcpmanifest.Fetch(active.Profile.URL, active.Profile.AuthHeader(), mcpTimeout)
 	if err != nil {
 		// Auth-failure shape from Fetch: "manifest fetch returned HTTP 401: ..."
 		errStr := err.Error()
@@ -311,7 +311,7 @@ func sortStrings(s []string) {
 }
 
 // callMCP is the HTTP seam — tests swap it to avoid hitting the network.
-var callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+var callMCP = func(baseURL, auth, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
 	if baseURL == "" {
 		return nil, 0, errors.New("profile has no URL set")
 	}
@@ -353,7 +353,7 @@ var callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Dur
 	if err != nil {
 		return nil, 0, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", auth)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {

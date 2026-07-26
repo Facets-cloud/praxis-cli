@@ -95,7 +95,7 @@ with "*" and reported as active_profile in JSON output.`,
 			// token. A per-profile failure is recorded, never fatal — the
 			// listing must stay complete even with one revoked token.
 			if profilesRefresh && e.LoggedIn {
-				if user, ferr := fetchAuthMe(p.URL, p.Token); ferr != nil {
+				if user, ferr := fetchAuthMe(p.URL, p.AuthHeader()); ferr != nil {
 					e.AuthCheck = &authCheckResult{OK: false, Error: ferr.Error()}
 				} else {
 					e.AuthCheck = &authCheckResult{OK: true, Username: user.Email}

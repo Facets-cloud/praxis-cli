@@ -66,7 +66,7 @@ func TestListSchedules_HappyPath(t *testing.T) {
 		{"id":"sch2","agent_id":"agt","name":"cost-audit","display_name":"Cost Audit","cron_expression":"0 0 * * *","timezone":"UTC","enabled":false,"objective":"audit","status":"paused","consecutive_errors":2,"created_by_email":"u@x","created_at":"t","updated_at":"t","open_findings_count":0,"learnings_count":0,"tags":[]}
 	]`
 	srv := stubServer(t, http.MethodGet, "/ai-api/custom-agents/agt/schedules", 200, body, "", "tok")
-	got, err := ListSchedules(srv.URL, "tok", "agt", "")
+	got, err := ListSchedules(srv.URL, "Bearer tok", "agt", "")
 	if err != nil {
 		t.Fatalf("ListSchedules: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestListSchedules_TagFilterEncoded(t *testing.T) {
 				t.Errorf("tag = %q; want prod", r.URL.Query().Get("tag"))
 			}
 		})
-	if _, err := ListSchedules(srv.URL, "tok", "agt", "prod"); err != nil {
+	if _, err := ListSchedules(srv.URL, "Bearer tok", "agt", "prod"); err != nil {
 		t.Fatalf("ListSchedules: %v", err)
 	}
 	if !hit {
@@ -115,7 +115,7 @@ func TestListRuns_HappyPathWithScheduleAndLimit(t *testing.T) {
 				t.Errorf("limit = %q; want 5", r.URL.Query().Get("limit"))
 			}
 		})
-	got, err := ListRuns(srv.URL, "tok", "agt", "sch1", 5)
+	got, err := ListRuns(srv.URL, "Bearer tok", "agt", "sch1", 5)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestListRuns_HappyPathWithScheduleAndLimit(t *testing.T) {
 func TestGetRun_CarriesReportArtifactID(t *testing.T) {
 	const body = `{"id":"run9","agent_id":"agt","schedule_id":"sch1","organization_id":"o","status":"completed","started_at":"t","report_artifact_id":"art9","findings":[{"title":"disk full","severity":"high","description":"d","finding_key":"k1","recurrence_count":2,"status":"open"}],"actions":[]}`
 	srv := stubServer(t, http.MethodGet, "/ai-api/custom-agents/agt/runs/run9", 200, body, "", "tok")
-	got, err := GetRun(srv.URL, "tok", "agt", "run9")
+	got, err := GetRun(srv.URL, "Bearer tok", "agt", "run9")
 	if err != nil {
 		t.Fatalf("GetRun: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestListFindings_UnwrapsItemsEnvelope(t *testing.T) {
 				t.Errorf("status = %q; want open", r.URL.Query().Get("status"))
 			}
 		})
-	got, err := ListFindings(srv.URL, "tok", "agt", "sch1", "open", 0)
+	got, err := ListFindings(srv.URL, "Bearer tok", "agt", "sch1", "open", 0)
 	if err != nil {
 		t.Fatalf("ListFindings: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestListFindings_UnwrapsItemsEnvelope(t *testing.T) {
 func TestFetchArtifactContent_ReturnsBodyAndMime(t *testing.T) {
 	const report = "# Nightly Report\n\nAll clear."
 	srv := stubServer(t, http.MethodGet, "/ai-api/artifacts/art9/content", 200, report, "text/markdown; charset=utf-8", "tok")
-	body, mime, err := FetchArtifactContent(srv.URL, "tok", "art9")
+	body, mime, err := FetchArtifactContent(srv.URL, "Bearer tok", "art9")
 	if err != nil {
 		t.Fatalf("FetchArtifactContent: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestFetchArtifactContent_ReturnsBodyAndMime(t *testing.T) {
 
 func TestFetchArtifactContent_404SurfacesError(t *testing.T) {
 	srv := stubServer(t, http.MethodGet, "/ai-api/artifacts/gone/content", 404, "not found", "", "tok")
-	_, _, err := FetchArtifactContent(srv.URL, "tok", "gone")
+	_, _, err := FetchArtifactContent(srv.URL, "Bearer tok", "gone")
 	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("err = %v; want HTTP 404", err)
 	}

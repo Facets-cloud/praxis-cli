@@ -229,10 +229,11 @@ func TestTryReuseStoredToken(t *testing.T) {
 			post := stubPostAuth(t)
 			exitCode := stubOsExit(t)
 			authMeCalled := false
-			stubAuthMe(t, func(baseURL, token string) (*authMeResponse, error) {
+			stubAuthMe(t, func(baseURL, auth string) (*authMeResponse, error) {
 				authMeCalled = true
-				if baseURL != tt.targetURL || token != tt.storedToken {
-					t.Errorf("fetchAuthMe(%q,%q), want (%q,%q)", baseURL, token, tt.targetURL, tt.storedToken)
+				wantAuth := "Bearer " + tt.storedToken
+				if baseURL != tt.targetURL || auth != wantAuth {
+					t.Errorf("fetchAuthMe(%q,%q), want (%q,%q)", baseURL, auth, tt.targetURL, wantAuth)
 				}
 				if tt.authMeErr != nil {
 					return nil, tt.authMeErr

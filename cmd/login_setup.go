@@ -100,7 +100,7 @@ type agentInstallationLite struct {
 // active root's receipt + that root's host dirs — so it runs unconditionally
 // and stays safe in both scopes (a project refresh can't delete the user's
 // global skills, and vice versa).
-func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAuthState {
+func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, auth string) postAuthState {
 	state := postAuthState{}
 	hosts := detectHarnesses()
 
@@ -151,7 +151,7 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 	// re-run on a flaky network without leaving the user empty-handed.
 	// Host-dependent (no point fetching if we can't install).
 	if !noHosts {
-		skills, fetchErr := fetchCatalog(baseURL, token)
+		skills, fetchErr := fetchCatalog(baseURL, auth)
 		switch {
 		case fetchErr != nil:
 			if !asJSON {
@@ -184,7 +184,7 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 	// Step 3.5: agent catalog. Fetch first, then swap — same fail-safe as
 	// skills. A transient network error leaves existing agents on disk.
 	if !noHosts {
-		agents, fetchErr := fetchAgents(baseURL, token)
+		agents, fetchErr := fetchAgents(baseURL, auth)
 		switch {
 		case fetchErr != nil:
 			if !asJSON {
@@ -250,7 +250,7 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, token string) postAut
 	// Step 4: refresh MCP tools snapshot. Host-independent — useful even
 	// without an AI host installed (manifest is consumed by other tools
 	// and by future `praxis mcp` calls).
-	state.snapshotPath, state.snapshotWarning = refreshMCPSnapshot(out, asJSON, baseURL, token)
+	state.snapshotPath, state.snapshotWarning = refreshMCPSnapshot(out, asJSON, baseURL, auth)
 
 	// Step 5: wire the use-ig cwd hooks (claude-code only). Never fatal — a
 	// failed wire must not fail login; skills still installed above.
@@ -458,8 +458,8 @@ func installFetchedCatalog(out io.Writer, asJSON bool, skills []skillcatalog.Ski
 // could not be written (e.g. server too old to expose /v1/mcp/manifest).
 // Either way the parent flow continues — a missing snapshot just means
 // AI hosts fall back to live `praxis mcp` calls.
-func refreshMCPSnapshot(out io.Writer, asJSON bool, baseURL, token string) (string, string) {
-	raw, err := mcpmanifest.Fetch(baseURL, token, mcpmanifest.DefaultTimeout)
+func refreshMCPSnapshot(out io.Writer, asJSON bool, baseURL, auth string) (string, string) {
+	raw, err := mcpmanifest.Fetch(baseURL, auth, mcpmanifest.DefaultTimeout)
 	if err != nil {
 		if !asJSON {
 			fmt.Fprintf(out, "\nMCP tool snapshot skipped: %v\n", err)

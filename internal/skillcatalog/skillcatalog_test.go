@@ -25,7 +25,7 @@ func TestFetch_HappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	skills, err := Fetch(srv.URL, "sk_test_X")
+	skills, err := Fetch(srv.URL, "Bearer sk_test_X")
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}

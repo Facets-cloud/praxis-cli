@@ -199,7 +199,7 @@ func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
 	defer srv.Close()
 
 	body := []byte(`{"command":"get projects"}`)
-	resp, status, err := callMCP(srv.URL, "sk_test_T", "raptor_cli", "run_raptor_cli", body, 5*time.Second)
+	resp, status, err := callMCP(srv.URL, "Bearer sk_test_T", "raptor_cli", "run_raptor_cli", body, 5*time.Second)
 	if err != nil {
 		t.Fatalf("callMCP error: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestCallMCP_DropsAuthOnCrossDomainRedirect(t *testing.T) {
 	defer origin.Close()
 
 	body := []byte(`{"command":"get projects"}`)
-	_, status, err := callMCP(origin.URL, "sk_test_SECRET", "raptor_cli", "run_raptor_cli", body, 5*time.Second)
+	_, status, err := callMCP(origin.URL, "Bearer sk_test_SECRET", "raptor_cli", "run_raptor_cli", body, 5*time.Second)
 	if err != nil {
 		t.Fatalf("callMCP error: %v", err)
 	}
@@ -467,9 +467,9 @@ func TestMcpCmd_HappyPath(t *testing.T) {
 	var capturedURL, capturedToken string
 	var capturedBody []byte
 	orig := callMCP
-	callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+	callMCP = func(baseURL, auth, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
 		capturedURL = baseURL + "/ai-api/v1/mcp/" + mcp + "/" + fn
-		capturedToken = token
+		capturedToken = auth
 		capturedBody = body
 		return []byte(`{"integrations":[{"name":"aws-prod"}]}`), http.StatusOK, nil
 	}
@@ -486,8 +486,8 @@ func TestMcpCmd_HappyPath(t *testing.T) {
 	if !strings.Contains(capturedURL, "/ai-api/v1/mcp/cloud_cli/list_cloud_integrations") {
 		t.Errorf("URL = %q", capturedURL)
 	}
-	if capturedToken != "sk_test_T" {
-		t.Errorf("token = %q", capturedToken)
+	if capturedToken != "Bearer sk_test_T" {
+		t.Errorf("auth = %q", capturedToken)
 	}
 	if !strings.Contains(string(capturedBody), `"region"`) {
 		t.Errorf("body missing region: %s", capturedBody)

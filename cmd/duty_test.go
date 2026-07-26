@@ -65,9 +65,9 @@ func TestDutyList_ResolvesAgentAndEmitsJSON(t *testing.T) {
 	defer restoreAgent()
 
 	orig := duties.ListSchedules
-	duties.ListSchedules = func(baseURL, token, agentID, tag string) ([]duties.Schedule, error) {
-		if baseURL != "https://x.test" || token != "sk_test_T" {
-			t.Errorf("auth threading: url=%q token=%q", baseURL, token)
+	duties.ListSchedules = func(baseURL, auth, agentID, tag string) ([]duties.Schedule, error) {
+		if baseURL != "https://x.test" || auth != "Bearer sk_test_T" {
+			t.Errorf("auth threading: url=%q auth=%q", baseURL, auth)
 		}
 		if agentID != "agt_praxis" {
 			t.Errorf("agentID = %q; want agt_praxis (resolved from default --agent praxis)", agentID)

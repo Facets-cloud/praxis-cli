@@ -45,6 +45,8 @@ var (
 	loginTimeout       time.Duration
 	loginRaptorProfile string
 	loginDryRun        bool
+	loginFacets        bool
+	loginFacetsProfile string
 )
 
 // browserLoginFn and postAuthSetup are package-level seams so tests can
@@ -76,6 +78,10 @@ func init() {
 		"pair this praxis profile with a raptor profile (a ~/.facets/credentials section); 'praxis status' then reports raptor via that profile and AI hosts prefix raptor commands with FACETS_PROFILE=<name>")
 	loginCmd.Flags().BoolVar(&loginDryRun, "dry-run", false,
 		"report what login would do (profile, URL reachability, browser-or-reuse, skill effect) and exit — no browser, no API key, no credential or skill changes")
+	loginCmd.Flags().BoolVar(&loginFacets, "facets", false,
+		"authenticate with a control-plane PAT from ~/.facets/credentials (HTTP Basic), instead of a Praxis API key")
+	loginCmd.Flags().StringVar(&loginFacetsProfile, "facets-profile", credentials.DefaultProfileName,
+		"profile name inside ~/.facets/credentials to read when --facets is set")
 	rootCmd.AddCommand(loginCmd)
 }
 
@@ -120,6 +126,13 @@ installed skills — then exits without changing anything.`,
 		if profileName == "" {
 			profileName = credentials.DefaultProfileName
 		}
+
+		// --facets: authenticate with a control-plane PAT from
+		// ~/.facets/credentials sent as HTTP Basic, not a Praxis API key.
+		if loginFacets {
+			return facetsLogin(out, asJSON, profileName, loginURL, loginFacetsProfile, loginLocal)
+		}
+
 		baseURL, err := resolveLoginURL(profileName, loginURL)
 		if err != nil {
 			render.PrintError(out, asJSON, err.Error(),
@@ -208,7 +221,7 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 		return false, nil
 	}
 
-	user, err := fetchAuthMe(baseURL, prof.Token)
+	user, err := fetchAuthMe(baseURL, prof.AuthHeader())
 	if err != nil {
 		if errors.Is(err, errTokenRejected) {
 			// The server gave a verdict: this token is dead. Falling back to
@@ -235,11 +248,13 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 		return true, err
 	}
 	// Persist the canonical (post-redirect) host so a stale stored URL
-	// self-heals on the next login (issue #19-A).
+	// self-heals on the next login (issue #19-A). Reuse the stored profile
+	// otherwise — notably its Username/AuthMode, so a facets profile's
+	// Basic header keeps working across reuse.
 	if user.canonicalBaseURL != "" {
-		baseURL = user.canonicalBaseURL
+		prof.URL = user.canonicalBaseURL
 	}
-	return true, persistAndSetup(out, asJSON, profileName, baseURL, prof.Token, user.Email, local)
+	return true, persistAndSetup(out, asJSON, profileName, prof, user.Email, local)
 }
 
 // browserSessionPollLogin opens the browser to the api-keys page with a
@@ -398,12 +413,64 @@ func suggestedKeyName() string {
 	return "praxis-cli-" + hex.EncodeToString(b)[:5]
 }
 
+// facetsLogin authenticates using a control-plane PAT read from
+// ~/.facets/credentials, sent as HTTP Basic (username:token). The agent
+// server accepts this in facets auth mode. Verification and every post-auth
+// HTTP call go through the profile's AuthHeader() (Basic), never Bearer.
+func facetsLogin(out io.Writer, asJSON bool, profileName, flagURL, facetsProfile string, local bool) error {
+	// URL comes from --url or the existing profile — never the built-in
+	// askpraxis.ai default (that's a Praxis SaaS host, not a facets agent).
+	baseURL := normalizeBaseURL(flagURL)
+	if baseURL == "" {
+		store, _ := credentials.Load()
+		if p, ok := store[profileName]; ok && p.URL != "" {
+			baseURL = normalizeBaseURL(p.URL)
+		}
+	}
+	if baseURL == "" {
+		err := fmt.Errorf("no agent server URL for facets login")
+		render.PrintError(out, asJSON, err.Error(),
+			"pass --url <https://your-praxis-deployment>",
+			exitcode.Usage)
+		return err
+	}
+
+	_, username, token, err := credentials.ReadFacetsProfile(facetsProfile)
+	if err != nil {
+		render.PrintError(out, asJSON,
+			fmt.Sprintf("could not read ~/.facets/credentials: %v", err),
+			"run `raptor login` (or create a token in the Facets UI), or use plain `praxis login`",
+			exitcode.Auth)
+		return err
+	}
+
+	prof := credentials.Profile{URL: baseURL, Username: username, Token: token, AuthMode: credentials.AuthModeBasic}
+	user, err := fetchAuthMe(baseURL, prof.AuthHeader())
+	if err != nil {
+		render.PrintError(out, asJSON,
+			fmt.Sprintf("control-plane PAT validation failed: %v", err),
+			"the PAT may be invalid/expired, or the --url isn't a facets-mode agent server",
+			exitcode.Auth)
+		os.Exit(exitcode.Auth)
+	}
+	if user.canonicalBaseURL != "" {
+		prof.URL = user.canonicalBaseURL
+	}
+	display := user.Email
+	if display == "" {
+		display = username
+	}
+	return persistAndSetup(out, asJSON, profileName, prof, display, local)
+}
+
 // saveAndVerifyToken verifies a freshly-obtained token (from --token or
 // the browser flow) and persists it. A verification failure here is fatal
 // — the user explicitly supplied this key, so there's no graceful
 // fallback to attempt.
 func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token string, local bool) error {
-	user, err := fetchAuthMe(baseURL, token)
+	// --token / browser flow always yields a Praxis API key → Bearer.
+	// Route through AuthHeader() so "Bearer " is built in exactly one place.
+	user, err := fetchAuthMe(baseURL, credentials.Profile{Token: token}.AuthHeader())
 	if err != nil {
 		render.PrintError(out, asJSON,
 			fmt.Sprintf("token validation failed: %v", err),
@@ -417,7 +484,8 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 	if user.canonicalBaseURL != "" {
 		baseURL = user.canonicalBaseURL
 	}
-	return persistAndSetup(out, asJSON, profileName, baseURL, token, user.Email, local)
+	prof := credentials.Profile{URL: baseURL, Username: user.Email, Token: token}
+	return persistAndSetup(out, asJSON, profileName, prof, user.Email, local)
 }
 
 // persistAndSetup saves the verified token under profileName, sets the
@@ -435,14 +503,14 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 //     accidentally scope the install.
 //   - local: write <cwd>/.praxis/config.json and install project-scoped,
 //     leaving the global pointer untouched.
-func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, email string, local bool) error {
-	raptorProfile := resolveRaptorPairing(profileName, baseURL)
-	prof := credentials.Profile{
-		URL:           baseURL,
-		Username:      email,
-		Token:         token,
-		RaptorProfile: raptorProfile,
-	}
+//
+// persistAndSetup takes the fully-built profile to save (its URL/Username/
+// Token/AuthMode are authoritative — e.g. a facets profile keeps its
+// control-plane username so AuthHeader() can rebuild the Basic header on
+// reuse) and a displayName used only for the human/JSON "logged in as" line.
+func persistAndSetup(out io.Writer, asJSON bool, profileName string, prof credentials.Profile, displayName string, local bool) error {
+	baseURL := prof.URL
+	prof.RaptorProfile = resolveRaptorPairing(profileName, baseURL)
 	if err := credentials.Put(profileName, prof); err != nil {
 		return fmt.Errorf("save credentials: %w", err)
 	}
@@ -474,14 +542,15 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, em
 	}
 
 	// Post-auth: install meta-skill, wipe previous org skills, install
-	// this profile's catalog, refresh the MCP tools snapshot.
-	state := postAuthSetup(out, asJSON, baseURL, token)
+	// this profile's catalog, refresh the MCP tools snapshot. The HTTP
+	// calls use the profile's full Authorization header (Bearer or Basic).
+	state := postAuthSetup(out, asJSON, baseURL, prof.AuthHeader())
 
 	if asJSON {
 		payload := map[string]any{
 			"ok":               true,
 			"profile":          profileName,
-			"username":         email,
+			"username":         displayName,
 			"url":              baseURL,
 			"scope":            scopeLabel(local),
 			"meta_skill":       state.metaSkill,
@@ -495,16 +564,16 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, em
 		if projectRoot != "" {
 			payload["project_root"] = projectRoot
 		}
-		if raptorProfile != "" {
-			payload["raptor_profile"] = raptorProfile
+		if prof.RaptorProfile != "" {
+			payload["raptor_profile"] = prof.RaptorProfile
 		}
 		return render.JSON(out, payload)
 	}
 	if local {
-		fmt.Fprintf(out, "\n✓ Logged in as %s and pinned profile %q to %s\n", email, profileName, projectRoot)
+		fmt.Fprintf(out, "\n✓ Logged in as %s and pinned profile %q to %s\n", displayName, profileName, projectRoot)
 		return nil
 	}
-	fmt.Fprintf(out, "\n✓ Logged in as %s (profile: %s, url: %s)\n", email, profileName, baseURL)
+	fmt.Fprintf(out, "\n✓ Logged in as %s (profile: %s, url: %s)\n", displayName, profileName, baseURL)
 	return nil
 }
 
@@ -561,13 +630,13 @@ type authMeResponse struct {
 var errTokenRejected = errors.New("token rejected by server")
 
 // fetchAuthMe is the seam: tests swap it to avoid hitting a real server.
-var fetchAuthMe = func(baseURL, token string) (*authMeResponse, error) {
+var fetchAuthMe = func(baseURL, auth string) (*authMeResponse, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest("GET", baseURL+"/ai-api/auth/me", nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", auth)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

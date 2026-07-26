@@ -174,11 +174,11 @@ func yamlString(s string) string {
 }
 
 // Fetch is the HTTP seam — tests swap it to avoid hitting the network.
-var Fetch = func(baseURL, token string) ([]Skill, error) {
+var Fetch = func(baseURL, auth string) ([]Skill, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("baseURL is required")
 	}
-	if token == "" {
+	if auth == "" {
 		return nil, fmt.Errorf("token is required")
 	}
 
@@ -187,7 +187,7 @@ var Fetch = func(baseURL, token string) ([]Skill, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", auth)
 	req.Header.Set("Accept", "application/json")
 
 	client := &http.Client{Timeout: defaultTimeout}

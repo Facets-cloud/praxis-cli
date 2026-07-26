@@ -31,11 +31,11 @@ const DefaultTimeout = 30 * time.Second
 //
 // The HTTP transport is exposed as a package var so unit tests can
 // inject a stub without standing up a fake server.
-var Fetch = func(baseURL, token string, timeout time.Duration) ([]byte, error) {
+var Fetch = func(baseURL, auth string, timeout time.Duration) ([]byte, error) {
 	if baseURL == "" {
 		return nil, errors.New("profile has no URL set")
 	}
-	if token == "" {
+	if auth == "" {
 		return nil, errors.New("profile has no token")
 	}
 	// http.Client.Timeout treats any non-positive value as "no timeout"
@@ -49,7 +49,7 @@ var Fetch = func(baseURL, token string, timeout time.Duration) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", auth)
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {

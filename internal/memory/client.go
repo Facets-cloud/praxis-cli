@@ -2,8 +2,9 @@
 // (/ai-api/memories on the deployment). It mirrors the layout of
 // internal/skillcatalog: types match the server's MemoryResponse /
 // MemoryCreate / MemoryRecallRequest shapes, exported function vars
-// give tests a seam to swap, and every transport call uses
-// Authorization: Bearer <token>.
+// give tests a seam to swap, and every transport call sets the
+// Authorization header to the caller-supplied value (Bearer for a
+// Praxis API key, Basic for a facets-mode control-plane PAT).
 //
 // Praxis-cli's memory commands invoke memories at audience=user|org
 // scope. agent_id is intentionally omitted on POST — the server's
@@ -111,7 +112,7 @@ type ListParams struct {
 // HTTP seams — tests swap these to avoid the network.
 
 // Recall posts a RecallRequest and returns the scored matches.
-var Recall = func(baseURL, token string, req RecallRequest) ([]Memory, error) {
+var Recall = func(baseURL, auth string, req RecallRequest) ([]Memory, error) {
 	if req.Query == "" {
 		return nil, fmt.Errorf("query is required")
 	}
@@ -119,11 +120,11 @@ var Recall = func(baseURL, token string, req RecallRequest) ([]Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	return doJSON[[]Memory](baseURL, token, http.MethodPost, basePath+"/recall", bytes.NewReader(body))
+	return doJSON[[]Memory](baseURL, auth, http.MethodPost, basePath+"/recall", bytes.NewReader(body))
 }
 
 // List fetches memories filtered by ListParams.
-var List = func(baseURL, token string, p ListParams) ([]Memory, error) {
+var List = func(baseURL, auth string, p ListParams) ([]Memory, error) {
 	q := url.Values{}
 	if p.Category != "" {
 		q.Set("category", p.Category)
@@ -144,12 +145,12 @@ var List = func(baseURL, token string, p ListParams) ([]Memory, error) {
 	if encoded := q.Encode(); encoded != "" {
 		path = path + "?" + encoded
 	}
-	return doJSON[[]Memory](baseURL, token, http.MethodGet, path, nil)
+	return doJSON[[]Memory](baseURL, auth, http.MethodGet, path, nil)
 }
 
 // Create posts a CreateRequest WITHOUT ?agent_id= (audience-driven cell
 // placement on the server). Returns the persisted Memory.
-var Create = func(baseURL, token string, req CreateRequest) (*Memory, error) {
+var Create = func(baseURL, auth string, req CreateRequest) (*Memory, error) {
 	if req.Title == "" {
 		return nil, fmt.Errorf("title is required")
 	}
@@ -160,7 +161,7 @@ var Create = func(baseURL, token string, req CreateRequest) (*Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	m, err := doJSON[Memory](baseURL, token, http.MethodPost, basePath, bytes.NewReader(body))
+	m, err := doJSON[Memory](baseURL, auth, http.MethodPost, basePath, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -175,12 +176,12 @@ var Create = func(baseURL, token string, req CreateRequest) (*Memory, error) {
 // propagates (noctx lint expectation). The http.Client{Timeout} on top
 // is belt-and-braces — it also bounds connection + handshake time
 // before the context deadline kicks in.
-func doJSON[T any](baseURL, token, method, path string, body io.Reader) (T, error) {
+func doJSON[T any](baseURL, auth, method, path string, body io.Reader) (T, error) {
 	var zero T
 	if baseURL == "" {
 		return zero, fmt.Errorf("baseURL is required")
 	}
-	if token == "" {
+	if auth == "" {
 		return zero, fmt.Errorf("token is required")
 	}
 
@@ -192,7 +193,7 @@ func doJSON[T any](baseURL, token, method, path string, body io.Reader) (T, erro
 	if err != nil {
 		return zero, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", auth)
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")

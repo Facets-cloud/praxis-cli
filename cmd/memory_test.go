@@ -60,9 +60,9 @@ func TestMemoryRecall_HappyPath_JSON(t *testing.T) {
 
 	score := 1.42
 	orig := memory.Recall
-	memory.Recall = func(baseURL, token string, req memory.RecallRequest) ([]memory.Memory, error) {
-		if baseURL != "https://x.test" || token != "sk_test_T" {
-			t.Errorf("auth threading wrong: url=%q token=%q", baseURL, token)
+	memory.Recall = func(baseURL, auth string, req memory.RecallRequest) ([]memory.Memory, error) {
+		if baseURL != "https://x.test" || auth != "Bearer sk_test_T" {
+			t.Errorf("auth threading wrong: url=%q auth=%q", baseURL, auth)
 		}
 		if req.Query != "retry handling" {
 			t.Errorf("query = %q", req.Query)

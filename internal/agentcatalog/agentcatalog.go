@@ -75,8 +75,8 @@ const (
 // A 404 on /custom-agents is treated as "empty catalog" (the helper
 // returns nil, nil) rather than an error, so deployments that don't
 // expose the endpoint install nothing rather than failing login.
-var Fetch = func(baseURL, token string) ([]Agent, error) {
-	return fetchActiveSorted(baseURL, token, customAgentsPath)
+var Fetch = func(baseURL, auth string) ([]Agent, error) {
+	return fetchActiveSorted(baseURL, auth, customAgentsPath)
 }
 
 // FetchIncludingGlobal hits /ai-api/custom-agents?include_global=true so
@@ -85,8 +85,8 @@ var Fetch = func(baseURL, token string) ([]Agent, error) {
 // to decide which agents to install on disk; this variant exists so
 // `praxis duty` can resolve the global praxis agent's id (its nested
 // schedules/runs/findings are addressed by that id).
-var FetchIncludingGlobal = func(baseURL, token string) ([]Agent, error) {
-	return fetchActiveSorted(baseURL, token, customAgentsPath+"?include_global=true")
+var FetchIncludingGlobal = func(baseURL, auth string) ([]Agent, error) {
+	return fetchActiveSorted(baseURL, auth, customAgentsPath+"?include_global=true")
 }
 
 // fetchActiveSorted is the shared core of Fetch and FetchIncludingGlobal:
@@ -94,15 +94,15 @@ var FetchIncludingGlobal = func(baseURL, token string) ([]Agent, error) {
 // name. The two exported seams differ only in the path (the
 // include_global query) — keeping the validation/filter/sort policy here
 // means the org-only and global-inclusive listings can't drift apart.
-func fetchActiveSorted(baseURL, token, path string) ([]Agent, error) {
+func fetchActiveSorted(baseURL, auth, path string) ([]Agent, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("baseURL is required")
 	}
-	if token == "" {
+	if auth == "" {
 		return nil, fmt.Errorf("token is required")
 	}
 
-	agents, err := fetchOne(baseURL, token, path, KindAgent)
+	agents, err := fetchOne(baseURL, auth, path, KindAgent)
 	if err != nil {
 		return nil, fmt.Errorf("fetch custom-agents: %w", err)
 	}
@@ -120,13 +120,13 @@ func fetchActiveSorted(baseURL, token, path string) ([]Agent, error) {
 	return out, nil
 }
 
-func fetchOne(baseURL, token, path, kind string) ([]Agent, error) {
+func fetchOne(baseURL, auth, path, kind string) ([]Agent, error) {
 	url := strings.TrimRight(baseURL, "/") + path
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", auth)
 	req.Header.Set("Accept", "application/json")
 
 	client := &http.Client{Timeout: defaultTimeout}

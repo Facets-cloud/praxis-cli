@@ -31,6 +31,7 @@
 package credentials
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,6 +75,31 @@ type Profile struct {
 	// it exists so `praxis status` (and the AI host reading it) can point
 	// raptor at the matching control plane via FACETS_PROFILE.
 	RaptorProfile string
+	// AuthMode selects how Token is presented on outbound requests.
+	// "basic" → HTTP Basic (control-plane PAT, facets mode); anything
+	// else (including "") → Bearer (Praxis API key). Persisted as
+	// auth_mode in the INI, omitted when empty.
+	AuthMode string
+}
+
+// AuthModeBasic is the AuthMode value for control-plane PAT (facets) profiles
+// sent as HTTP Basic. Shared so the writer (login) and reader (AuthHeader)
+// can't drift on the spelling.
+const AuthModeBasic = "basic"
+
+// AuthHeader returns the Authorization header value for this profile, or ""
+// when there is no token. Facets-mode profiles (AuthMode==AuthModeBasic) send
+// the control-plane PAT as HTTP Basic (username:token); everyone else sends
+// the Praxis API key as Bearer. This is the single place an Authorization
+// header value is built.
+func (p Profile) AuthHeader() string {
+	if p.Token == "" {
+		return ""
+	}
+	if p.AuthMode == AuthModeBasic {
+		return "Basic " + base64.StdEncoding.EncodeToString([]byte(p.Username+":"+p.Token))
+	}
+	return "Bearer " + p.Token
 }
 
 // Source describes which level produced the active-profile name. Surfaced
@@ -516,6 +542,7 @@ func parseINI(data []byte) map[string]Profile {
 			Username:      kv["username"],
 			Token:         kv["token"],
 			RaptorProfile: kv["raptor_profile"],
+			AuthMode:      kv["auth_mode"],
 		}
 	}
 	return out
@@ -539,6 +566,9 @@ func writeINI(store map[string]Profile) []byte {
 		}
 		if p.RaptorProfile != "" {
 			fmt.Fprintf(&sb, "raptor_profile = %s\n", p.RaptorProfile)
+		}
+		if p.AuthMode != "" {
+			fmt.Fprintf(&sb, "auth_mode = %s\n", p.AuthMode)
 		}
 		sb.WriteString("\n")
 	}

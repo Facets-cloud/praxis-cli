@@ -51,7 +51,7 @@ func TestRecall_HappyPath_ReturnsScoredMatches(t *testing.T) {
 		{"id":"m2","slug":"backoff","title":"Backoff","content":"...","relevance_score":0.87,"organization_id":"o","kind":"feedback","audience":"user","category":"fact","importance":"medium","tags":[]}
 	]`
 	srv := stubServer(t, http.MethodPost, "/ai-api/memories/recall", 200, body, "tok")
-	got, err := Recall(srv.URL, "tok", RecallRequest{Query: "retry handling", Limit: 5})
+	got, err := Recall(srv.URL, "Bearer tok", RecallRequest{Query: "retry handling", Limit: 5})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestRecall_EmptyQuery_RejectedClientSide(t *testing.T) {
 
 func TestRecall_ServerError_PropagatesStatus(t *testing.T) {
 	srv := stubServer(t, http.MethodPost, "/ai-api/memories/recall", 500, `{"detail":"boom"}`, "tok")
-	_, err := Recall(srv.URL, "tok", RecallRequest{Query: "x"})
+	_, err := Recall(srv.URL, "Bearer tok", RecallRequest{Query: "x"})
 	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
 		t.Fatalf("err = %v; want HTTP 500", err)
 	}
@@ -93,7 +93,7 @@ func TestList_BuildsQueryStringFromParams(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := List(srv.URL, "tok", ListParams{
+	_, err := List(srv.URL, "Bearer tok", ListParams{
 		Category:   "fact",
 		Importance: "high",
 		Tags:       []string{"infra", "ops"},
@@ -130,7 +130,7 @@ func TestList_OmitsEmptyParams(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := List(srv.URL, "tok", ListParams{}); err != nil {
+	if _, err := List(srv.URL, "Bearer tok", ListParams{}); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if capturedQuery != "" {
@@ -152,7 +152,7 @@ func TestCreate_PostsBodyWithoutAgentID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := Create(srv.URL, "tok", CreateRequest{
+	got, err := Create(srv.URL, "Bearer tok", CreateRequest{
 		Title:    "New fact",
 		Content:  "facts",
 		Audience: AudienceUser,

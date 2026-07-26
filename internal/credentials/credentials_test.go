@@ -1,6 +1,7 @@
 package credentials
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,6 +92,55 @@ func TestPutLoadGet_RoundTrip(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("round-trip mismatch: got %+v want %+v", got, want)
+	}
+}
+
+func TestAuthHeader(t *testing.T) {
+	cases := []struct {
+		name string
+		prof Profile
+		want string
+	}{
+		{"bearer default mode", Profile{Username: "u@x", Token: "sk_live_abc"}, "Bearer sk_live_abc"},
+		{"bearer explicit non-basic mode", Profile{Username: "u@x", Token: "sk_live_abc", AuthMode: "bearer"}, "Bearer sk_live_abc"},
+		{"basic mode", Profile{Username: "user@corp", Token: "pat123", AuthMode: "basic"}, "Basic " + base64.StdEncoding.EncodeToString([]byte("user@corp:pat123"))},
+		{"empty token", Profile{Username: "u@x", AuthMode: "basic"}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.prof.AuthHeader(); got != c.want {
+				t.Errorf("AuthHeader() = %q; want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestAuthMode_RoundTripsThroughINI(t *testing.T) {
+	withHome(t)
+	want := Profile{URL: "https://cp.test", Username: "user@corp", Token: "pat123", AuthMode: "basic"}
+	if err := Put("facets", want); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := store["facets"]
+	if !ok {
+		t.Fatal("facets profile missing after Put")
+	}
+	if got != want {
+		t.Errorf("round-trip mismatch: got %+v want %+v", got, want)
+	}
+	// A profile with no AuthMode must NOT emit an auth_mode line.
+	_ = Put("bearer", Profile{URL: "https://x.test", Token: "sk"})
+	path, _ := paths.Credentials()
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(string(raw), "auth_mode = \n") || strings.Contains(string(raw), "auth_mode = bearer") {
+		t.Errorf("empty AuthMode should be omitted from INI; got:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "auth_mode = basic") {
+		t.Errorf("basic AuthMode not persisted; got:\n%s", raw)
 	}
 }
 
