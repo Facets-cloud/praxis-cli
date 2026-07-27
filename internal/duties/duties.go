@@ -7,8 +7,9 @@
 // It mirrors the layout of internal/memory: typed structs track the
 // server's response models (AgentScheduleResponse / AgentRunResponse /
 // Finding), exported function vars give tests a seam to swap, and every
-// transport call sets the Authorization header to the caller-supplied
-// value (Bearer for a Praxis API key, Basic for a facets-mode PAT).
+// transport call sets the caller-supplied auth headers (always
+// Authorization: Bearer <token>, plus X-Facets-Username for a
+// facets-mode PAT).
 //
 // Schedules are nested under a custom agent. The CLI resolves the agent
 // id (the global "praxis" duty agent by default) via internal/agentcatalog
@@ -126,7 +127,7 @@ type findingsEnvelope struct {
 
 // ListSchedules returns every duty under an agent, optionally filtered by
 // tag.
-var ListSchedules = func(baseURL, auth, agentID, tag string) ([]Schedule, error) {
+var ListSchedules = func(baseURL string, auth map[string]string, agentID, tag string) ([]Schedule, error) {
 	if agentID == "" {
 		return nil, fmt.Errorf("agentID is required")
 	}
@@ -141,7 +142,7 @@ var ListSchedules = func(baseURL, auth, agentID, tag string) ([]Schedule, error)
 
 // ListRuns returns runs under an agent, newest first. A non-empty
 // scheduleID filters to one duty; limit is clamped server-side to 1-100.
-var ListRuns = func(baseURL, auth, agentID, scheduleID string, limit int) ([]Run, error) {
+var ListRuns = func(baseURL string, auth map[string]string, agentID, scheduleID string, limit int) ([]Run, error) {
 	if agentID == "" {
 		return nil, fmt.Errorf("agentID is required")
 	}
@@ -160,7 +161,7 @@ var ListRuns = func(baseURL, auth, agentID, scheduleID string, limit int) ([]Run
 }
 
 // GetRun returns a single run's detail, including report_artifact_id.
-var GetRun = func(baseURL, auth, agentID, runID string) (*Run, error) {
+var GetRun = func(baseURL string, auth map[string]string, agentID, runID string) (*Run, error) {
 	if agentID == "" || runID == "" {
 		return nil, fmt.Errorf("agentID and runID are required")
 	}
@@ -174,7 +175,7 @@ var GetRun = func(baseURL, auth, agentID, runID string) (*Run, error) {
 
 // ListFindings returns a duty's findings deduped by finding_key. status is
 // one of open|resolved|all; limit is clamped server-side to 1-1000.
-var ListFindings = func(baseURL, auth, agentID, scheduleID, status string, limit int) ([]Finding, error) {
+var ListFindings = func(baseURL string, auth map[string]string, agentID, scheduleID, status string, limit int) ([]Finding, error) {
 	if agentID == "" || scheduleID == "" {
 		return nil, fmt.Errorf("agentID and scheduleID are required")
 	}
@@ -199,11 +200,11 @@ var ListFindings = func(baseURL, auth, agentID, scheduleID, status string, limit
 // FetchArtifactContent returns an artifact's raw body and its MIME type.
 // The /content endpoint streams bytes (text/markdown or text/html), not
 // JSON, so this bypasses doJSON and reads the body + Content-Type directly.
-var FetchArtifactContent = func(baseURL, auth, artifactID string) (body []byte, mime string, err error) {
+var FetchArtifactContent = func(baseURL string, auth map[string]string, artifactID string) (body []byte, mime string, err error) {
 	if baseURL == "" {
 		return nil, "", fmt.Errorf("baseURL is required")
 	}
-	if auth == "" {
+	if len(auth) == 0 {
 		return nil, "", fmt.Errorf("token is required")
 	}
 	if artifactID == "" {
@@ -218,7 +219,9 @@ var FetchArtifactContent = func(baseURL, auth, artifactID string) (body []byte, 
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("Authorization", auth)
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
 
 	client := &http.Client{Timeout: defaultTimeout}
 	resp, err := client.Do(req)
@@ -249,12 +252,12 @@ func agentBase(agentID string) string {
 // can branch on status (401/403 → auth) without re-parsing the URL.
 // Copied deliberately from internal/memory to keep the two clients'
 // error contracts identical.
-func doJSON[T any](baseURL, auth, method, path string, body io.Reader) (T, error) {
+func doJSON[T any](baseURL string, auth map[string]string, method, path string, body io.Reader) (T, error) {
 	var zero T
 	if baseURL == "" {
 		return zero, fmt.Errorf("baseURL is required")
 	}
-	if auth == "" {
+	if len(auth) == 0 {
 		return zero, fmt.Errorf("token is required")
 	}
 
@@ -266,7 +269,9 @@ func doJSON[T any](baseURL, auth, method, path string, body io.Reader) (T, error
 	if err != nil {
 		return zero, err
 	}
-	req.Header.Set("Authorization", auth)
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")

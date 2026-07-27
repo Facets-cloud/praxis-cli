@@ -221,7 +221,7 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 		return false, nil
 	}
 
-	user, err := fetchAuthMe(baseURL, prof.AuthHeader())
+	user, err := fetchAuthMe(baseURL, prof.Auth())
 	if err != nil {
 		if errors.Is(err, errTokenRejected) {
 			// The server gave a verdict: this token is dead. Falling back to
@@ -414,9 +414,9 @@ func suggestedKeyName() string {
 }
 
 // facetsLogin authenticates using a control-plane PAT read from
-// ~/.facets/credentials, sent as HTTP Basic (username:token). The agent
-// server accepts this in facets auth mode. Verification and every post-auth
-// HTTP call go through the profile's AuthHeader() (Basic), never Bearer.
+// ~/.facets/credentials, sent as Bearer plus an X-Facets-Username identity
+// header. The agent server accepts this in facets auth mode. Verification
+// and every post-auth HTTP call go through the profile's Auth() headers.
 func facetsLogin(out io.Writer, asJSON bool, profileName, flagURL, facetsProfile string, local bool) error {
 	// URL comes from --url or the existing profile — never the built-in
 	// askpraxis.ai default (that's a Praxis SaaS host, not a facets agent).
@@ -445,7 +445,7 @@ func facetsLogin(out io.Writer, asJSON bool, profileName, flagURL, facetsProfile
 	}
 
 	prof := credentials.Profile{URL: baseURL, Username: username, Token: token, AuthMode: credentials.AuthModeBasic}
-	user, err := fetchAuthMe(baseURL, prof.AuthHeader())
+	user, err := fetchAuthMe(baseURL, prof.Auth())
 	if err != nil {
 		render.PrintError(out, asJSON,
 			fmt.Sprintf("control-plane PAT validation failed: %v", err),
@@ -469,8 +469,8 @@ func facetsLogin(out io.Writer, asJSON bool, profileName, flagURL, facetsProfile
 // fallback to attempt.
 func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token string, local bool) error {
 	// --token / browser flow always yields a Praxis API key → Bearer.
-	// Route through AuthHeader() so "Bearer " is built in exactly one place.
-	user, err := fetchAuthMe(baseURL, credentials.Profile{Token: token}.AuthHeader())
+	// Route through Auth() so "Bearer " is built in exactly one place.
+	user, err := fetchAuthMe(baseURL, credentials.Profile{Token: token}.Auth())
 	if err != nil {
 		render.PrintError(out, asJSON,
 			fmt.Sprintf("token validation failed: %v", err),
@@ -506,8 +506,8 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 //
 // persistAndSetup takes the fully-built profile to save (its URL/Username/
 // Token/AuthMode are authoritative — e.g. a facets profile keeps its
-// control-plane username so AuthHeader() can rebuild the Basic header on
-// reuse) and a displayName used only for the human/JSON "logged in as" line.
+// control-plane username so Auth() can rebuild the X-Facets-Username header
+// on reuse) and a displayName used only for the human/JSON "logged in as" line.
 func persistAndSetup(out io.Writer, asJSON bool, profileName string, prof credentials.Profile, displayName string, local bool) error {
 	baseURL := prof.URL
 	prof.RaptorProfile = resolveRaptorPairing(profileName, baseURL)
@@ -543,8 +543,8 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName string, prof creden
 
 	// Post-auth: install meta-skill, wipe previous org skills, install
 	// this profile's catalog, refresh the MCP tools snapshot. The HTTP
-	// calls use the profile's full Authorization header (Bearer or Basic).
-	state := postAuthSetup(out, asJSON, baseURL, prof.AuthHeader())
+	// calls use the profile's full auth headers (Bearer + X-Facets-Username).
+	state := postAuthSetup(out, asJSON, baseURL, prof.Auth())
 
 	if asJSON {
 		payload := map[string]any{
@@ -630,13 +630,15 @@ type authMeResponse struct {
 var errTokenRejected = errors.New("token rejected by server")
 
 // fetchAuthMe is the seam: tests swap it to avoid hitting a real server.
-var fetchAuthMe = func(baseURL, auth string) (*authMeResponse, error) {
+var fetchAuthMe = func(baseURL string, auth map[string]string) (*authMeResponse, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest("GET", baseURL+"/ai-api/auth/me", nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", auth)
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

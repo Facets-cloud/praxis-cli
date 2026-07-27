@@ -161,7 +161,7 @@ func TestStatusCmd_DoesNotCallNetwork(t *testing.T) {
 	// fail because we set it to error.
 	called := false
 	orig := fetchAuthMe
-	fetchAuthMe = func(string, string) (*authMeResponse, error) {
+	fetchAuthMe = func(string, map[string]string) (*authMeResponse, error) {
 		called = true
 		return nil, nil
 	}

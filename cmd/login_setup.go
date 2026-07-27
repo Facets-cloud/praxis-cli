@@ -100,7 +100,7 @@ type agentInstallationLite struct {
 // active root's receipt + that root's host dirs — so it runs unconditionally
 // and stays safe in both scopes (a project refresh can't delete the user's
 // global skills, and vice versa).
-func runPostAuthSetup(out io.Writer, asJSON bool, baseURL, auth string) postAuthState {
+func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[string]string) postAuthState {
 	state := postAuthState{}
 	hosts := detectHarnesses()
 
@@ -458,7 +458,7 @@ func installFetchedCatalog(out io.Writer, asJSON bool, skills []skillcatalog.Ski
 // could not be written (e.g. server too old to expose /v1/mcp/manifest).
 // Either way the parent flow continues — a missing snapshot just means
 // AI hosts fall back to live `praxis mcp` calls.
-func refreshMCPSnapshot(out io.Writer, asJSON bool, baseURL, auth string) (string, string) {
+func refreshMCPSnapshot(out io.Writer, asJSON bool, baseURL string, auth map[string]string) (string, string) {
 	raw, err := mcpmanifest.Fetch(baseURL, auth, mcpmanifest.DefaultTimeout)
 	if err != nil {
 		if !asJSON {

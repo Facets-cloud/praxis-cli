@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+// bearer builds the Auth() header map a Bearer-mode profile produces.
+func bearer(tok string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + tok}
+}
+
 func TestFetch_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ai-api/v1/mcp/manifest" {
@@ -22,7 +27,7 @@ func TestFetch_HappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	raw, err := Fetch(srv.URL, "Bearer sk_test", 5*time.Second)
+	raw, err := Fetch(srv.URL, bearer("sk_test"), 5*time.Second)
 	if err != nil {
 		t.Fatalf("Fetch err = %v", err)
 	}
@@ -32,13 +37,13 @@ func TestFetch_HappyPath(t *testing.T) {
 }
 
 func TestFetch_NoURL(t *testing.T) {
-	if _, err := Fetch("", "tok", 0); err == nil {
+	if _, err := Fetch("", bearer("tok"), 0); err == nil {
 		t.Fatal("expected error for empty URL")
 	}
 }
 
 func TestFetch_NoToken(t *testing.T) {
-	if _, err := Fetch("https://x.test", "", 0); err == nil {
+	if _, err := Fetch("https://x.test", nil, 0); err == nil {
 		t.Fatal("expected error for empty token")
 	}
 }
@@ -56,7 +61,7 @@ func TestFetch_NegativeTimeoutDefaulted(t *testing.T) {
 	// our fast test server — so we can't catch the bug by behavior alone.
 	// Instead, we just exercise the path and assert success: the regression
 	// would be a panic or a timeout error, not silent success.
-	if _, err := Fetch(srv.URL, "tok", -1*time.Second); err != nil {
+	if _, err := Fetch(srv.URL, bearer("tok"), -1*time.Second); err != nil {
 		t.Fatalf("Fetch with negative timeout should default and succeed; got %v", err)
 	}
 }
@@ -67,7 +72,7 @@ func TestFetch_NonOKStatusReturnsError(t *testing.T) {
 		_, _ = w.Write([]byte(`{"detail":"bad key"}`))
 	}))
 	defer srv.Close()
-	_, err := Fetch(srv.URL, "tok", 5*time.Second)
+	_, err := Fetch(srv.URL, bearer("tok"), 5*time.Second)
 	if err == nil {
 		t.Fatal("expected error on 401")
 	}

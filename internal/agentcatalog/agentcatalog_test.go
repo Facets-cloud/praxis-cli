@@ -10,6 +10,11 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 )
 
+// bearer builds the Auth() header map a Bearer-mode profile produces.
+func bearer(tok string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + tok}
+}
+
 func TestAgentPrefixedName(t *testing.T) {
 	a := Agent{Name: "foo", Kind: KindAgent}
 	if got := a.PrefixedName(); got != "praxis-foo" {
@@ -66,7 +71,7 @@ func TestFetchFiltersInactive(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := Fetch(srv.URL, "test-token")
+	got, err := Fetch(srv.URL, bearer("test-token"))
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -96,7 +101,7 @@ func TestFetchIncludingGlobal(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := FetchIncludingGlobal(srv.URL, "tok")
+	got, err := FetchIncludingGlobal(srv.URL, bearer("tok"))
 	if err != nil {
 		t.Fatalf("FetchIncludingGlobal: %v", err)
 	}
@@ -127,7 +132,7 @@ func TestFetchServerErrorFails(t *testing.T) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	_, err := Fetch(srv.URL, "tok")
+	_, err := Fetch(srv.URL, bearer("tok"))
 	if err == nil {
 		t.Fatal("expected error on 500, got nil")
 	}
@@ -148,7 +153,7 @@ func TestFetchTolerates404(t *testing.T) {
 		http.NotFound(w, r)
 	}))
 	defer srv.Close()
-	got, err := Fetch(srv.URL, "tok")
+	got, err := Fetch(srv.URL, bearer("tok"))
 	if err != nil {
 		t.Fatalf("Fetch should tolerate 404 on /custom-agents, got: %v", err)
 	}
@@ -158,12 +163,12 @@ func TestFetchTolerates404(t *testing.T) {
 }
 
 func TestFetchRequiresBaseURLAndToken(t *testing.T) {
-	if _, err := Fetch("", "tok"); err == nil {
+	if _, err := Fetch("", bearer("tok")); err == nil {
 		t.Error("empty baseURL: expected error")
 	} else if !strings.Contains(err.Error(), "baseURL is required") {
 		t.Errorf("empty baseURL: error should name the missing field, got: %v", err)
 	}
-	if _, err := Fetch("http://x", ""); err == nil {
+	if _, err := Fetch("http://x", nil); err == nil {
 		t.Error("empty token: expected error")
 	} else if !strings.Contains(err.Error(), "token is required") {
 		t.Errorf("empty token: error should name the missing field, got: %v", err)

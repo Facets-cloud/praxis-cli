@@ -7,6 +7,11 @@ import (
 	"testing"
 )
 
+// bearer builds the Auth() header map a Bearer-mode profile produces.
+func bearer(tok string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + tok}
+}
+
 func TestFetch_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ai-api/v1/skills/bundle" {
@@ -25,7 +30,7 @@ func TestFetch_HappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	skills, err := Fetch(srv.URL, "Bearer sk_test_X")
+	skills, err := Fetch(srv.URL, bearer("sk_test_X"))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -47,7 +52,7 @@ func TestFetch_HTTPError_IncludesBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := Fetch(srv.URL, "bad_token")
+	_, err := Fetch(srv.URL, bearer("bad_token"))
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -57,10 +62,10 @@ func TestFetch_HTTPError_IncludesBody(t *testing.T) {
 }
 
 func TestFetch_RequiresURLAndToken(t *testing.T) {
-	if _, err := Fetch("", "t"); err == nil {
+	if _, err := Fetch("", bearer("t")); err == nil {
 		t.Error("expected error for empty URL")
 	}
-	if _, err := Fetch("https://x", ""); err == nil {
+	if _, err := Fetch("https://x", nil); err == nil {
 		t.Error("expected error for empty token")
 	}
 }
@@ -74,7 +79,7 @@ func TestFetch_TrailingSlashURL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := Fetch(srv.URL+"/", "t"); err != nil {
+	if _, err := Fetch(srv.URL+"/", bearer("t")); err != nil {
 		t.Fatal(err)
 	}
 	// Path should NOT have double slash
@@ -89,7 +94,7 @@ func TestFetch_BadJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := Fetch(srv.URL, "t")
+	_, err := Fetch(srv.URL, bearer("t"))
 	if err == nil || !strings.Contains(err.Error(), "parse bundle") {
 		t.Errorf("err = %v", err)
 	}
@@ -286,7 +291,7 @@ func TestFetch_ParsesSupportingFiles(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	skills, err := Fetch(srv.URL, "tok")
+	skills, err := Fetch(srv.URL, bearer("tok"))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}

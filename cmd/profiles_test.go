@@ -158,7 +158,7 @@ func TestProfilesCmd_DoesNotCallNetworkByDefault(t *testing.T) {
 
 	called := false
 	orig := fetchAuthMe
-	fetchAuthMe = func(string, string) (*authMeResponse, error) {
+	fetchAuthMe = func(string, map[string]string) (*authMeResponse, error) {
 		called = true
 		return nil, nil
 	}
@@ -182,8 +182,8 @@ func TestProfilesCmd_Refresh_VerifiesEachLoggedInProfile(t *testing.T) {
 
 	var seen []string
 	orig := fetchAuthMe
-	fetchAuthMe = func(baseURL, token string) (*authMeResponse, error) {
-		seen = append(seen, token)
+	fetchAuthMe = func(baseURL string, auth map[string]string) (*authMeResponse, error) {
+		seen = append(seen, auth["Authorization"])
 		return &authMeResponse{Email: "verified@facets.cloud", UserID: "u1"}, nil
 	}
 	defer func() { fetchAuthMe = orig }()
@@ -274,7 +274,7 @@ func TestProfilesCmd_Refresh_RecordsTokenFailure(t *testing.T) {
 	profilesRefresh = true
 
 	orig := fetchAuthMe
-	fetchAuthMe = func(string, string) (*authMeResponse, error) {
+	fetchAuthMe = func(string, map[string]string) (*authMeResponse, error) {
 		return nil, errTokenRevoked
 	}
 	defer func() { fetchAuthMe = orig }()

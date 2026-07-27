@@ -94,7 +94,7 @@ Examples:
 			os.Exit(exitcode.Usage)
 		}
 
-		resp, status, err := callMCP(active.Profile.URL, active.Profile.AuthHeader(), mcpName, fnName, body, mcpTimeout)
+		resp, status, err := callMCP(active.Profile.URL, active.Profile.Auth(), mcpName, fnName, body, mcpTimeout)
 		if err != nil {
 			render.PrintError(out, asJSON,
 				fmt.Sprintf("network error: %v", err),
@@ -209,7 +209,7 @@ func buildMCPBody(argFlags []string, bodyFlag string, stdin io.Reader) ([]byte, 
 // wants the structured detail they can pipe `praxis mcp --json` through
 // jq instead.
 func runManifestList(out io.Writer, asJSON bool, active credentials.Active) error {
-	raw, err := mcpmanifest.Fetch(active.Profile.URL, active.Profile.AuthHeader(), mcpTimeout)
+	raw, err := mcpmanifest.Fetch(active.Profile.URL, active.Profile.Auth(), mcpTimeout)
 	if err != nil {
 		// Auth-failure shape from Fetch: "manifest fetch returned HTTP 401: ..."
 		errStr := err.Error()
@@ -311,7 +311,7 @@ func sortStrings(s []string) {
 }
 
 // callMCP is the HTTP seam — tests swap it to avoid hitting the network.
-var callMCP = func(baseURL, auth, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+var callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
 	if baseURL == "" {
 		return nil, 0, errors.New("profile has no URL set")
 	}
@@ -330,12 +330,14 @@ var callMCP = func(baseURL, auth, mcp, fn string, body []byte, timeout time.Dura
 			orig := via[0]
 			req.Method = orig.Method
 			req.Header = orig.Header.Clone()
-			// Never leak the bearer token to a foreign domain: mirror
-			// Go's own sensitive-header rule and forward Authorization
-			// only when the redirect target is the original host or a
-			// subdomain of it (apex → www stays covered).
+			// Never leak the bearer token or the facets identity header to
+			// a foreign domain: mirror Go's own sensitive-header rule and
+			// forward Authorization / X-Facets-Username only when the
+			// redirect target is the original host or a subdomain of it
+			// (apex → www stays covered).
 			if !isDomainOrSubdomain(req.URL.Hostname(), orig.URL.Hostname()) {
 				req.Header.Del("Authorization")
+				req.Header.Del("X-Facets-Username")
 			}
 			if orig.GetBody != nil {
 				b, err := orig.GetBody()
@@ -353,7 +355,9 @@ var callMCP = func(baseURL, auth, mcp, fn string, body []byte, timeout time.Dura
 	if err != nil {
 		return nil, 0, err
 	}
-	req.Header.Set("Authorization", auth)
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {

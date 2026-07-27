@@ -199,7 +199,7 @@ func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
 	defer srv.Close()
 
 	body := []byte(`{"command":"get projects"}`)
-	resp, status, err := callMCP(srv.URL, "Bearer sk_test_T", "raptor_cli", "run_raptor_cli", body, 5*time.Second)
+	resp, status, err := callMCP(srv.URL, bearer("sk_test_T"), "raptor_cli", "run_raptor_cli", body, 5*time.Second)
 	if err != nil {
 		t.Fatalf("callMCP error: %v", err)
 	}
@@ -225,10 +225,11 @@ func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
 // "foreign" host (localhost — same loopback, different hostname), so the
 // token must be stripped while method and body still survive.
 func TestCallMCP_DropsAuthOnCrossDomainRedirect(t *testing.T) {
-	var gotMethod, gotBody, gotAuth string
+	var gotMethod, gotBody, gotAuth, gotUser string
 	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotAuth = r.Header.Get("Authorization")
+		gotUser = r.Header.Get("X-Facets-Username")
 		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
 		w.WriteHeader(http.StatusOK)
@@ -246,7 +247,10 @@ func TestCallMCP_DropsAuthOnCrossDomainRedirect(t *testing.T) {
 	defer origin.Close()
 
 	body := []byte(`{"command":"get projects"}`)
-	_, status, err := callMCP(origin.URL, "Bearer sk_test_SECRET", "raptor_cli", "run_raptor_cli", body, 5*time.Second)
+	// Facets-mode auth: both the Bearer token AND the X-Facets-Username
+	// identity header must be stripped on a cross-domain redirect.
+	auth := map[string]string{"Authorization": "Bearer sk_test_SECRET", "X-Facets-Username": "u@corp"}
+	_, status, err := callMCP(origin.URL, auth, "raptor_cli", "run_raptor_cli", body, 5*time.Second)
 	if err != nil {
 		t.Fatalf("callMCP error: %v", err)
 	}
@@ -255,6 +259,9 @@ func TestCallMCP_DropsAuthOnCrossDomainRedirect(t *testing.T) {
 	}
 	if gotAuth != "" {
 		t.Errorf("Authorization leaked across domains: got %q, want empty", gotAuth)
+	}
+	if gotUser != "" {
+		t.Errorf("X-Facets-Username leaked across domains: got %q, want empty", gotUser)
 	}
 	if gotMethod != http.MethodPost {
 		t.Errorf("method after redirect = %q, want POST", gotMethod)
@@ -433,7 +440,7 @@ func TestMcpCmd_JsonOutputWiring(t *testing.T) {
 
 			seedDefaultProfile(t)
 			orig := callMCP
-			callMCP = func(_, _, _, _ string, _ []byte, _ time.Duration) ([]byte, int, error) {
+			callMCP = func(_ string, _ map[string]string, _, _ string, _ []byte, _ time.Duration) ([]byte, int, error) {
 				return []byte(envelope), http.StatusOK, nil
 			}
 			defer func() { callMCP = orig }()
@@ -467,9 +474,9 @@ func TestMcpCmd_HappyPath(t *testing.T) {
 	var capturedURL, capturedToken string
 	var capturedBody []byte
 	orig := callMCP
-	callMCP = func(baseURL, auth, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+	callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
 		capturedURL = baseURL + "/ai-api/v1/mcp/" + mcp + "/" + fn
-		capturedToken = auth
+		capturedToken = auth["Authorization"]
 		capturedBody = body
 		return []byte(`{"integrations":[{"name":"aws-prod"}]}`), http.StatusOK, nil
 	}
@@ -548,7 +555,7 @@ func TestMcpCmd_NoArgs_JsonPassthrough(t *testing.T) {
 
 	manifest := []byte(`{"mcps":{"cloud_cli":{}}}`)
 	orig := mcpmanifest.Fetch
-	mcpmanifest.Fetch = func(_, _ string, _ time.Duration) ([]byte, error) {
+	mcpmanifest.Fetch = func(_ string, _ map[string]string, _ time.Duration) ([]byte, error) {
 		return manifest, nil
 	}
 	defer func() { mcpmanifest.Fetch = orig }()

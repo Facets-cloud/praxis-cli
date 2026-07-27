@@ -9,6 +9,11 @@ import (
 	"testing"
 )
 
+// bearer builds the Auth() header map a Bearer-mode profile produces.
+func bearer(tok string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + tok}
+}
+
 // stubServer spins up an httptest.Server with a request-validating
 // handler. The handler asserts auth headers and content-type, and
 // returns whatever body the table-row provides.
@@ -51,7 +56,7 @@ func TestRecall_HappyPath_ReturnsScoredMatches(t *testing.T) {
 		{"id":"m2","slug":"backoff","title":"Backoff","content":"...","relevance_score":0.87,"organization_id":"o","kind":"feedback","audience":"user","category":"fact","importance":"medium","tags":[]}
 	]`
 	srv := stubServer(t, http.MethodPost, "/ai-api/memories/recall", 200, body, "tok")
-	got, err := Recall(srv.URL, "Bearer tok", RecallRequest{Query: "retry handling", Limit: 5})
+	got, err := Recall(srv.URL, bearer("tok"), RecallRequest{Query: "retry handling", Limit: 5})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -67,7 +72,7 @@ func TestRecall_EmptyQuery_RejectedClientSide(t *testing.T) {
 	// No HTTP call should happen — assert by giving an obviously-broken
 	// baseURL so a network call would error differently than "query is
 	// required".
-	_, err := Recall("http://no-such-host.invalid", "tok", RecallRequest{Query: ""})
+	_, err := Recall("http://no-such-host.invalid", bearer("tok"), RecallRequest{Query: ""})
 	if err == nil || !strings.Contains(err.Error(), "query is required") {
 		t.Fatalf("err = %v; want 'query is required'", err)
 	}
@@ -75,7 +80,7 @@ func TestRecall_EmptyQuery_RejectedClientSide(t *testing.T) {
 
 func TestRecall_ServerError_PropagatesStatus(t *testing.T) {
 	srv := stubServer(t, http.MethodPost, "/ai-api/memories/recall", 500, `{"detail":"boom"}`, "tok")
-	_, err := Recall(srv.URL, "Bearer tok", RecallRequest{Query: "x"})
+	_, err := Recall(srv.URL, bearer("tok"), RecallRequest{Query: "x"})
 	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
 		t.Fatalf("err = %v; want HTTP 500", err)
 	}
@@ -93,7 +98,7 @@ func TestList_BuildsQueryStringFromParams(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := List(srv.URL, "Bearer tok", ListParams{
+	_, err := List(srv.URL, bearer("tok"), ListParams{
 		Category:   "fact",
 		Importance: "high",
 		Tags:       []string{"infra", "ops"},
@@ -130,7 +135,7 @@ func TestList_OmitsEmptyParams(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := List(srv.URL, "Bearer tok", ListParams{}); err != nil {
+	if _, err := List(srv.URL, bearer("tok"), ListParams{}); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if capturedQuery != "" {
@@ -152,7 +157,7 @@ func TestCreate_PostsBodyWithoutAgentID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := Create(srv.URL, "Bearer tok", CreateRequest{
+	got, err := Create(srv.URL, bearer("tok"), CreateRequest{
 		Title:    "New fact",
 		Content:  "facts",
 		Audience: AudienceUser,
@@ -188,7 +193,7 @@ func TestCreate_MissingFields_RejectedClientSide(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Create("http://no-such-host.invalid", "tok", tt.req)
+			_, err := Create("http://no-such-host.invalid", bearer("tok"), tt.req)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err = %v; want %q", err, tt.want)
 			}
@@ -200,14 +205,15 @@ func TestCreate_MissingFields_RejectedClientSide(t *testing.T) {
 
 func TestDoJSON_RejectsEmptyBaseURLOrToken(t *testing.T) {
 	tests := []struct {
-		name, baseURL, token, want string
+		name, baseURL, want string
+		auth                map[string]string
 	}{
-		{"no baseURL", "", "tok", "baseURL is required"},
-		{"no token", "http://x", "", "token is required"},
+		{"no baseURL", "", "baseURL is required", bearer("tok")},
+		{"no token", "http://x", "token is required", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Recall(tt.baseURL, tt.token, RecallRequest{Query: "x"})
+			_, err := Recall(tt.baseURL, tt.auth, RecallRequest{Query: "x"})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err = %v; want %q", err, tt.want)
 			}

@@ -114,7 +114,7 @@ current staleness.`,
 		// behavior of the (now deprecated) `whoami` command. Local-only
 		// fields above are still returned even on auth-check failure.
 		if statusRefresh && loggedIn {
-			user, err := fetchAuthMe(active.Profile.URL, active.Profile.AuthHeader())
+			user, err := fetchAuthMe(active.Profile.URL, active.Profile.Auth())
 			if err != nil {
 				state["auth_check"] = map[string]any{
 					"ok":    false,

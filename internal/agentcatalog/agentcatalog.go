@@ -75,7 +75,7 @@ const (
 // A 404 on /custom-agents is treated as "empty catalog" (the helper
 // returns nil, nil) rather than an error, so deployments that don't
 // expose the endpoint install nothing rather than failing login.
-var Fetch = func(baseURL, auth string) ([]Agent, error) {
+var Fetch = func(baseURL string, auth map[string]string) ([]Agent, error) {
 	return fetchActiveSorted(baseURL, auth, customAgentsPath)
 }
 
@@ -85,7 +85,7 @@ var Fetch = func(baseURL, auth string) ([]Agent, error) {
 // to decide which agents to install on disk; this variant exists so
 // `praxis duty` can resolve the global praxis agent's id (its nested
 // schedules/runs/findings are addressed by that id).
-var FetchIncludingGlobal = func(baseURL, auth string) ([]Agent, error) {
+var FetchIncludingGlobal = func(baseURL string, auth map[string]string) ([]Agent, error) {
 	return fetchActiveSorted(baseURL, auth, customAgentsPath+"?include_global=true")
 }
 
@@ -94,11 +94,11 @@ var FetchIncludingGlobal = func(baseURL, auth string) ([]Agent, error) {
 // name. The two exported seams differ only in the path (the
 // include_global query) — keeping the validation/filter/sort policy here
 // means the org-only and global-inclusive listings can't drift apart.
-func fetchActiveSorted(baseURL, auth, path string) ([]Agent, error) {
+func fetchActiveSorted(baseURL string, auth map[string]string, path string) ([]Agent, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("baseURL is required")
 	}
-	if auth == "" {
+	if len(auth) == 0 {
 		return nil, fmt.Errorf("token is required")
 	}
 
@@ -120,13 +120,15 @@ func fetchActiveSorted(baseURL, auth, path string) ([]Agent, error) {
 	return out, nil
 }
 
-func fetchOne(baseURL, auth, path, kind string) ([]Agent, error) {
+func fetchOne(baseURL string, auth map[string]string, path, kind string) ([]Agent, error) {
 	url := strings.TrimRight(baseURL, "/") + path
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", auth)
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
 	req.Header.Set("Accept", "application/json")
 
 	client := &http.Client{Timeout: defaultTimeout}

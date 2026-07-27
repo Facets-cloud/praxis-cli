@@ -26,7 +26,7 @@ import (
 func stubMCPManifestFetch(t *testing.T) {
 	t.Helper()
 	orig := mcpmanifest.Fetch
-	mcpmanifest.Fetch = func(_ string, _ string, _ time.Duration) ([]byte, error) {
+	mcpmanifest.Fetch = func(_ string, _ map[string]string, _ time.Duration) ([]byte, error) {
 		return []byte(`{"mcps":{}}`), nil
 	}
 	t.Cleanup(func() { mcpmanifest.Fetch = orig })
@@ -58,7 +58,7 @@ func TestRunPostAuthSetup_CatalogFetchFailure_PreservesExisting(t *testing.T) {
 	installSkill = func(name string, h []harness.Harness) ([]skillinstall.Installation, error) {
 		return []skillinstall.Installation{{SkillName: name, Harness: "claude-code", Path: "/x"}}, nil
 	}
-	fetchCatalog = func(baseURL, token string) ([]skillcatalog.Skill, error) {
+	fetchCatalog = func(baseURL string, auth map[string]string) ([]skillcatalog.Skill, error) {
 		return nil, errors.New("simulated network failure")
 	}
 	t.Cleanup(func() {
@@ -66,7 +66,7 @@ func TestRunPostAuthSetup_CatalogFetchFailure_PreservesExisting(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	state := runPostAuthSetup(&buf, false, "https://x.test", "tok")
+	state := runPostAuthSetup(&buf, false, "https://x.test", bearer("tok"))
 
 	// Existing praxis-* installs must still be in the receipt — the
 	// fetch failure must not have triggered UninstallByPrefix.
@@ -116,7 +116,7 @@ func TestRunPostAuthSetup_NoHosts_StillRefreshesSnapshot(t *testing.T) {
 	t.Cleanup(func() { detectHarnesses = origDetect })
 
 	var buf bytes.Buffer
-	state := runPostAuthSetup(&buf, false, "https://x.test", "tok")
+	state := runPostAuthSetup(&buf, false, "https://x.test", bearer("tok"))
 
 	// Friendly message but flow continues.
 	if !strings.Contains(buf.String(), "No supported AI hosts") {
@@ -170,15 +170,15 @@ func TestRunPostAuthSetup_ProjectScope_WritesIntoProjectDir(t *testing.T) {
 	t.Cleanup(func() { detectHarnesses = origDetect })
 
 	origFetchSk := fetchCatalog
-	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
+	fetchCatalog = func(_ string, _ map[string]string) ([]skillcatalog.Skill, error) { return nil, nil }
 	t.Cleanup(func() { fetchCatalog = origFetchSk })
 
 	origFetchAg := fetchAgents
-	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) { return nil, nil }
+	fetchAgents = func(_ string, _ map[string]string) ([]agentcatalog.Agent, error) { return nil, nil }
 	t.Cleanup(func() { fetchAgents = origFetchAg })
 
 	var buf bytes.Buffer
-	state := runPostAuthSetup(&buf, false, "http://x", "tok")
+	state := runPostAuthSetup(&buf, false, "http://x", bearer("tok"))
 	if !state.projectScoped {
 		t.Errorf("expected project scope when active root is a project root")
 	}
@@ -230,15 +230,15 @@ func TestRunPostAuthSetup_ProjectScope_DoesNotWipeUserLevelInstall(t *testing.T)
 	t.Cleanup(func() { detectHarnesses = origDetect })
 
 	origFetchSk := fetchCatalog
-	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
+	fetchCatalog = func(_ string, _ map[string]string) ([]skillcatalog.Skill, error) { return nil, nil }
 	t.Cleanup(func() { fetchCatalog = origFetchSk })
 
 	origFetchAg := fetchAgents
-	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) { return nil, nil }
+	fetchAgents = func(_ string, _ map[string]string) ([]agentcatalog.Agent, error) { return nil, nil }
 	t.Cleanup(func() { fetchAgents = origFetchAg })
 
 	var buf bytes.Buffer
-	runPostAuthSetup(&buf, false, "http://x", "tok")
+	runPostAuthSetup(&buf, false, "http://x", bearer("tok"))
 
 	if _, err := os.Stat(seededPath); err != nil {
 		t.Errorf("user-level skill must survive a project-scoped refresh, but %s is gone: %v", seededPath, err)
@@ -263,18 +263,18 @@ func TestRunPostAuthSetupFetchesAndInstallsAgents(t *testing.T) {
 
 	origFetchSk := fetchCatalog
 	defer func() { fetchCatalog = origFetchSk }()
-	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
+	fetchCatalog = func(_ string, _ map[string]string) ([]skillcatalog.Skill, error) { return nil, nil }
 
 	origFetchAg := fetchAgents
 	defer func() { fetchAgents = origFetchAg }()
-	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) {
+	fetchAgents = func(_ string, _ map[string]string) ([]agentcatalog.Agent, error) {
 		return []agentcatalog.Agent{
 			{Name: "alpha", Description: "a", SystemPrompt: "b", IsActive: true, Kind: agentcatalog.KindAgent},
 		}, nil
 	}
 
 	var buf bytes.Buffer
-	state := runPostAuthSetup(&buf, false, "http://x", "tok")
+	state := runPostAuthSetup(&buf, false, "http://x", bearer("tok"))
 	if len(state.agents) != 1 {
 		t.Fatalf("want 1 agent installed, got %d", len(state.agents))
 	}
@@ -323,16 +323,16 @@ func TestRunPostAuthSetupAgentFetchFailureLeavesExistingInPlace(t *testing.T) {
 
 	origFetchSk := fetchCatalog
 	defer func() { fetchCatalog = origFetchSk }()
-	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) { return nil, nil }
+	fetchCatalog = func(_ string, _ map[string]string) ([]skillcatalog.Skill, error) { return nil, nil }
 
 	origFetchAg := fetchAgents
 	defer func() { fetchAgents = origFetchAg }()
-	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) {
+	fetchAgents = func(_ string, _ map[string]string) ([]agentcatalog.Agent, error) {
 		return nil, fmt.Errorf("simulated network failure")
 	}
 
 	var buf bytes.Buffer
-	state := runPostAuthSetup(&buf, false, "http://x", "tok")
+	state := runPostAuthSetup(&buf, false, "http://x", bearer("tok"))
 
 	// state.agents reports what THIS invocation installed; with a fetch
 	// failure that should be empty — but the seeded agent must remain
@@ -451,14 +451,14 @@ func TestRunPostAuthSetup_EndToEnd_NoGeminiConflict(t *testing.T) {
 	// Stub only the network seams. Catalog returns one real single-file skill;
 	// agents empty. Install/detection/migration all run for real.
 	origFetch, origAgents := fetchCatalog, fetchAgents
-	fetchCatalog = func(_, _ string) ([]skillcatalog.Skill, error) {
+	fetchCatalog = func(_ string, _ map[string]string) ([]skillcatalog.Skill, error) {
 		return []skillcatalog.Skill{{Name: "cloudops", Content: "---\nname: cloudops\n---\nbody"}}, nil
 	}
-	fetchAgents = func(_, _ string) ([]agentcatalog.Agent, error) { return nil, nil }
+	fetchAgents = func(_ string, _ map[string]string) ([]agentcatalog.Agent, error) { return nil, nil }
 	t.Cleanup(func() { fetchCatalog, fetchAgents = origFetch, origAgents })
 
 	var buf bytes.Buffer
-	runPostAuthSetup(&buf, false, "https://x.test", "tok")
+	runPostAuthSetup(&buf, false, "https://x.test", bearer("tok"))
 
 	// 1. The catalog skill and both metas installed at the shared alias.
 	for _, name := range []string{"praxis-cloudops", "praxis", "praxis-memory"} {

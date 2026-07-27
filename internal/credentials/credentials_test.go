@@ -1,7 +1,6 @@
 package credentials
 
 import (
-	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,21 +94,27 @@ func TestPutLoadGet_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestAuthHeader(t *testing.T) {
+func TestAuth(t *testing.T) {
 	cases := []struct {
 		name string
 		prof Profile
-		want string
+		want map[string]string
 	}{
-		{"bearer default mode", Profile{Username: "u@x", Token: "sk_live_abc"}, "Bearer sk_live_abc"},
-		{"bearer explicit non-basic mode", Profile{Username: "u@x", Token: "sk_live_abc", AuthMode: "bearer"}, "Bearer sk_live_abc"},
-		{"basic mode", Profile{Username: "user@corp", Token: "pat123", AuthMode: "basic"}, "Basic " + base64.StdEncoding.EncodeToString([]byte("user@corp:pat123"))},
-		{"empty token", Profile{Username: "u@x", AuthMode: "basic"}, ""},
+		{"bearer default mode", Profile{Username: "u@x", Token: "sk_live_abc"}, map[string]string{"Authorization": "Bearer sk_live_abc"}},
+		{"bearer explicit non-basic mode", Profile{Username: "u@x", Token: "sk_live_abc", AuthMode: "bearer"}, map[string]string{"Authorization": "Bearer sk_live_abc"}},
+		{"facets/basic mode", Profile{Username: "user@corp", Token: "pat123", AuthMode: "basic"}, map[string]string{"Authorization": "Bearer pat123", "X-Facets-Username": "user@corp"}},
+		{"empty token", Profile{Username: "u@x", AuthMode: "basic"}, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := c.prof.AuthHeader(); got != c.want {
-				t.Errorf("AuthHeader() = %q; want %q", got, c.want)
+			got := c.prof.Auth()
+			if len(got) != len(c.want) {
+				t.Fatalf("Auth() = %v; want %v", got, c.want)
+			}
+			for k, v := range c.want {
+				if got[k] != v {
+					t.Errorf("Auth()[%q] = %q; want %q", k, got[k], v)
+				}
 			}
 		})
 	}

@@ -116,10 +116,10 @@ func TestIgSync_WritesSyncStateAndComposesRefresh(t *testing.T) {
 
 	var gotINM string
 	orig := igcatalog.DownloadBundle
-	igcatalog.DownloadBundle = func(baseURL, token, catalog, inm string) ([]byte, string, bool, error) {
+	igcatalog.DownloadBundle = func(baseURL string, auth map[string]string, catalog, inm string) ([]byte, string, bool, error) {
 		gotINM = inm
-		if baseURL != "https://x.test" || token != "tok" {
-			t.Errorf("auth threading: url=%q token=%q", baseURL, token)
+		if baseURL != "https://x.test" || auth["Authorization"] != "Bearer tok" {
+			t.Errorf("auth threading: url=%q auth=%v", baseURL, auth)
 		}
 		if catalog != "payments" {
 			t.Errorf("catalog = %q", catalog)
@@ -198,7 +198,7 @@ func TestIgSync_NotModifiedIsCheapNoOp(t *testing.T) {
 
 	var gotINM string
 	orig := igcatalog.DownloadBundle
-	igcatalog.DownloadBundle = func(_, _, _, inm string) ([]byte, string, bool, error) {
+	igcatalog.DownloadBundle = func(_ string, _ map[string]string, _, inm string) ([]byte, string, bool, error) {
 		gotINM = inm
 		return nil, "sha256:old", true, nil
 	}
@@ -353,7 +353,7 @@ func TestIgSync_DigestMismatchFailsAndKeepsTree(t *testing.T) {
 
 	tarball := makeTarGz(t, map[string]string{"graph.json": "x"})
 	orig := igcatalog.DownloadBundle
-	igcatalog.DownloadBundle = func(_, _, _, _ string) ([]byte, string, bool, error) {
+	igcatalog.DownloadBundle = func(_ string, _ map[string]string, _, _ string) ([]byte, string, bool, error) {
 		return tarball, "sha256:0000thisisthewronghash0000", false, nil
 	}
 	defer func() { igcatalog.DownloadBundle = orig }()
@@ -392,7 +392,7 @@ func TestIgSync_ReplacesExistingTreeCleanly(t *testing.T) {
 	tarball := makeTarGz(t, map[string]string{"metadata.json": `{"catalog":"payments"}`, "NEW.txt": "new"})
 	etag := sha256Etag(tarball)
 	orig := igcatalog.DownloadBundle
-	igcatalog.DownloadBundle = func(_, _, _, inm string) ([]byte, string, bool, error) {
+	igcatalog.DownloadBundle = func(_ string, _ map[string]string, _, inm string) ([]byte, string, bool, error) {
 		if inm != "sha256:old" {
 			t.Errorf("If-None-Match = %q; want sha256:old", inm)
 		}
@@ -442,7 +442,7 @@ func TestIgSync_GoodBundleWithMetadataAtRootSwapsIn(t *testing.T) {
 	})
 	etag := sha256Etag(tarball)
 	orig := igcatalog.DownloadBundle
-	igcatalog.DownloadBundle = func(_, _, _, _ string) ([]byte, string, bool, error) {
+	igcatalog.DownloadBundle = func(_ string, _ map[string]string, _, _ string) ([]byte, string, bool, error) {
 		return tarball, etag, false, nil
 	}
 	defer func() { igcatalog.DownloadBundle = orig }()
@@ -513,7 +513,7 @@ func TestIgSync_RejectsMalformedBundleAndKeepsLiveTree(t *testing.T) {
 			tarball := makeTarGz(t, tc.files)
 			etag := sha256Etag(tarball)
 			orig := igcatalog.DownloadBundle
-			igcatalog.DownloadBundle = func(_, _, _, _ string) ([]byte, string, bool, error) {
+			igcatalog.DownloadBundle = func(_ string, _ map[string]string, _, _ string) ([]byte, string, bool, error) {
 				return tarball, etag, false, nil
 			}
 			defer func() { igcatalog.DownloadBundle = orig }()
@@ -557,13 +557,13 @@ func TestIgStatus_ComparesWithoutFetchingBundle(t *testing.T) {
 	}
 
 	origGet := igcatalog.GetCatalog
-	igcatalog.GetCatalog = func(_, _, name string) (*igcatalog.Catalog, error) {
+	igcatalog.GetCatalog = func(_ string, _ map[string]string, name string) (*igcatalog.Catalog, error) {
 		return &igcatalog.Catalog{Name: name, Version: "sha256:server-newer"}, nil
 	}
 	defer func() { igcatalog.GetCatalog = origGet }()
 
 	origDL := igcatalog.DownloadBundle
-	igcatalog.DownloadBundle = func(_, _, _, _ string) ([]byte, string, bool, error) {
+	igcatalog.DownloadBundle = func(_ string, _ map[string]string, _, _ string) ([]byte, string, bool, error) {
 		t.Fatal("status must NOT download the bundle")
 		return nil, "", false, nil
 	}
@@ -580,7 +580,7 @@ func TestIgStatus_ComparesWithoutFetchingBundle(t *testing.T) {
 		t.Errorf("serverVer=%q localDigest=%q", serverVer, localDigest)
 	}
 
-	igcatalog.GetCatalog = func(_, _, name string) (*igcatalog.Catalog, error) {
+	igcatalog.GetCatalog = func(_ string, _ map[string]string, name string) (*igcatalog.Catalog, error) {
 		return &igcatalog.Catalog{Name: name, Version: "sha256:local"}, nil
 	}
 	state, _, _, err = statusOne(testActive(), "payments")
@@ -618,7 +618,7 @@ func TestIgPublish_GzipsGraphAndReadsMeta(t *testing.T) {
 	var gotGz []byte
 	var gotGit, gotSha string
 	orig := igcatalog.PublishMember
-	igcatalog.PublishMember = func(_, _, cat, mem string, gz []byte, git, sha string) error {
+	igcatalog.PublishMember = func(_ string, _ map[string]string, cat, mem string, gz []byte, git, sha string) error {
 		if cat != "payments" || mem != "api" {
 			t.Errorf("cat=%q mem=%q", cat, mem)
 		}
@@ -655,7 +655,7 @@ func TestIgClaims_OnePerLine(t *testing.T) {
 	igClaimsGit = "https://github.com/acme/api.git"
 
 	orig := igcatalog.Claims
-	igcatalog.Claims = func(_, _, git string) ([]string, error) {
+	igcatalog.Claims = func(_ string, _ map[string]string, git string) ([]string, error) {
 		if git != "https://github.com/acme/api.git" {
 			t.Errorf("git = %q", git)
 		}
@@ -692,7 +692,7 @@ func TestIgManifestPush_StampsGitSHA(t *testing.T) {
 
 	var got igcatalog.Manifest
 	orig := igcatalog.ManifestPush
-	igcatalog.ManifestPush = func(_, _, cat string, m igcatalog.Manifest) error {
+	igcatalog.ManifestPush = func(_ string, _ map[string]string, cat string, m igcatalog.Manifest) error {
 		if cat != "payments" {
 			t.Errorf("cat = %q", cat)
 		}
@@ -731,7 +731,7 @@ func TestIgManifestPull_WritesServedBytesVerbatim(t *testing.T) {
 	igManifestOut = outFile
 
 	orig := igcatalog.ManifestPull
-	igcatalog.ManifestPull = func(_, _, cat string) (*igcatalog.Manifest, error) {
+	igcatalog.ManifestPull = func(_ string, _ map[string]string, cat string) (*igcatalog.Manifest, error) {
 		if cat != "payments" {
 			t.Errorf("cat = %q", cat)
 		}

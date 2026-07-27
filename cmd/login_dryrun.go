@@ -33,17 +33,18 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		active, _ = credentials.ResolveActiveGlobal()
 	}
 
-	probeToken, tokenSource := "", "none"
+	var probeAuth map[string]string
+	tokenSource := "none"
 	switch {
 	case loginToken != "":
-		probeToken, tokenSource = loginToken, "supplied"
+		probeAuth, tokenSource = credentials.Profile{Token: loginToken}.Auth(), "supplied"
 	case exists && prof.Token != "" && prof.URL == baseURL:
-		probeToken, tokenSource = prof.Token, "stored"
+		probeAuth, tokenSource = prof.Auth(), "stored"
 	}
 
 	reachable := true
 	tokenStatus, action := tokenSource, "browser"
-	_, err := fetchAuthMe(baseURL, probeToken)
+	_, err := fetchAuthMe(baseURL, probeAuth)
 	switch {
 	case err == nil:
 		switch tokenSource {

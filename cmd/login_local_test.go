@@ -27,7 +27,7 @@ func TestLogin_Local_PinsProjectAndLeavesGlobalAlone(t *testing.T) {
 	}
 
 	// Reuse path: stored token validates without a browser.
-	stubAuthMe(t, func(baseURL, token string) (*authMeResponse, error) {
+	stubAuthMe(t, func(baseURL string, auth map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x", canonicalBaseURL: baseURL}, nil
 	})
 	stubPostAuth(t) // record-only; we're testing pointer/scoping, not install
@@ -65,7 +65,7 @@ func TestLogin_Local_OutsideHome_Errors(t *testing.T) {
 	resetLoginFlags(t)
 
 	seedProfile(t, "aurva", "https://aurva.test", "tok")
-	stubAuthMe(t, func(baseURL, token string) (*authMeResponse, error) {
+	stubAuthMe(t, func(baseURL string, auth map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x", canonicalBaseURL: baseURL}, nil
 	})
 	stubPostAuth(t)

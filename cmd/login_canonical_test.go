@@ -41,7 +41,7 @@ func canonicalPair(t *testing.T) (stale, final *httptest.Server) {
 func TestFetchAuthMe_ReportsCanonicalHostAfterRedirect(t *testing.T) {
 	stale, final := canonicalPair(t)
 
-	me, err := fetchAuthMe(stale.URL, "sk_test_T")
+	me, err := fetchAuthMe(stale.URL, bearer("sk_test_T"))
 	if err != nil {
 		t.Fatalf("fetchAuthMe: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestFetchAuthMe_ReportsCanonicalHostAfterRedirect(t *testing.T) {
 func TestFetchAuthMe_NoRedirectKeepsBaseURL(t *testing.T) {
 	_, final := canonicalPair(t)
 
-	me, err := fetchAuthMe(final.URL, "sk_test_T")
+	me, err := fetchAuthMe(final.URL, bearer("sk_test_T"))
 	if err != nil {
 		t.Fatalf("fetchAuthMe: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestFetchAuthMe_ClassifiesStatus(t *testing.T) {
 			}))
 			t.Cleanup(srv.Close)
 
-			_, err := fetchAuthMe(srv.URL, "sk_test_T")
+			_, err := fetchAuthMe(srv.URL, bearer("sk_test_T"))
 			if err == nil {
 				t.Fatalf("fetchAuthMe(HTTP %d) returned nil error", tt.status)
 			}

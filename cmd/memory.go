@@ -155,7 +155,7 @@ var memoryRecallCmd = &cobra.Command{
 		active := activeOrAuthExit(out)
 
 		query := strings.Join(args, " ")
-		results, err := memory.Recall(active.Profile.URL, active.Profile.AuthHeader(), memory.RecallRequest{
+		results, err := memory.Recall(active.Profile.URL, active.Profile.Auth(), memory.RecallRequest{
 			Query: query,
 			Limit: memoryRecallLimit,
 		})
@@ -196,7 +196,7 @@ var memoryListCmd = &cobra.Command{
 			params.Tags = splitCSV(memoryListTagsCSV)
 		}
 
-		results, err := memory.List(active.Profile.URL, active.Profile.AuthHeader(), params)
+		results, err := memory.List(active.Profile.URL, active.Profile.Auth(), params)
 		if err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}
@@ -267,7 +267,7 @@ var memoryAddCmd = &cobra.Command{
 			req.Tags = splitCSV(memoryAddTagsCSV)
 		}
 
-		m, err := memory.Create(active.Profile.URL, active.Profile.AuthHeader(), req)
+		m, err := memory.Create(active.Profile.URL, active.Profile.Auth(), req)
 		if err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}

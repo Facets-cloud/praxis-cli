@@ -7,6 +7,11 @@ import (
 	"testing"
 )
 
+// bearer builds the Auth() header map a Bearer-mode profile produces.
+func bearer(tok string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + tok}
+}
+
 // assertReq pins the request's method, path, and Bearer token. Shared by
 // stubServer and the query-asserting tests below so none of them lose the
 // method/path/auth checks.
@@ -20,6 +25,25 @@ func assertReq(t *testing.T, r *http.Request, wantMethod, wantPath, wantBearer s
 	}
 	if got := r.Header.Get("Authorization"); got != "Bearer "+wantBearer {
 		t.Errorf("auth header = %q; want %q", got, "Bearer "+wantBearer)
+	}
+}
+
+// TestFacetsAuthHeaders pins that a facets-mode auth map sends BOTH the
+// Bearer token and the X-Facets-Username identity header.
+func TestFacetsAuthHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer pat" {
+			t.Errorf("Authorization = %q; want %q", got, "Bearer pat")
+		}
+		if got := r.Header.Get("X-Facets-Username"); got != "u@corp" {
+			t.Errorf("X-Facets-Username = %q; want %q", got, "u@corp")
+		}
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	t.Cleanup(srv.Close)
+	auth := map[string]string{"Authorization": "Bearer pat", "X-Facets-Username": "u@corp"}
+	if _, err := ListSchedules(srv.URL, auth, "agt", ""); err != nil {
+		t.Fatalf("ListSchedules: %v", err)
 	}
 }
 
@@ -66,7 +90,7 @@ func TestListSchedules_HappyPath(t *testing.T) {
 		{"id":"sch2","agent_id":"agt","name":"cost-audit","display_name":"Cost Audit","cron_expression":"0 0 * * *","timezone":"UTC","enabled":false,"objective":"audit","status":"paused","consecutive_errors":2,"created_by_email":"u@x","created_at":"t","updated_at":"t","open_findings_count":0,"learnings_count":0,"tags":[]}
 	]`
 	srv := stubServer(t, http.MethodGet, "/ai-api/custom-agents/agt/schedules", 200, body, "", "tok")
-	got, err := ListSchedules(srv.URL, "Bearer tok", "agt", "")
+	got, err := ListSchedules(srv.URL, bearer("tok"), "agt", "")
 	if err != nil {
 		t.Fatalf("ListSchedules: %v", err)
 	}
@@ -87,7 +111,7 @@ func TestListSchedules_TagFilterEncoded(t *testing.T) {
 				t.Errorf("tag = %q; want prod", r.URL.Query().Get("tag"))
 			}
 		})
-	if _, err := ListSchedules(srv.URL, "Bearer tok", "agt", "prod"); err != nil {
+	if _, err := ListSchedules(srv.URL, bearer("tok"), "agt", "prod"); err != nil {
 		t.Fatalf("ListSchedules: %v", err)
 	}
 	if !hit {
@@ -96,7 +120,7 @@ func TestListSchedules_TagFilterEncoded(t *testing.T) {
 }
 
 func TestListSchedules_RequiresAgentID(t *testing.T) {
-	_, err := ListSchedules("http://no-such-host.invalid", "tok", "", "")
+	_, err := ListSchedules("http://no-such-host.invalid", bearer("tok"), "", "")
 	if err == nil || !strings.Contains(err.Error(), "agentID is required") {
 		t.Fatalf("err = %v; want agentID required", err)
 	}
@@ -115,7 +139,7 @@ func TestListRuns_HappyPathWithScheduleAndLimit(t *testing.T) {
 				t.Errorf("limit = %q; want 5", r.URL.Query().Get("limit"))
 			}
 		})
-	got, err := ListRuns(srv.URL, "Bearer tok", "agt", "sch1", 5)
+	got, err := ListRuns(srv.URL, bearer("tok"), "agt", "sch1", 5)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -129,7 +153,7 @@ func TestListRuns_HappyPathWithScheduleAndLimit(t *testing.T) {
 func TestGetRun_CarriesReportArtifactID(t *testing.T) {
 	const body = `{"id":"run9","agent_id":"agt","schedule_id":"sch1","organization_id":"o","status":"completed","started_at":"t","report_artifact_id":"art9","findings":[{"title":"disk full","severity":"high","description":"d","finding_key":"k1","recurrence_count":2,"status":"open"}],"actions":[]}`
 	srv := stubServer(t, http.MethodGet, "/ai-api/custom-agents/agt/runs/run9", 200, body, "", "tok")
-	got, err := GetRun(srv.URL, "Bearer tok", "agt", "run9")
+	got, err := GetRun(srv.URL, bearer("tok"), "agt", "run9")
 	if err != nil {
 		t.Fatalf("GetRun: %v", err)
 	}
@@ -154,7 +178,7 @@ func TestListFindings_UnwrapsItemsEnvelope(t *testing.T) {
 				t.Errorf("status = %q; want open", r.URL.Query().Get("status"))
 			}
 		})
-	got, err := ListFindings(srv.URL, "Bearer tok", "agt", "sch1", "open", 0)
+	got, err := ListFindings(srv.URL, bearer("tok"), "agt", "sch1", "open", 0)
 	if err != nil {
 		t.Fatalf("ListFindings: %v", err)
 	}
@@ -171,7 +195,7 @@ func TestListFindings_UnwrapsItemsEnvelope(t *testing.T) {
 func TestFetchArtifactContent_ReturnsBodyAndMime(t *testing.T) {
 	const report = "# Nightly Report\n\nAll clear."
 	srv := stubServer(t, http.MethodGet, "/ai-api/artifacts/art9/content", 200, report, "text/markdown; charset=utf-8", "tok")
-	body, mime, err := FetchArtifactContent(srv.URL, "Bearer tok", "art9")
+	body, mime, err := FetchArtifactContent(srv.URL, bearer("tok"), "art9")
 	if err != nil {
 		t.Fatalf("FetchArtifactContent: %v", err)
 	}
@@ -185,14 +209,14 @@ func TestFetchArtifactContent_ReturnsBodyAndMime(t *testing.T) {
 
 func TestFetchArtifactContent_404SurfacesError(t *testing.T) {
 	srv := stubServer(t, http.MethodGet, "/ai-api/artifacts/gone/content", 404, "not found", "", "tok")
-	_, _, err := FetchArtifactContent(srv.URL, "Bearer tok", "gone")
+	_, _, err := FetchArtifactContent(srv.URL, bearer("tok"), "gone")
 	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("err = %v; want HTTP 404", err)
 	}
 }
 
 func TestFetchArtifactContent_RequiresArtifactID(t *testing.T) {
-	_, _, err := FetchArtifactContent("http://x.test", "tok", "")
+	_, _, err := FetchArtifactContent("http://x.test", bearer("tok"), "")
 	if err == nil || !strings.Contains(err.Error(), "artifactID is required") {
 		t.Fatalf("err = %v; want artifactID required", err)
 	}
@@ -201,10 +225,10 @@ func TestFetchArtifactContent_RequiresArtifactID(t *testing.T) {
 // --- transport edge: token/baseURL required ----------------------------
 
 func TestDoJSON_RequiresBaseURLAndToken(t *testing.T) {
-	if _, err := ListRuns("", "tok", "agt", "", 0); err == nil {
+	if _, err := ListRuns("", bearer("tok"), "agt", "", 0); err == nil {
 		t.Error("want error for empty baseURL")
 	}
-	if _, err := ListRuns("http://x.test", "", "agt", "", 0); err == nil {
+	if _, err := ListRuns("http://x.test", nil, "agt", "", 0); err == nil {
 		t.Error("want error for empty token")
 	}
 }

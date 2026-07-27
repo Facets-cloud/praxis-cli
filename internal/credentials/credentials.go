@@ -31,7 +31,6 @@
 package credentials
 
 import (
-	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,30 +75,32 @@ type Profile struct {
 	// raptor at the matching control plane via FACETS_PROFILE.
 	RaptorProfile string
 	// AuthMode selects how Token is presented on outbound requests.
-	// "basic" → HTTP Basic (control-plane PAT, facets mode); anything
-	// else (including "") → Bearer (Praxis API key). Persisted as
-	// auth_mode in the INI, omitted when empty.
+	// "basic" → facets mode: control-plane PAT sent as Bearer plus an
+	// X-Facets-Username identity header; anything else (including "") →
+	// plain Bearer (Praxis API key). Persisted as auth_mode in the INI,
+	// omitted when empty. (The name is historical — the wire shape is
+	// Bearer, never HTTP Basic.)
 	AuthMode string
 }
 
-// AuthModeBasic is the AuthMode value for control-plane PAT (facets) profiles
-// sent as HTTP Basic. Shared so the writer (login) and reader (AuthHeader)
-// can't drift on the spelling.
+// AuthModeBasic is the AuthMode value for control-plane PAT (facets) profiles.
+// Shared so the writer (login) and reader (Auth) can't drift on the spelling.
 const AuthModeBasic = "basic"
 
-// AuthHeader returns the Authorization header value for this profile, or ""
-// when there is no token. Facets-mode profiles (AuthMode==AuthModeBasic) send
-// the control-plane PAT as HTTP Basic (username:token); everyone else sends
-// the Praxis API key as Bearer. This is the single place an Authorization
-// header value is built.
-func (p Profile) AuthHeader() string {
+// Auth returns the headers that authenticate a request for this profile:
+// always Authorization (Bearer <token>), plus X-Facets-Username for facets
+// (AuthModeBasic) profiles — a control-plane PAT the server validates against
+// that username. Returns nil when there is no token. Sent as Bearer (never
+// HTTP Basic, which browsers cache/replay per origin).
+func (p Profile) Auth() map[string]string {
 	if p.Token == "" {
-		return ""
+		return nil
 	}
+	h := map[string]string{"Authorization": "Bearer " + p.Token}
 	if p.AuthMode == AuthModeBasic {
-		return "Basic " + base64.StdEncoding.EncodeToString([]byte(p.Username+":"+p.Token))
+		h["X-Facets-Username"] = p.Username
 	}
-	return "Bearer " + p.Token
+	return h
 }
 
 // Source describes which level produced the active-profile name. Surfaced

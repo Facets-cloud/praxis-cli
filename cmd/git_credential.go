@@ -41,16 +41,16 @@ are no-ops because the token is ephemeral — nothing is persisted on the laptop
 	},
 }
 
-// resolveGateway returns the active profile's gateway URL + token.
-func resolveGateway() (string, string, error) {
+// resolveGateway returns the active profile's gateway URL + auth headers.
+func resolveGateway() (string, map[string]string, error) {
 	active, err := credentials.ResolveActive("")
 	if err != nil {
-		return "", "", err
+		return "", nil, err
 	}
 	if !active.Loaded || active.Profile.Token == "" {
-		return "", "", fmt.Errorf("no credentials for profile %q — run `praxis login`", active.Name)
+		return "", nil, fmt.Errorf("no credentials for profile %q — run `praxis login`", active.Name)
 	}
-	return active.Profile.URL, active.Profile.Token, nil
+	return active.Profile.URL, active.Profile.Auth(), nil
 }
 
 // isGitHubHost reports whether a brokered GitHub token may be handed to host.
@@ -74,7 +74,7 @@ func isGitHubHost(host string) bool {
 }
 
 // runGitCredential handles one credential-helper invocation.
-func runGitCredential(out io.Writer, in io.Reader, op string, gw func() (string, string, error)) error {
+func runGitCredential(out io.Writer, in io.Reader, op string, gw func() (string, map[string]string, error)) error {
 	switch op {
 	case "get":
 		// handled below
@@ -99,11 +99,11 @@ func runGitCredential(out io.Writer, in io.Reader, op string, gw func() (string,
 		"path": attrs["path"],
 	})
 
-	baseURL, token, err := gw()
+	baseURL, auth, err := gw()
 	if err != nil {
 		return err
 	}
-	raw, status, err := callMCP(baseURL, token, "vcs_cli", "mint_repo_credential", body, 30*time.Second)
+	raw, status, err := callMCP(baseURL, auth, "vcs_cli", "mint_repo_credential", body, 30*time.Second)
 	if err != nil {
 		return fmt.Errorf("gateway call failed: %w", err)
 	}

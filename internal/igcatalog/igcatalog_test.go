@@ -10,6 +10,11 @@ import (
 	"testing"
 )
 
+// bearer builds the Auth() header map a Bearer-mode profile produces.
+func bearer(tok string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + tok}
+}
+
 func assertReq(t *testing.T, r *http.Request, wantMethod, wantPath, wantBearer string) {
 	t.Helper()
 	if r.Method != wantMethod {
@@ -20,6 +25,27 @@ func assertReq(t *testing.T, r *http.Request, wantMethod, wantPath, wantBearer s
 	}
 	if got := r.Header.Get("Authorization"); got != "Bearer "+wantBearer {
 		t.Errorf("auth header = %q; want %q", got, "Bearer "+wantBearer)
+	}
+}
+
+// TestFacetsAuthHeaders pins that a facets-mode auth map sends BOTH the
+// Bearer token and the X-Facets-Username identity header — without which
+// the agent server would treat the control-plane PAT as a Praxis API key
+// and 401.
+func TestFacetsAuthHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer pat" {
+			t.Errorf("Authorization = %q; want %q", got, "Bearer pat")
+		}
+		if got := r.Header.Get("X-Facets-Username"); got != "u@corp" {
+			t.Errorf("X-Facets-Username = %q; want %q", got, "u@corp")
+		}
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+	auth := map[string]string{"Authorization": "Bearer pat", "X-Facets-Username": "u@corp"}
+	if _, err := ListCatalogs(srv.URL, auth); err != nil {
+		t.Fatalf("ListCatalogs: %v", err)
 	}
 }
 
@@ -36,7 +62,7 @@ func TestListCatalogs_HappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := ListCatalogs(srv.URL, "tok")
+	got, err := ListCatalogs(srv.URL, bearer("tok"))
 	if err != nil {
 		t.Fatalf("ListCatalogs: %v", err)
 	}
@@ -82,7 +108,7 @@ func TestListCatalogs_DecodesMemberObjects(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := ListCatalogs(srv.URL, "tok")
+	got, err := ListCatalogs(srv.URL, bearer("tok"))
 	if err != nil {
 		t.Fatalf("ListCatalogs: %v", err)
 	}
@@ -120,7 +146,7 @@ func TestListCatalogs_InfraMemberHasNoRepo(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := ListCatalogs(srv.URL, "tok")
+	got, err := ListCatalogs(srv.URL, bearer("tok"))
 	if err != nil {
 		t.Fatalf("ListCatalogs: %v", err)
 	}
@@ -142,7 +168,7 @@ func TestGetCatalog_404SurfacesError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := GetCatalog(srv.URL, "tok", "ghost")
+	_, err := GetCatalog(srv.URL, bearer("tok"), "ghost")
 	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("err = %v; want HTTP 404", err)
 	}
@@ -170,7 +196,7 @@ func TestClaims_EncodesGitAndReturnsNames(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := Claims(srv.URL, "tok", git)
+	got, err := Claims(srv.URL, bearer("tok"), git)
 	if err != nil {
 		t.Fatalf("Claims: %v", err)
 	}
@@ -190,7 +216,7 @@ func TestClaims_DecodesLiveEnvelope(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := Claims(srv.URL, "tok", git)
+	got, err := Claims(srv.URL, bearer("tok"), git)
 	if err != nil {
 		t.Fatalf("Claims: %v", err)
 	}
@@ -208,7 +234,7 @@ func TestClaims_UnclaimedRepoIsEmptyNotError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := Claims(srv.URL, "tok", "github.com/acme/orphan")
+	got, err := Claims(srv.URL, bearer("tok"), "github.com/acme/orphan")
 	if err != nil {
 		t.Fatalf("Claims: %v", err)
 	}
@@ -294,7 +320,7 @@ func TestPublishMember_UploadsMultipartWithGitAndSha(t *testing.T) {
 
 	// First publish, then a repeat — the server accepts both (idempotent).
 	for i := 0; i < 2; i++ {
-		if err := PublishMember(srv.URL, "tok", "payments", "api", gz, "https://github.com/acme/api.git", "abc123"); err != nil {
+		if err := PublishMember(srv.URL, bearer("tok"), "payments", "api", gz, "https://github.com/acme/api.git", "abc123"); err != nil {
 			t.Fatalf("PublishMember #%d: %v", i, err)
 		}
 	}
@@ -333,7 +359,7 @@ func TestPublishMember_OmitsEmptyGitAndSha(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := PublishMember(srv.URL, "tok", "payments", "api", gz, "", ""); err != nil {
+	if err := PublishMember(srv.URL, bearer("tok"), "payments", "api", gz, "", ""); err != nil {
 		t.Fatalf("PublishMember: %v", err)
 	}
 }
@@ -349,7 +375,7 @@ func TestDownloadBundle_ReturnsBytesAndETag(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	body, etag, notModified, err := DownloadBundle(srv.URL, "tok", "payments", "")
+	body, etag, notModified, err := DownloadBundle(srv.URL, bearer("tok"), "payments", "")
 	if err != nil {
 		t.Fatalf("DownloadBundle: %v", err)
 	}
@@ -376,7 +402,7 @@ func TestDownloadBundle_SendsIfNoneMatchAnd304IsNoOp(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	body, etag, notModified, err := DownloadBundle(srv.URL, "tok", "payments", "sha256:current")
+	body, etag, notModified, err := DownloadBundle(srv.URL, bearer("tok"), "payments", "sha256:current")
 	if err != nil {
 		t.Fatalf("DownloadBundle: %v", err)
 	}
@@ -407,7 +433,7 @@ func TestDownloadBundle_StripsQuotedETag(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, etag, notModified, err := DownloadBundle(srv.URL, "tok", "payments", "")
+	_, etag, notModified, err := DownloadBundle(srv.URL, bearer("tok"), "payments", "")
 	if err != nil {
 		t.Fatalf("DownloadBundle: %v", err)
 	}
@@ -427,7 +453,7 @@ func TestDownloadBundle_StripsWeakValidatorPrefix(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, etag, _, err := DownloadBundle(srv.URL, "tok", "payments", "")
+	_, etag, _, err := DownloadBundle(srv.URL, bearer("tok"), "payments", "")
 	if err != nil {
 		t.Fatalf("DownloadBundle: %v", err)
 	}
@@ -443,7 +469,7 @@ func TestDownloadBundle_Strips304QuotedETag(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, etag, notModified, err := DownloadBundle(srv.URL, "tok", "payments", "v1.2.3")
+	_, etag, notModified, err := DownloadBundle(srv.URL, bearer("tok"), "payments", "v1.2.3")
 	if err != nil {
 		t.Fatalf("DownloadBundle: %v", err)
 	}
@@ -472,7 +498,7 @@ func TestDownloadBundle_SendsProperlyQuotedIfNoneMatch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, notModified, err := DownloadBundle(srv.URL, "tok", "payments", "v1.2.3")
+	_, _, notModified, err := DownloadBundle(srv.URL, bearer("tok"), "payments", "v1.2.3")
 	if err != nil {
 		t.Fatalf("DownloadBundle: %v", err)
 	}
@@ -514,7 +540,7 @@ func TestManifestPush_SendsOnlyContentAndGitSHA(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := ManifestPush(srv.URL, "tok", "payments", Manifest{
+	err := ManifestPush(srv.URL, bearer("tok"), "payments", Manifest{
 		Content: "manifest-body", PushedBy: "u@x.com", PushedAt: "2026-07-09T10:00:00Z", GitSHA: "cafe42",
 	})
 	if err != nil {
@@ -534,7 +560,7 @@ func TestManifestPush_OmitsEmptyGitSHA(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := ManifestPush(srv.URL, "tok", "payments", Manifest{Content: "body-only"}); err != nil {
+	if err := ManifestPush(srv.URL, bearer("tok"), "payments", Manifest{Content: "body-only"}); err != nil {
 		t.Fatalf("ManifestPush: %v", err)
 	}
 }
@@ -546,7 +572,7 @@ func TestManifestPull_ReturnsServedManifest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, err := ManifestPull(srv.URL, "tok", "payments")
+	m, err := ManifestPull(srv.URL, bearer("tok"), "payments")
 	if err != nil {
 		t.Fatalf("ManifestPull: %v", err)
 	}
@@ -563,7 +589,7 @@ func TestManifestPull_ToleratesNullGitSHA(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, err := ManifestPull(srv.URL, "tok", "payments")
+	m, err := ManifestPull(srv.URL, bearer("tok"), "payments")
 	if err != nil {
 		t.Fatalf("ManifestPull: %v", err)
 	}
@@ -575,13 +601,13 @@ func TestManifestPull_ToleratesNullGitSHA(t *testing.T) {
 // --- transport edge: token/baseURL required ----------------------------
 
 func TestRequiresBaseURLAndToken(t *testing.T) {
-	if _, err := ListCatalogs("", "tok"); err == nil {
+	if _, err := ListCatalogs("", bearer("tok")); err == nil {
 		t.Error("want error for empty baseURL")
 	}
-	if _, err := ListCatalogs("http://x.test", ""); err == nil {
+	if _, err := ListCatalogs("http://x.test", nil); err == nil {
 		t.Error("want error for empty token")
 	}
-	if _, _, _, err := DownloadBundle("", "tok", "c", ""); err == nil {
+	if _, _, _, err := DownloadBundle("", bearer("tok"), "c", ""); err == nil {
 		t.Error("want error for empty baseURL on DownloadBundle")
 	}
 }
