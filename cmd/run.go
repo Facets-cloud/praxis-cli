@@ -44,10 +44,10 @@ The prompt can be provided via --prompt, --prompt-file, or piped through stdin
 with --prompt -.
 
 Examples:
-  praxis run --experimental -prompt "fix the failing test"
-  praxis run --experimental -prompt - < input.txt
-  praxis run --experimental -prompt-file task.txt -model opus
-  praxis run --experimental -prompt "refactor" -result-json`,
+  praxis run --experimental --prompt "fix the failing test"
+  praxis run --experimental --prompt - < input.txt
+  praxis run --experimental --prompt-file task.txt --model opus
+  praxis run --experimental --prompt "refactor" --result-json`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {

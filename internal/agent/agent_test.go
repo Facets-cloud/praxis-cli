@@ -1,56 +1,44 @@
 package agent
 
 import (
-	"os"
+	"errors"
 	"testing"
 )
 
 func TestEnabledDefaultOff(t *testing.T) {
-	old := os.Getenv(experimentalEnvVar)
-	os.Unsetenv(experimentalEnvVar)
-	defer os.Setenv(experimentalEnvVar, old)
-
+	t.Setenv(experimentalEnvVar, "")
 	if Enabled() {
 		t.Fatal("Enabled() = true, want false when PRAXIS_EXPERIMENTAL is unset")
 	}
 }
 
 func TestEnabledEnvVar(t *testing.T) {
-	old := os.Getenv(experimentalEnvVar)
-	os.Setenv(experimentalEnvVar, "1")
-	defer os.Setenv(experimentalEnvVar, old)
-
+	t.Setenv(experimentalEnvVar, "1")
 	if !Enabled() {
 		t.Fatal("Enabled() = false, want true when PRAXIS_EXPERIMENTAL=1")
 	}
 }
 
 func TestEnabledEnvVarTrue(t *testing.T) {
-	old := os.Getenv(experimentalEnvVar)
-	os.Setenv(experimentalEnvVar, "true")
-	defer os.Setenv(experimentalEnvVar, old)
-
+	t.Setenv(experimentalEnvVar, "true")
 	if !Enabled() {
 		t.Fatal("Enabled() = false, want true when PRAXIS_EXPERIMENTAL=true")
 	}
 }
 
 func TestCheckEnabledReturnsErrorWhenOff(t *testing.T) {
-	old := os.Getenv(experimentalEnvVar)
-	os.Unsetenv(experimentalEnvVar)
-	defer os.Setenv(experimentalEnvVar, old)
-
+	t.Setenv(experimentalEnvVar, "")
 	err := CheckEnabled()
 	if err == nil {
 		t.Fatal("CheckEnabled() = nil, want error when experimental is off")
 	}
+	if !errors.Is(err, ErrExperimentalDisabled) {
+		t.Fatalf("CheckEnabled() err = %v, want ErrExperimentalDisabled", err)
+	}
 }
 
 func TestCheckEnabledReturnsNilWhenOn(t *testing.T) {
-	old := os.Getenv(experimentalEnvVar)
-	os.Setenv(experimentalEnvVar, "1")
-	defer os.Setenv(experimentalEnvVar, old)
-
+	t.Setenv(experimentalEnvVar, "1")
 	err := CheckEnabled()
 	if err != nil {
 		t.Fatalf("CheckEnabled() = %v, want nil when experimental is on", err)
@@ -96,38 +84,40 @@ func TestHeadlessArgsToNativeArgs(t *testing.T) {
 	}
 	args := ha.ToNativeArgs()
 
-	// Check key flags are present
-	hasFlag := func(flag string) bool {
-		for _, a := range args {
-			if a == flag {
-				return true
+	// Verify each flag AND its value (not just presence).
+	type kv struct{ flag, val string }
+	want := []kv{
+		{"-prompt", "hello"},
+		{"-model", "opus"},
+		{"-cwd", "."},
+		{"-max-turns", "5"},
+	}
+	for _, w := range want {
+		found := false
+		for i, a := range args {
+			if a == w.flag && i+1 < len(args) && args[i+1] == w.val {
+				found = true
+				break
 			}
 		}
-		return false
+		if !found {
+			t.Errorf("ToNativeArgs missing %s %s, got %v", w.flag, w.val, args)
+		}
 	}
-
-	if !hasFlag("-prompt") {
-		t.Errorf("ToNativeArgs missing -prompt, got %v", args)
+	// Boolean flags: verify -no-mcp is present (no value).
+	hasNoMCP := false
+	for _, a := range args {
+		if a == "-no-mcp" {
+			hasNoMCP = true
+		}
 	}
-	if !hasFlag("-model") {
-		t.Errorf("ToNativeArgs missing -model, got %v", args)
-	}
-	if !hasFlag("-cwd") {
-		t.Errorf("ToNativeArgs missing -cwd, got %v", args)
-	}
-	if !hasFlag("-no-mcp") {
+	if !hasNoMCP {
 		t.Errorf("ToNativeArgs missing -no-mcp, got %v", args)
-	}
-	if !hasFlag("-max-turns") {
-		t.Errorf("ToNativeArgs missing -max-turns, got %v", args)
 	}
 }
 
 func TestEnable(t *testing.T) {
-	old := os.Getenv(experimentalEnvVar)
-	os.Unsetenv(experimentalEnvVar)
-	defer os.Setenv(experimentalEnvVar, old)
-
+	t.Setenv(experimentalEnvVar, "")
 	Enable()
 	if !Enabled() {
 		t.Fatal("Enable() did not set PRAXIS_EXPERIMENTAL")
