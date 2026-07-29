@@ -13,10 +13,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
       - uses: actions/setup-go@v6
         with:
           go-version: "1.25"
           cache: true
+
+      # praxis-harness is a private repo in the same org. The default
+      # GITHUB_TOKEN can't read cross-repo, so CI_GITHUB_TOKEN (a PAT with
+      # read access to Facets-cloud repos) authenticates module fetches.
+      - name: Configure private module access
+        env:
+          CI_GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${CI_GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+          go env -w GOPRIVATE="github.com/Facets-cloud/*"
+          go env -w GONOSUMDB="github.com/Facets-cloud/*"
 
       - name: gofmt
         run: |
@@ -44,6 +56,15 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
+
+      - name: Configure private module access
+        env:
+          CI_GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${CI_GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+          go env -w GOPRIVATE="github.com/Facets-cloud/*"
+          go env -w GONOSUMDB="github.com/Facets-cloud/*"
+
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"

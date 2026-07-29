@@ -3,7 +3,7 @@ module github.com/Facets-cloud/praxis-cli
 go 1.25.0
 
 require (
-	github.com/Facets-cloud/praxis-harness v0.0.0-00010101000000-000000000000
+	github.com/Facets-cloud/praxis-harness v0.1.0
 	github.com/spf13/cobra v1.10.2
 )
 
@@ -86,5 +86,3 @@ require (
 	mvdan.cc/sh/v3 v3.13.1 // indirect
 	rsc.io/pdf v0.1.1 // indirect
 )
-
-replace github.com/Facets-cloud/praxis-harness => /Users/vishnukv/facets/codebases/praxis-harness
