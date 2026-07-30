@@ -13,6 +13,7 @@ import (
 
 var (
 	chatExperimental bool
+	chatAgents       bool
 	chatModel        string
 	chatThinking     string
 	chatPermission   string
@@ -44,7 +45,12 @@ and shares the Praxis profile directory (~/.praxis/agent/).
 Authentication: the agent uses LLM provider credentials stored in
 ~/.praxis/agent/auth.json, separate from your Praxis control-plane credentials
 in ~/.praxis/credentials. Run 'praxis chat' once and use the /login command
-inside the TUI to authenticate with an AI provider (Anthropic, OpenAI, etc.).`,
+inside the TUI to authenticate with an AI provider (Anthropic, OpenAI, etc.).
+
+Start views: 'praxis chat' opens a single session; 'praxis chat --agents' opens
+the session dashboard, which lists persisted sessions grouped by state and
+creates or resumes them from its composer. (Note 'praxis agents' is unrelated:
+it lists the agent files praxis installed into your AI hosts.)`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -60,6 +66,7 @@ inside the TUI to authenticate with an AI provider (Anthropic, OpenAI, etc.).`,
 		defer stop()
 
 		opts := agent.ChatOptions{
+			AgentsView:     chatAgents,
 			Model:          chatModel,
 			Thinking:       chatThinking,
 			PermissionMode: chatPermission,
@@ -84,6 +91,7 @@ inside the TUI to authenticate with an AI provider (Anthropic, OpenAI, etc.).`,
 
 func init() {
 	chatCmd.Flags().BoolVar(&chatExperimental, "experimental", false, "enable experimental agent features")
+	chatCmd.Flags().BoolVar(&chatAgents, "agents", false, "start on the session dashboard instead of a single session")
 	chatCmd.Flags().StringVarP(&chatModel, "model", "m", "", "model fuzzy-match (opus, gpt-5.2, glm-5.2)")
 	chatCmd.Flags().StringVar(&chatThinking, "thinking", "high", "reasoning effort: off|minimal|low|medium|high|xhigh|max|ultra")
 	chatCmd.Flags().StringVar(&chatPermission, "permission-mode", "auto", "permission mode: ask|auto|yolo")
@@ -100,6 +108,13 @@ func init() {
 	chatCmd.Flags().StringVar(&chatFallback, "fallback-models", "", "comma-separated fallback model IDs")
 	chatCmd.Flags().StringVar(&chatPrompt, "prompt", "", "initial prompt to send after startup")
 	chatCmd.Flags().IntVar(&chatMaxTurns, "max-turns", 0, "max turns per prompt (0 = default)")
+
+	// The dashboard owns session identity: it picks the row to open and clears the
+	// startup prompt and resume path (harness tui.loadDashboardApplication). Refuse
+	// the combinations it would silently drop rather than ignoring the user's input.
+	chatCmd.MarkFlagsMutuallyExclusive("agents", "prompt")
+	chatCmd.MarkFlagsMutuallyExclusive("agents", "resume")
+	chatCmd.MarkFlagsMutuallyExclusive("agents", "session-id")
 
 	rootCmd.AddCommand(chatCmd)
 }

@@ -42,6 +42,12 @@ func Enable() {
 
 // ChatOptions are the flags for the interactive TUI agent (praxis chat).
 type ChatOptions struct {
+	// AgentsView starts the TUI on its session dashboard instead of a single chat
+	// session — the same view the harness's own `prx agents` opens. It is a start
+	// view, not a separate mode: the dashboard opens rows in the same in-process
+	// client. Note `praxis agents` is a DIFFERENT, non-agent command in this CLI
+	// (it lists installed agent files), so the dashboard is exposed as a flag.
+	AgentsView     bool
 	Model          string
 	Thinking       string
 	PermissionMode string
@@ -60,7 +66,8 @@ type ChatOptions struct {
 	MaxTurns       int
 }
 
-// RunChat launches the interactive Bubble Tea TUI. It maps ChatOptions to the
+// RunChat launches the interactive Bubble Tea TUI, on a single chat session or on
+// the session dashboard (ChatOptions.AgentsView). It maps ChatOptions to the
 // harness's tui.Config (via tui.ParseFlags on a synthesized flag slice) and
 // calls tui.Run. Blocks until the user exits the TUI.
 func RunChat(ctx context.Context, opts ChatOptions) error {
@@ -84,6 +91,13 @@ func RunHeadless(ctx context.Context, args []string) int {
 // entries here.
 func chatOptsToArgs(opts ChatOptions) []string {
 	var args []string
+	// tui.ParseFlags selects the dashboard start view from a LEADING positional
+	// "agents", which it consumes before parsing flags. It must therefore be
+	// args[0]; anywhere else it is an unparsed trailing positional and the TUI
+	// silently opens a normal chat session instead.
+	if opts.AgentsView {
+		args = append(args, "agents")
+	}
 	if opts.Model != "" {
 		args = append(args, "-model", opts.Model)
 	}

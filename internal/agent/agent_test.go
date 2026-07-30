@@ -67,6 +67,28 @@ func TestChatOptsToArgs(t *testing.T) {
 	}
 }
 
+// The dashboard start view rides on a LEADING positional that tui.ParseFlags
+// consumes before parsing flags. If "agents" is not args[0] the harness treats it
+// as a trailing positional and silently opens a normal chat session, so the
+// position — not merely the presence — is the contract under test.
+func TestChatOptsToArgsPutsAgentsViewFirst(t *testing.T) {
+	args := chatOptsToArgs(ChatOptions{AgentsView: true, Model: "opus", Cwd: "/repo"})
+
+	want := []string{"agents", "-model", "opus", "-cwd", "/repo"}
+	if len(args) != len(want) {
+		t.Fatalf("chatOptsToArgs = %v, want %v", args, want)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("args[%d] = %q, want %q (full args: %v)", i, args[i], want[i], args)
+		}
+	}
+
+	if plain := chatOptsToArgs(ChatOptions{Model: "opus"}); len(plain) == 0 || plain[0] == "agents" {
+		t.Fatalf("chat without --agents must not request the dashboard: %v", plain)
+	}
+}
+
 func TestChatOptsToArgsEmpty(t *testing.T) {
 	args := chatOptsToArgs(ChatOptions{})
 	if len(args) != 0 {
