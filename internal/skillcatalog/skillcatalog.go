@@ -64,7 +64,18 @@ func (s Skill) IsMultiFile() bool {
 // PrefixedName is the on-disk skill folder name (e.g. praxis-incident-investigator).
 // Skills the CLI installs from the catalog always carry this prefix so they
 // can't collide with user-authored or third-party skills.
+//
+// A catalog name that already starts with the prefix is returned unchanged.
+// Some server-side skills are authored as "praxis-dag" / "praxis-dag-runner";
+// blindly concatenating produced "praxis-praxis-dag" on disk. Collapsing is
+// safe because the invariant the cleanup globs depend on is only that the
+// installed folder LIVES IN the praxis- namespace — which holds either way —
+// and nothing reverse-maps a folder name back to its catalog name by
+// stripping exactly one prefix.
 func (s Skill) PrefixedName() string {
+	if strings.HasPrefix(s.Name, PraxisPrefix) {
+		return s.Name
+	}
 	return PraxisPrefix + s.Name
 }
 

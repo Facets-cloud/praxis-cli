@@ -58,7 +58,15 @@ type Agent struct {
 }
 
 // PrefixedName is the on-disk file basename for this agent.
+//
+// A catalog name that already starts with the prefix is returned unchanged,
+// so a server-side "praxis-dag" installs as praxis-dag rather than
+// praxis-praxis-dag. The reserved-namespace invariant that the cleanup globs
+// depend on holds either way. Mirrors skillcatalog.Skill.PrefixedName.
 func (a Agent) PrefixedName() string {
+	if strings.HasPrefix(a.Name, PrefixAgent) {
+		return a.Name
+	}
 	return PrefixAgent + a.Name
 }
 

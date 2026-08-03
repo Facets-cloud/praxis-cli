@@ -253,14 +253,39 @@ func TestPrefixedName_AlwaysPrefixed(t *testing.T) {
 		in, want string
 	}{
 		{"k8s-ops", "praxis-k8s-ops"},
-		{"already-praxis-prefix-but-still-prefixed-once-more", "praxis-already-praxis-prefix-but-still-prefixed-once-more"},
-		// We do NOT collapse double-prefixes — keeps the rule "if it starts
-		// with praxis-, the CLI installed it" mechanical.
+
+		// Server-side catalog names that ALREADY carry the praxis- prefix are
+		// installed as-is rather than double-prefixed. The namespace invariant
+		// the cleanup globs rely on — "an on-disk skill dir starting with
+		// praxis- was installed by this CLI" — is satisfied either way, so
+		// re-prefixing bought nothing and produced praxis-praxis-dag /
+		// praxis-praxis-dag-runner on real installs.
+		{"praxis-dag", "praxis-dag"},
+		{"praxis-dag-runner", "praxis-dag-runner"},
+
+		// Only an exact prefix match collapses. A name that merely *contains*
+		// the token, or starts with a lookalike, is still prefixed.
+		{"my-praxis-dag", "praxis-my-praxis-dag"},
+		{"praxisdag", "praxis-praxisdag"},
+
+		// Degenerate: the bare prefix is not a usable name; leave it alone
+		// rather than emitting "praxis-praxis-".
+		{"praxis-", "praxis-"},
 	}
 	for _, tc := range cases {
 		s := Skill{Name: tc.in}
 		if got := s.PrefixedName(); got != tc.want {
 			t.Errorf("PrefixedName(%q) = %q; want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// Whatever PrefixedName returns must keep the reserved-namespace invariant
+// that UninstallByPrefix / RemoveOrphanedByPrefix glob on.
+func TestPrefixedName_AlwaysInReservedNamespace(t *testing.T) {
+	for _, in := range []string{"k8s-ops", "praxis-dag", "my-praxis-dag", "praxisdag", "praxis-"} {
+		if got := (Skill{Name: in}).PrefixedName(); !strings.HasPrefix(got, PraxisPrefix) {
+			t.Errorf("PrefixedName(%q) = %q; must stay inside the %q namespace", in, got, PraxisPrefix)
 		}
 	}
 }
