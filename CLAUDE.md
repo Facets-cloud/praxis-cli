@@ -12,6 +12,22 @@ loop locally. Skills are sourced (fetched + nomenclature-translated) into
 the user's AI host; MCP tools execute server-side under org-managed
 credentials. See [README.md](README.md) for the user-facing story.
 
+## Design principle — single-profile users first
+
+The typical praxis user has ONE profile (a customer on one control plane);
+everything must resolve silently to "default" for them. Multi-profile users
+(Facets engineers, support) are power users: their flows must work, but they
+are strictly secondary and must never regress the single-profile flow.
+Concretely:
+
+- New flags and subcommands are opt-in; the default flow never grows
+  required steps, prompts, or warnings a single-profile user would see.
+- Power-user affordances (profile pins, raptor cross-checks, per-directory
+  profiles) live behind flags or status fields that stay inert when only
+  one profile exists.
+- When a trade-off pits multi-profile ergonomics against single-profile
+  cleanliness, single-profile wins.
+
 ## Testing — non-negotiable
 
 **Unit test coverage is required, not optional.**

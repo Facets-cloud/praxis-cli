@@ -515,3 +515,83 @@ func TestRaptorProfile_RoundTripAndValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestRename(t *testing.T) {
+	seed := func(t *testing.T) {
+		t.Helper()
+		t.Setenv("HOME", t.TempDir())
+		if err := Put("old", Profile{URL: "https://old.test", Username: "u@x", Token: "tok", RaptorProfile: "rp"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := Put("other", Profile{URL: "https://other.test", Token: "tok2"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("moves every field and reports pointer untouched", func(t *testing.T) {
+		seed(t)
+		updated, err := Rename("old", "new")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if updated {
+			t.Error("pointer reported updated but none was set")
+		}
+		store, _ := Load()
+		if _, ok := store["old"]; ok {
+			t.Error("old section still present")
+		}
+		got := store["new"]
+		want := Profile{URL: "https://old.test", Username: "u@x", Token: "tok", RaptorProfile: "rp"}
+		if got != want {
+			t.Errorf("renamed profile = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("global pointer follows the rename", func(t *testing.T) {
+		seed(t)
+		if err := SetActive("old"); err != nil {
+			t.Fatal(err)
+		}
+		updated, err := Rename("old", "new")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !updated {
+			t.Error("pointer should have been reported updated")
+		}
+		active, _ := ResolveActiveGlobal()
+		if active.Name != "new" || active.Source != SourceConfig {
+			t.Errorf("active = %s (%s), want new (config)", active.Name, active.Source)
+		}
+	})
+
+	t.Run("pointer naming another profile is left alone", func(t *testing.T) {
+		seed(t)
+		if err := SetActive("other"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Rename("old", "new"); err != nil {
+			t.Fatal(err)
+		}
+		active, _ := ResolveActiveGlobal()
+		if active.Name != "other" {
+			t.Errorf("active = %s, want other (untouched)", active.Name)
+		}
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		seed(t)
+		for name, pair := range map[string][2]string{
+			"missing old":      {"ghost", "new"},
+			"existing new":     {"old", "other"},
+			"same name":        {"old", "old"},
+			"invalid new name": {"old", "has space"},
+			"invalid old name": {"[x]", "new"},
+		} {
+			if _, err := Rename(pair[0], pair[1]); err == nil {
+				t.Errorf("%s: Rename(%q, %q) succeeded, want error", name, pair[0], pair[1])
+			}
+		}
+	})
+}
