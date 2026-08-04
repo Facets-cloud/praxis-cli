@@ -40,6 +40,13 @@ const ExecutionPreamble = "" +
 	"> `tool` is `raptor`; if that entry's `stale` is true, offer to run\n" +
 	"> `raptor upgrade` (ask first — never auto-run it).\n" +
 	">\n" +
+	"> Raptor's profile is NOT praxis's profile — check the `raptor` block in\n" +
+	"> `praxis status --json`. If `pinned` is true, prefix EVERY raptor command\n" +
+	"> with `FACETS_PROFILE=<profile>` (env vars don't persist across shell\n" +
+	"> calls). If `matches_praxis_url` is false unexpectedly (a praxis profile\n" +
+	"> on askpraxis.ai never matches — that's fine), raptor is aimed at a\n" +
+	"> DIFFERENT control plane than praxis: ask the user before any write.\n" +
+	">\n" +
 	"> **Discovering what's available** — to see every MCP and function the\n" +
 	"> gateway exposes, run `praxis mcp --json` (live fetch). A snapshot\n" +
 	"> from your last `praxis login` lives at `~/.praxis/mcp-tools.json` —\n" +

@@ -63,6 +63,11 @@ Returns a small JSON snapshot:
   - ` + "`skills_installed`" + `, ` + "`agents_installed`" + ` — installed names only
     (deduped); add ` + "`--full`" + ` for per-harness paths, or use
     ` + "`praxis agents --json`" + ` / ` + "`praxis list-skills --json`" + `
+  - ` + "`raptor`" + ` — the raptor CLI's auth state and whether it targets the
+    same control plane as this praxis profile (see "Raptor profile ≠
+    praxis profile" below)
+  - ` + "`tools`" + ` — praxis/raptor version freshness (array of per-tool
+    objects with a ` + "`stale`" + ` flag)
 
 Branch on ` + "`logged_in`" + `.
 
@@ -95,6 +100,27 @@ praxis login --profile bigcorp     # wipes acme skills, installs bigcorp
 ` + "```" + `
 
 This meta-skill survives every switch. Only the catalog skills cycle.
+
+## Per-directory profiles (local mode)
+
+For users working several orgs at once (one directory per customer), a
+profile can be pinned to a directory tree instead of switching global
+state:
+
+` + "```bash" + `
+cd ~/work/acme
+praxis login --profile acme --local     # pins acme to this tree
+praxis refresh-skills --project         # same scope, no re-auth
+` + "```" + `
+
+  - Writes a pointer at ` + "`<dir>/.praxis/config.json`" + `; discovery is
+    git-style, walking up from cwd (bounded to ` + "`$HOME`" + `).
+  - Skills/agents install project-scoped (` + "`<dir>/.claude/skills`" + `, …),
+    so several orgs' skills coexist on one machine without wiping each
+    other. Credentials always stay global in ` + "`~/.praxis/credentials`" + `.
+  - ` + "`praxis status`" + ` inside the tree shows
+    ` + "`profile_source: \"project\"`" + ` plus ` + "`project_root`" + `; outside
+    it, the global profile applies as usual.
 
 ## Output convention
 
@@ -172,6 +198,31 @@ Preflight — once per session, before the first raptor command:
 
 So when the user asks about projects / resources / environments /
 releases / cloud accounts, reach for ` + "`raptor`" + `, not ` + "`praxis mcp`" + `.
+
+## Raptor profile ≠ praxis profile
+
+praxis and raptor keep SEPARATE credential stores; switching a praxis
+profile never moves raptor:
+
+  - praxis: ` + "`~/.praxis/credentials`" + `, switched by ` + "`praxis login --profile X`" + `
+  - raptor: ` + "`~/.facets/credentials`" + `, selected ONLY by the
+    ` + "`FACETS_PROFILE`" + ` env var (no flag, no pointer file; unset = its
+    ` + "`[default]`" + ` section)
+
+` + "`praxis status --json`" + ` cross-checks them in the ` + "`raptor`" + ` block.
+Act on it:
+
+  - ` + "`pinned: true`" + ` — this praxis profile is paired to a raptor profile
+    (set via ` + "`praxis login --raptor-profile <name>`" + `). Prefix EVERY
+    raptor command: ` + "`FACETS_PROFILE=<profile> raptor …`" + `. Per-command
+    prefix, never ` + "`export`" + ` — each shell call starts fresh.
+  - ` + "`matches_praxis_url: false`" + ` — raptor targets a different control
+    plane than this praxis profile. Expected when praxis points at
+    askpraxis.ai (no raptor CP matches it). Otherwise say which two hosts
+    you see and ask the user which is intended BEFORE any raptor write;
+    read-only exploration may proceed with a note.
+  - ` + "`found: false`" + ` — raptor has no usable profile; ask the user to
+    run ` + "`raptor login`" + `.
 
 ## Discovering MCP tools
 

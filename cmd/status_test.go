@@ -12,6 +12,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
+	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 )
 
 func resetStatusFlags() {
@@ -292,5 +293,191 @@ func TestStatusCmd_FullFlagIncludesDetailedEntries(t *testing.T) {
 	}
 	if len(out.Skills) != 3 || out.Skills[0].Path == "" {
 		t.Errorf("--full skills_installed should be 3 detailed entries with paths, got %+v", out.Skills)
+	}
+}
+
+// ─── raptor auth-state block ─────────────────────────────────────────────
+
+// isolateRaptorEnv clears every env var the raptor resolver consults so the
+// developer's shell (or CI) can't leak a profile into the test.
+func isolateRaptorEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{"CONTROL_PLANE_URL", "FACETS_USERNAME", "FACETS_TOKEN", "FACETS_PROFILE"} {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
+}
+
+// writeRaptorCreds drops a raptor-style credentials file into the fake HOME.
+func writeRaptorCreds(t *testing.T, body string) {
+	t.Helper()
+	dir := filepath.Join(os.Getenv("HOME"), ".facets")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "credentials"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// stubStatusFreshness keeps the freshness engine off the network for status
+// tests that aren't about freshness.
+func stubStatusFreshness(t *testing.T) {
+	t.Helper()
+	withVersion(t, "dev")
+	origV := raptorLocalVersion
+	t.Cleanup(func() { raptorLocalVersion = origV })
+	raptorLocalVersion = func() (string, bool) { return "0.1.0", true }
+}
+
+func TestStatusCmd_RaptorBlock_MatchingDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	isolateRaptorEnv(t)
+	resetStatusFlags()
+	stubStatusFreshness(t)
+
+	if err := credentials.Put("default", credentials.Profile{URL: "https://root.test", Username: "u@x", Token: "tok"}); err != nil {
+		t.Fatal(err)
+	}
+	writeRaptorCreds(t, "[default]\ncontrol_plane_url = https://root.test\nusername = u@x\ntoken = pat\n")
+
+	var buf bytes.Buffer
+	statusCmd.SetOut(&buf)
+	if err := statusCmd.RunE(statusCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	var s map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &s); err != nil {
+		t.Fatalf("status not JSON: %v\n%s", err, buf.String())
+	}
+	rb, ok := s["raptor"].(map[string]any)
+	if !ok {
+		t.Fatalf("raptor block missing: %v", s["raptor"])
+	}
+	for k, want := range map[string]any{
+		"found":              true,
+		"pinned":             false,
+		"profile":            "default",
+		"source":             "default",
+		"control_plane_url":  "https://root.test",
+		"matches_praxis_url": true,
+	} {
+		if got := rb[k]; got != want {
+			t.Errorf("raptor[%q] = %v, want %v", k, got, want)
+		}
+	}
+}
+
+func TestStatusCmd_RaptorBlock_PinnedMismatch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	isolateRaptorEnv(t)
+	resetStatusFlags()
+	stubStatusFreshness(t)
+
+	if err := credentials.Put("default", credentials.Profile{
+		URL: "https://root.test", Username: "u@x", Token: "tok", RaptorProfile: "acme",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writeRaptorCreds(t, "[acme]\ncontrol_plane_url = https://acme.test\nusername = u@x\ntoken = pat\n")
+
+	var buf bytes.Buffer
+	statusCmd.SetOut(&buf)
+	if err := statusCmd.RunE(statusCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	var s map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &s); err != nil {
+		t.Fatalf("status not JSON: %v\n%s", err, buf.String())
+	}
+	rb, _ := s["raptor"].(map[string]any)
+	if rb == nil {
+		t.Fatalf("raptor block missing")
+	}
+	for k, want := range map[string]any{
+		"pinned":             true,
+		"profile":            "acme",
+		"source":             "pin",
+		"matches_praxis_url": false,
+	} {
+		if got := rb[k]; got != want {
+			t.Errorf("raptor[%q] = %v, want %v", k, got, want)
+		}
+	}
+}
+
+func TestStatusCmd_RaptorBlock_NothingResolved(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	isolateRaptorEnv(t)
+	resetStatusFlags()
+	stubStatusFreshness(t)
+
+	var buf bytes.Buffer
+	statusCmd.SetOut(&buf)
+	if err := statusCmd.RunE(statusCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	var s map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &s); err != nil {
+		t.Fatalf("status not JSON: %v\n%s", err, buf.String())
+	}
+	rb, _ := s["raptor"].(map[string]any)
+	if rb == nil {
+		t.Fatalf("raptor block missing")
+	}
+	if rb["found"] != false {
+		t.Errorf("raptor.found = %v, want false", rb["found"])
+	}
+	if _, has := rb["matches_praxis_url"]; has {
+		t.Error("matches_praxis_url must be omitted when no raptor profile resolved")
+	}
+}
+
+func TestRaptorStatusLine(t *testing.T) {
+	tests := []struct {
+		name string
+		st   raptorstate.State
+		url  string
+		want string
+	}{
+		{
+			name: "found and matching",
+			st:   raptorstate.State{Found: true, Profile: "default", Source: raptorstate.SourceDefault, ControlPlaneURL: "https://root.test"},
+			url:  "https://root.test",
+			want: "profile default (default) → https://root.test (matches praxis url: yes)",
+		},
+		{
+			name: "found and mismatched",
+			st:   raptorstate.State{Found: true, Profile: "acme", Source: raptorstate.SourceEnvProfile, ControlPlaneURL: "https://acme.test"},
+			url:  "https://root.test",
+			want: "profile acme (env-profile) → https://acme.test (matches praxis url: no)",
+		},
+		{
+			name: "pinned but missing",
+			st:   raptorstate.State{Pinned: true, Profile: "ghost", Source: raptorstate.SourcePin},
+			want: "pinned profile \"ghost\" not found in ~/.facets/credentials — run `raptor login`",
+		},
+		{
+			name: "env profile missing",
+			st:   raptorstate.State{Profile: "ghost", Source: raptorstate.SourceEnvProfile},
+			want: "profile \"ghost\" (env-profile) not found in ~/.facets/credentials",
+		},
+		{
+			name: "not installed",
+			st:   raptorstate.State{},
+			want: "not installed",
+		},
+		{
+			name: "installed, nothing resolved",
+			st:   raptorstate.State{Installed: true},
+			want: "no profile resolved — run `raptor login`",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := raptorStatusLine(tt.st, tt.url); got != tt.want {
+				t.Errorf("raptorStatusLine() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

@@ -59,6 +59,10 @@ internal/             pure logic, unit-tested
                        becomes ActiveRoot for the receipt/snapshot/skills.
   duties/             REST client for Agent Schedules (duties): runs,
                        findings, artifacts — mirrors internal/memory
+  raptorstate/        READ-ONLY mirror of raptor's profile resolution
+                       (~/.facets/credentials + FACETS_* env) so `status`
+                       can cross-check raptor's control plane against the
+                       praxis profile URL; never writes raptor's store
   selfupdate/         GitHub Releases fetch, checksum, atomic replace
 Makefile              build (with ldflags), install, test, lint, clean
 .goreleaser.yml       release config — raw binaries × 4 arches + brew tap

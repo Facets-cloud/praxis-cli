@@ -138,13 +138,16 @@ JSON envelope so your AI host can see what got installed.
 `completion` is shell-script output and has no JSON form.
 
 ```text
-praxis login [--profile X] [--url Y] [--token Z] [--local]
+praxis login [--profile X] [--url Y] [--token Z] [--local] [--raptor-profile R]
    The one-stop setup command. Idempotent. Re-run to refresh skills
    or switch profiles. The only command that's human-only — opens a
    browser (unless a stored token is still valid, or --token is given).
    --local pins this profile to the CURRENT directory tree (writes
    <cwd>/.praxis) and installs its skills project-scoped, instead of
    switching the global profile. See "Local mode" below.
+   --raptor-profile pairs this praxis profile with a raptor profile
+   (~/.facets/credentials section). See "Pairing with raptor
+   profiles" below.
 
 praxis logout [--all]
    Active profile: removes credentials, all org skills (praxis-*),
@@ -154,7 +157,10 @@ praxis logout [--all]
    skills.
 
 praxis status [--refresh] [--json]
-   Local-only snapshot of profile, auth, installed skills.
+   Local-only snapshot of profile, auth, installed skills. Includes a
+   `raptor` block reporting which control plane the raptor CLI would
+   hit (its profile resolution mirrored read-only) and whether that
+   host matches the active praxis profile's URL.
    --refresh adds a live /auth/me check (catches expired tokens).
 
 praxis mcp [<mcp> <fn>] [--json] [--arg k=v ...] [--body '<json>']
@@ -379,6 +385,33 @@ To wipe every profile and every host:
 ```bash
 praxis logout --all
 ```
+
+### Pairing with raptor profiles
+
+The `raptor` CLI keeps its **own** credential store
+(`~/.facets/credentials`) and selects its profile only via the
+`FACETS_PROFILE` env var — switching a praxis profile never moves
+raptor. For a single-profile user both default to the same control
+plane and nothing needs doing. With multiple profiles on each side the
+two can silently point at *different* control planes.
+
+praxis surfaces this instead of ignoring it:
+
+- `praxis status --json` includes a `raptor` block: raptor's resolved
+  profile, its `control_plane_url`, and `matches_praxis_url` (host
+  comparison against the active praxis profile). AI hosts are taught
+  (via the meta-skill) to check it and to ask before writing through a
+  mismatched raptor.
+- `praxis login --raptor-profile <name>` stores a durable pairing on
+  the praxis profile (INI key `raptor_profile`). Status then resolves
+  raptor via that pin (`"pinned": true`), and AI hosts prefix every
+  raptor command with `FACETS_PROFILE=<name>`. Validation is advisory:
+  a pairing to a missing or host-mismatched raptor profile logs a
+  warning but never fails login. Re-logins without the flag preserve
+  the pairing.
+
+praxis never writes `~/.facets/credentials` or uses raptor's tokens —
+the pairing is metadata on the praxis side only.
 
 ## Files
 

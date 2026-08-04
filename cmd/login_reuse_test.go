@@ -79,11 +79,11 @@ func stubOsExit(t *testing.T) *int {
 
 func resetLoginFlags(t *testing.T) {
 	t.Helper()
-	loginProfile, loginURL, loginToken = "", "", ""
+	loginProfile, loginURL, loginToken, loginRaptorProfile = "", "", "", ""
 	loginForce, loginLocal, loginJSON = false, false, false
 	loginTimeout = 90 * time.Second
 	t.Cleanup(func() {
-		loginProfile, loginURL, loginToken = "", "", ""
+		loginProfile, loginURL, loginToken, loginRaptorProfile = "", "", "", ""
 		loginForce, loginLocal, loginJSON = false, false, false
 		loginTimeout = 90 * time.Second
 	})

@@ -479,3 +479,39 @@ func TestSetActiveLocal_OutsideHome_Errors(t *testing.T) {
 		t.Errorf("error should explain the home-subtree requirement; got %q", err.Error())
 	}
 }
+
+func TestRaptorProfile_RoundTripAndValidation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Round-trip: raptor_profile persists through Save/Load.
+	if err := Put("acme", Profile{URL: "https://acme.test", Username: "u@x", Token: "tok", RaptorProfile: "acme-raptor"}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store["acme"].RaptorProfile; got != "acme-raptor" {
+		t.Errorf("RaptorProfile = %q, want %q", got, "acme-raptor")
+	}
+
+	// A profile without the key stays empty (backwards compatibility).
+	if err := Put("plain", Profile{URL: "https://plain.test", Username: "u@x", Token: "tok"}); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store["plain"].RaptorProfile; got != "" {
+		t.Errorf("plain profile RaptorProfile = %q, want empty", got)
+	}
+
+	// An INI-corrupting raptor profile value is rejected at the store
+	// boundary — the same charset rules as section names.
+	for _, bad := range []string{"has space", "a\nb", "[bracket]", "a=b"} {
+		if err := Put("acme", Profile{URL: "https://acme.test", Token: "tok", RaptorProfile: bad}); err == nil {
+			t.Errorf("Put with RaptorProfile %q succeeded, want validation error", bad)
+		}
+	}
+}
