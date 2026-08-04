@@ -271,6 +271,48 @@ func Put(name string, p Profile) error {
 	return Save(store)
 }
 
+// Rename moves a profile to a new section name, keeping every field
+// (URL, username, token, raptor_profile). If the GLOBAL active-profile
+// pointer named the old profile it is updated to follow; project-local
+// pointers can live in any directory tree and are NOT rewritten — a stale
+// one is inert by design (LocalModeActive requires the pointer to name an
+// existing profile, so it falls back to the global resolution).
+// Returns whether the global pointer was updated.
+func Rename(oldName, newName string) (pointerUpdated bool, err error) {
+	if err := validateProfileName(oldName); err != nil {
+		return false, err
+	}
+	if err := validateProfileName(newName); err != nil {
+		return false, err
+	}
+	if oldName == newName {
+		return false, fmt.Errorf("old and new profile names are both %q", oldName)
+	}
+	store, err := Load()
+	if err != nil {
+		return false, err
+	}
+	p, ok := store[oldName]
+	if !ok {
+		return false, fmt.Errorf("profile %q does not exist", oldName)
+	}
+	if _, exists := store[newName]; exists {
+		return false, fmt.Errorf("profile %q already exists", newName)
+	}
+	store[newName] = p
+	delete(store, oldName)
+	if err := Save(store); err != nil {
+		return false, err
+	}
+	if cfg, _ := loadConfig(); cfg.Profile == oldName {
+		if err := SetActive(newName); err != nil {
+			return false, fmt.Errorf("profile renamed, but updating the active-profile pointer failed: %w", err)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 // Delete removes one profile. No-op if it didn't exist.
 func Delete(name string) error {
 	if err := validateProfileName(name); err != nil {

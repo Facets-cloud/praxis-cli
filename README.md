@@ -148,6 +148,24 @@ praxis login [--profile X] [--url Y] [--token Z] [--local] [--raptor-profile R]
    --raptor-profile pairs this praxis profile with a raptor profile
    (~/.facets/credentials section). See "Pairing with raptor
    profiles" below.
+   --dry-run reports what login would do — resolved profile + URL,
+   server reachability, browser vs stored-token reuse, and what
+   happens to installed skills — then exits. No browser, no API key,
+   no credential or skill changes. Exit 0 = report complete; exit 5 =
+   server unreachable.
+
+praxis profiles [--refresh] [--json]
+   List every profile with URL, username, active marker, and login
+   state (never prints tokens). --refresh live-verifies each token.
+
+praxis profiles rename OLD NEW [--json]
+   Rename a credentials section in place, keeping URL/username/token/
+   raptor pairing. The global active-profile pointer follows if it
+   named OLD. No browser, no new API key, no skill changes.
+
+praxis profiles rm NAME [--json]
+   Delete a NON-active profile's credentials. Refuses the active
+   profile (use `praxis logout` — it also cleans up installed skills).
 
 praxis logout [--all]
    Active profile: removes credentials, all org skills (praxis-*),
@@ -368,16 +386,33 @@ Re-fetches your org's catalog and the MCP manifest snapshot. Idempotent.
 Run it whenever you suspect skill content has been updated server-side
 or you want to pick up new tools.
 
-### Removing a profile
-
-`praxis logout` removes the **active** profile's credentials, org
-skills, and manifest snapshot. To remove a non-active profile, switch
-to it first:
+### Renaming a profile
 
 ```bash
-praxis login --profile acme    # make acme active
-praxis logout                  # remove acme
-# default and bigcorp are untouched.
+praxis profiles rename test-x astuto-cp
+```
+
+Credentials-only: the section keeps its URL, username, token, and
+raptor pairing; the global active-profile pointer follows if it named
+the old profile. No browser round-trip, no second API key, no skill
+churn. (Directory trees pinned via `--local` reference profiles by
+name — re-pin those with `praxis login --profile <new> --local`;
+until then they harmlessly fall back to the global profile.)
+
+### Removing a profile
+
+For a **non-active** profile, delete just its credentials:
+
+```bash
+praxis profiles rm test-x      # credentials only; skills untouched
+```
+
+`praxis logout` removes the **active** profile's credentials, org
+skills, and manifest snapshot (it refuses nothing — it's the right
+tool for the active profile precisely because it cleans up skills):
+
+```bash
+praxis logout                  # remove the active profile fully
 ```
 
 To wipe every profile and every host:

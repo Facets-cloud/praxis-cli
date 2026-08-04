@@ -158,6 +158,15 @@ AI-callable (always pass --json):
     when the org has published new skills or after ` + "`brew upgrade praxis`" + `.
   - ` + "`praxis logout`" + ` — drop creds + org skills for active profile.
     ` + "`--all`" + ` wipes everything except this meta-skill.
+  - ` + "`praxis profiles`" + ` — list every profile with URL, username, active
+    marker, and login state (no tokens printed). ` + "`--refresh`" + ` live-verifies
+    each stored token.
+  - ` + "`praxis profiles rename OLD NEW`" + ` / ` + "`praxis profiles rm NAME`" + ` —
+    credentials-only profile management; no browser, no skill changes.
+    ` + "`rm`" + ` refuses the active profile (that's ` + "`praxis logout`" + `).
+  - ` + "`praxis login --dry-run`" + ` — SAFE probe: reports what login would do
+    (profile, URL reachability, browser vs token reuse, skill effect) and
+    changes nothing. Use before any profile switch you're unsure about.
   - ` + "`praxis update`" + ` — self-update binary. ` + "`--json`" + ` implies ` + "`--yes`" + `.
   - ` + "`praxis version`" + ` — build metadata.
 
@@ -166,6 +175,7 @@ Human-only (don't try to script these):
   - ` + "`praxis login`" + ` — opens the user's browser; you (the AI) RUN this on
     the user's behalf when status shows logged_out, but the user has to
     click "Create Key" once. Wait for exit 0 before retrying the task.
+    (` + "`--dry-run`" + ` is the exception — it's AI-safe, see above.)
 
 ## Facets control plane = the local raptor CLI
 

@@ -87,3 +87,20 @@ func TestPraxisMetaSkill_ExplainsLocalMode(t *testing.T) {
 		}
 	}
 }
+
+func TestPraxisMetaSkill_ProfileManagementSurface(t *testing.T) {
+	body, err := ContentFor("praxis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"praxis profiles",
+		"praxis profiles rename OLD NEW",
+		"praxis profiles rm NAME",
+		"praxis login --dry-run",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("praxis meta-skill missing profile-management surface %q", want)
+		}
+	}
+}

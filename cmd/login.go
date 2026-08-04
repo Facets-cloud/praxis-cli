@@ -44,6 +44,7 @@ var (
 	loginJSON          bool
 	loginTimeout       time.Duration
 	loginRaptorProfile string
+	loginDryRun        bool
 )
 
 // browserLoginFn and postAuthSetup are package-level seams so tests can
@@ -73,6 +74,8 @@ func init() {
 	// help table into `--raptor-profile praxis status`.
 	loginCmd.Flags().StringVar(&loginRaptorProfile, "raptor-profile", "",
 		"pair this praxis profile with a raptor profile (a ~/.facets/credentials section); 'praxis status' then reports raptor via that profile and AI hosts prefix raptor commands with FACETS_PROFILE=<name>")
+	loginCmd.Flags().BoolVar(&loginDryRun, "dry-run", false,
+		"report what login would do (profile, URL reachability, browser-or-reuse, skill effect) and exit — no browser, no API key, no credential or skill changes")
 	rootCmd.AddCommand(loginCmd)
 }
 
@@ -102,7 +105,12 @@ Multiple deployments? Use --profile to keep them separate:
 
 Re-running login (with the same profile or a different one) is the
 canonical way to refresh skills + manifest snapshot. There is no
-separate refresh command in v0.7.`,
+separate refresh command in v0.7.
+
+Not sure what a login invocation will do? Add --dry-run: it reports the
+resolved profile and URL, whether the server is reachable, whether the
+browser would open or a stored token be reused, and what would happen to
+installed skills — then exits without changing anything.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
@@ -118,6 +126,12 @@ separate refresh command in v0.7.`,
 				"pass --url <https://your-praxis-deployment> to create this profile",
 				exitcode.Usage)
 			return err
+		}
+
+		// --dry-run: report the plan and exit before ANY side effect —
+		// no browser, no key minted, no credential write, no skill churn.
+		if loginDryRun {
+			return runLoginDryRun(out, asJSON, profileName, baseURL, loginLocal)
 		}
 
 		// --token is the explicit non-browser path: verify the supplied
