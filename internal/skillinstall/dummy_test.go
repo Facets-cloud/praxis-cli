@@ -49,3 +49,29 @@ func TestPraxisMetaSkill_RaptorIsLocalNotGateway(t *testing.T) {
 		t.Error("meta-skill uses the wrong shape `raptor.stale`; tools is an array — find the raptor entry")
 	}
 }
+
+// Catalog skills are installed under the reserved `praxis-` namespace, but
+// their bodies cross-reference each other by the BARE name — e.g.
+// praxis-build-facets-module says "Have you completed the
+// /design-facets-module skill?" and praxis-design-facets-module ends with
+// "Proceed to /build-facets-module". Those slash-names never exist on disk,
+// so the handoff chain between the module-authoring skills dead-ends.
+//
+// Rather than rewriting every reference at render time, the meta-skill
+// teaches the resolution rule once: a bare /X inside a Praxis skill means
+// the installed praxis-X. Guard that the rule is actually stated.
+func TestPraxisMetaSkill_TeachesPrefixResolutionRule(t *testing.T) {
+	body, err := ContentFor("praxis")
+	if err != nil {
+		t.Fatalf("ContentFor(praxis): %v", err)
+	}
+	for _, want := range []string{
+		"reserved namespace",
+		"/praxis-<name>",
+		"without the prefix",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("meta-skill missing prefix-resolution guidance %q — bare /X cross-references in catalog skills will dead-end", want)
+		}
+	}
+}
