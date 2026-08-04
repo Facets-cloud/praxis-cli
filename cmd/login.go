@@ -68,8 +68,11 @@ func init() {
 		"pin this profile to the current directory tree (writes <cwd>/.praxis) and install its skills project-scoped, instead of switching the global profile")
 	loginCmd.Flags().BoolVar(&loginJSON, "json", false, "JSON output")
 	loginCmd.Flags().DurationVar(&loginTimeout, "timeout", 90*time.Second, "max time to wait for browser callback")
+	// No backticks in this usage string: pflag's UnquoteUsage treats a
+	// backticked phrase as the flag's value placeholder, which mangled the
+	// help table into `--raptor-profile praxis status`.
 	loginCmd.Flags().StringVar(&loginRaptorProfile, "raptor-profile", "",
-		"pair this praxis profile with a raptor profile (~/.facets/credentials section); `praxis status` then reports raptor via that profile and AI hosts prefix raptor commands with FACETS_PROFILE=<name>")
+		"pair this praxis profile with a raptor profile (a ~/.facets/credentials section); 'praxis status' then reports raptor via that profile and AI hosts prefix raptor commands with FACETS_PROFILE=<name>")
 	rootCmd.AddCommand(loginCmd)
 }
 

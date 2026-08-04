@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/spf13/pflag"
 )
 
 // seedRaptorCreds writes a raptor-style ~/.facets/credentials into the
@@ -118,5 +119,21 @@ func TestResolveRaptorPairing_NoFlagNoProfile(t *testing.T) {
 	resetLoginFlags(t)
 	if got := resolveRaptorPairing("default", "https://root.test"); got != "" {
 		t.Errorf("resolveRaptorPairing() with nothing stored = %q, want empty", got)
+	}
+}
+
+func TestLoginFlags_HelpRendersProperTypes(t *testing.T) {
+	// pflag treats a backticked phrase inside a usage string as the flag's
+	// value placeholder — a stray backtick renders nonsense like
+	// `--raptor-profile praxis status` in the help table (cf. issue #66's
+	// missing-flag confusion). Every string flag must present as `string`.
+	for _, name := range []string{"profile", "url", "token", "raptor-profile"} {
+		f := loginCmd.Flags().Lookup(name)
+		if f == nil {
+			t.Fatalf("flag --%s not registered", name)
+		}
+		if placeholder, _ := pflag.UnquoteUsage(f); placeholder != "string" {
+			t.Errorf("--%s help placeholder = %q, want %q (backtick in usage string?)", name, placeholder, "string")
+		}
 	}
 }
