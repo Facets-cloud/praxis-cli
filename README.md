@@ -389,7 +389,7 @@ or you want to pick up new tools.
 ### Renaming a profile
 
 ```bash
-praxis profiles rename test-x astuto-cp
+praxis profiles rename test-x acme-prod
 ```
 
 Credentials-only: the section keeps its URL, username, token, and
