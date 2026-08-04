@@ -96,6 +96,25 @@ praxis login --profile bigcorp     # wipes acme skills, installs bigcorp
 
 This meta-skill survives every switch. Only the catalog skills cycle.
 
+## Skill naming: ` + "`praxis-`" + ` is a reserved namespace
+
+Every skill this CLI installs lands under ` + "`praxis-<name>`" + `. That prefix is
+provenance, not part of the skill's identity — it marks "the Praxis CLI put
+this here" so login/logout can clean up its own files without touching
+user-authored skills.
+
+**Skills therefore refer to each other without the prefix.** When a Praxis
+skill body says ` + "`/design-facets-module`" + `, ` + "`/modules-repo-workflow`" + `, or
+` + "`/memory`" + `, it means the installed ` + "`/praxis-<name>`" + `. Resolve a bare
+` + "`/X`" + ` to ` + "`praxis-X`" + ` and invoke that. Do not report the bare name as a
+missing skill, and do not go looking for an unprefixed copy — there isn't
+one.
+
+This matters most for the module-authoring chain, which is a sequence of
+handoffs: design → build → test → publish. Each step names the next one
+bare. Run ` + "`praxis list-skills --json`" + ` if you need the exact installed
+names.
+
 ## Output convention
 
 Every AI-callable command supports ` + "`--json`" + ` and auto-emits JSON when

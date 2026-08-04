@@ -11,9 +11,31 @@ import (
 )
 
 func TestAgentPrefixedName(t *testing.T) {
-	a := Agent{Name: "foo", Kind: KindAgent}
-	if got := a.PrefixedName(); got != "praxis-foo" {
-		t.Errorf("PrefixedName() = %q, want praxis-foo", got)
+	cases := []struct {
+		in, want string
+	}{
+		{"foo", "praxis-foo"},
+
+		// An agent already authored as praxis-<n> server-side installs as-is
+		// rather than becoming praxis-praxis-<n>. Same rule as skillcatalog's
+		// PrefixedName — see the comment there.
+		{"praxis-dag", "praxis-dag"},
+
+		// Only an exact prefix match collapses.
+		{"my-praxis-dag", "praxis-my-praxis-dag"},
+		{"praxisdag", "praxis-praxisdag"},
+		{"praxis-", "praxis-"},
+	}
+	for _, tc := range cases {
+		a := Agent{Name: tc.in, Kind: KindAgent}
+		got := a.PrefixedName()
+		if got != tc.want {
+			t.Errorf("PrefixedName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		if !strings.HasPrefix(got, PrefixAgent) {
+			t.Errorf("PrefixedName(%q) = %q; must stay inside the %q namespace",
+				tc.in, got, PrefixAgent)
+		}
 	}
 }
 
