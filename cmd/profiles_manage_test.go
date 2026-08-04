@@ -26,22 +26,22 @@ func TestProfilesRename_HappyPath(t *testing.T) {
 	var buf bytes.Buffer
 	profilesRenameCmd.SetOut(&buf)
 	profilesRenameJSON = true
-	if err := profilesRenameCmd.RunE(profilesRenameCmd, []string{"test-x", "astuto-cp"}); err != nil {
+	if err := profilesRenameCmd.RunE(profilesRenameCmd, []string{"test-x", "acme-prod"}); err != nil {
 		t.Fatalf("rename err: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{`"ok": true`, `"renamed_to": "astuto-cp"`, `"active_pointer_updated": true`} {
+	for _, want := range []string{`"ok": true`, `"renamed_to": "acme-prod"`, `"active_pointer_updated": true`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rename output missing %q\nfull: %s", want, out)
 		}
 	}
 	store, _ := credentials.Load()
-	if _, ok := store["astuto-cp"]; !ok {
+	if _, ok := store["acme-prod"]; !ok {
 		t.Error("renamed profile missing from store")
 	}
 	active, _ := credentials.ResolveActiveGlobal()
-	if active.Name != "astuto-cp" {
-		t.Errorf("active = %s, want astuto-cp", active.Name)
+	if active.Name != "acme-prod" {
+		t.Errorf("active = %s, want acme-prod", active.Name)
 	}
 }
 
