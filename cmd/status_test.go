@@ -463,9 +463,11 @@ func TestRaptorStatusLine(t *testing.T) {
 			want: "profile \"ghost\" (env-profile) not found in ~/.facets/credentials",
 		},
 		{
+			// States the fact AND the next step — nothing else in the repo
+			// tells a user where to get raptor.
 			name: "not installed",
 			st:   raptorstate.State{},
-			want: "not installed",
+			want: "not installed — get it at " + raptorInstallURL,
 		},
 		{
 			name: "installed, nothing resolved",
@@ -479,5 +481,81 @@ func TestRaptorStatusLine(t *testing.T) {
 				t.Errorf("raptorStatusLine() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// A new user installs praxis, runs `praxis login`, and sees a clean result —
+// but raptor is the CLI that actually reaches the Facets control plane
+// (projects, resources, environments, releases). #68 made status say
+// "not installed", which is the right fact but not an actionable one: it names
+// no consequence and no next step. These tests pin the actionable form.
+func TestRaptorStatusLine_NotInstalledPointsAtTheInstall(t *testing.T) {
+	got := raptorStatusLine(raptorstate.State{}, "https://root.test")
+	if !strings.Contains(got, "not installed") {
+		t.Errorf("line must still state the fact; got %q", got)
+	}
+	if !strings.Contains(got, raptorInstallURL) {
+		t.Errorf("line must point at where to get raptor; got %q", got)
+	}
+}
+
+// setupNotice is the closing summary. Without it the `raptor: not installed`
+// line is followed by `logged in: yes`, so the output as a whole still reads
+// healthy and the user has no reason to look closer.
+func TestSetupNotice(t *testing.T) {
+	tests := []struct {
+		name      string
+		st        raptorstate.State
+		wantEmpty bool
+		must      []string
+	}{
+		{
+			name: "not installed — needs install AND login",
+			st:   raptorstate.State{},
+			must: []string{"setup incomplete", "not installed", raptorInstallURL, "raptor login"},
+		},
+		{
+			name: "installed but nothing resolved — needs login only",
+			st:   raptorstate.State{Installed: true},
+			must: []string{"setup incomplete", "raptor login"},
+		},
+		{
+			name: "installed, pinned profile missing — needs login",
+			st:   raptorstate.State{Installed: true, Pinned: true, Profile: "ghost", Source: raptorstate.SourcePin},
+			must: []string{"setup incomplete", "raptor login"},
+		},
+		{
+			name:      "fully set up — stay quiet",
+			st:        raptorstate.State{Installed: true, Found: true, Profile: "default", ControlPlaneURL: "https://root.test"},
+			wantEmpty: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := setupNotice(tt.st)
+			if tt.wantEmpty {
+				if got != "" {
+					t.Errorf("want no notice when setup is complete; got %q", got)
+				}
+				return
+			}
+			if got == "" {
+				t.Fatal("want a notice, got none")
+			}
+			for _, want := range tt.must {
+				if !strings.Contains(got, want) {
+					t.Errorf("notice missing %q; got:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// An installed-but-not-logged-in raptor must NOT be told to install again —
+// that sends the user down the wrong path.
+func TestSetupNotice_InstalledDoesNotSuggestInstalling(t *testing.T) {
+	got := setupNotice(raptorstate.State{Installed: true})
+	if strings.Contains(got, raptorInstallURL) {
+		t.Errorf("raptor is already installed; notice must not point at the install URL:\n%s", got)
 	}
 }

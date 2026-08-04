@@ -87,6 +87,11 @@ current staleness.`,
 		raptorSt := raptorstate.Resolve(active.Profile.RaptorProfile)
 		state["raptor"] = raptorStatusBlock(raptorSt, active.Profile.URL)
 
+		// One field an AI host can branch on instead of re-deriving "is this
+		// machine actually usable?" from installed/found/logged_in. The skills'
+		// raptor preflight reads this.
+		state["setup_complete"] = loggedIn && raptorReady(raptorSt)
+
 		if asJSON {
 			if statusFull {
 				// Same shaped schema as `list-skills --json` and
@@ -157,6 +162,9 @@ current staleness.`,
 		for _, a := range agents {
 			fmt.Fprintf(out, "  - %-30s %-9s %-12s @ %s\n", a.AgentName, a.Kind, a.Harness, a.Path)
 		}
+		// Last thing on screen, so an unfinished setup isn't buried above the
+		// skills/agents listings.
+		fmt.Fprint(out, setupNotice(raptorSt))
 		return nil
 	},
 }
@@ -186,6 +194,11 @@ func raptorStatusBlock(st raptorstate.State, praxisURL string) map[string]any {
 	return block
 }
 
+// raptorInstallURL is where a user gets raptor. raptor ships no Homebrew
+// formula or cask today (unlike praxis), so the releases page is the install
+// path we can honestly point at.
+const raptorInstallURL = "https://github.com/Facets-cloud/raptor-releases/releases/latest"
+
 // raptorStatusLine renders the human one-liner for the raptor auth state.
 func raptorStatusLine(st raptorstate.State, praxisURL string) string {
 	switch {
@@ -202,10 +215,38 @@ func raptorStatusLine(st raptorstate.State, praxisURL string) string {
 		// FACETS_PROFILE names a profile raptor doesn't have.
 		return fmt.Sprintf("profile %q (%s) not found in ~/.facets/credentials", st.Profile, st.Source)
 	case !st.Installed:
-		return "not installed"
+		// State the fact AND the next step. "not installed" alone names no
+		// consequence, and nothing else in the repo tells a user where to get it.
+		return "not installed — get it at " + raptorInstallURL
 	default:
 		return "no profile resolved — run `raptor login`"
 	}
+}
+
+// raptorReady reports whether raptor can actually run a control-plane command:
+// on PATH and resolved to a control plane it holds credentials for.
+func raptorReady(st raptorstate.State) bool { return st.Installed && st.Found }
+
+// setupNotice is the closing summary printed when raptor isn't usable yet.
+//
+// Without it the per-field `raptor:` line is followed by `logged in: yes`, so
+// the output as a whole still scans as healthy — a user has no reason to look
+// closer. praxis login succeeding is only half of setup: raptor is what reaches
+// projects, resources, environments and releases, so every praxis user needs it
+// working. Returns "" when there is nothing to say.
+func setupNotice(st raptorstate.State) string {
+	if raptorReady(st) {
+		return ""
+	}
+	if !st.Installed {
+		return "\n⚠ setup incomplete: raptor is not installed.\n" +
+			"  Facets projects, resources and releases all run through raptor.\n" +
+			"  Install: " + raptorInstallURL + "\n" +
+			"  Then:    raptor login\n"
+	}
+	// Installed but no usable profile — don't send them back to the install page.
+	return "\n⚠ setup incomplete: raptor is installed but not logged in.\n" +
+		"  Run: raptor login\n"
 }
 
 // summarizeInstalls collapses the per-(name, harness) receipt entries into
