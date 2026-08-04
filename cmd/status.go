@@ -8,6 +8,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/agentinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
+	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"github.com/spf13/cobra"
@@ -77,6 +78,15 @@ current staleness.`,
 			freshnessMode = freshLive
 		}
 		state["tools"] = toolsFreshness(time.Now(), freshnessMode)
+
+		// Raptor auth state: which control plane raptor commands will hit,
+		// and whether that matches this praxis profile's URL. raptor and
+		// praxis keep independent credential stores — this is the one place
+		// the two are cross-checked, so AI hosts can catch a profile
+		// mismatch before mixing control planes.
+		raptorSt := raptorstate.Resolve(active.Profile.RaptorProfile)
+		state["raptor"] = raptorStatusBlock(raptorSt, active.Profile.URL)
+
 		if asJSON {
 			if statusFull {
 				// Same shaped schema as `list-skills --json` and
@@ -126,6 +136,7 @@ current staleness.`,
 			fmt.Fprintf(out, "local mode: %s\n", projectRoot)
 		}
 		fmt.Fprintf(out, "url:        %s\n", active.Profile.URL)
+		fmt.Fprintf(out, "raptor:     %s\n", raptorStatusLine(raptorSt, active.Profile.URL))
 		if loggedIn {
 			fmt.Fprintf(out, "logged in:  yes (%s)\n", active.Profile.Username)
 		} else {
@@ -148,6 +159,53 @@ current staleness.`,
 		}
 		return nil
 	},
+}
+
+// raptorStatusBlock shapes a raptorstate.State for JSON output. `installed`
+// and `found` are always present; resolution detail only when it exists, and
+// the praxis-URL comparison only when a control plane actually resolved.
+func raptorStatusBlock(st raptorstate.State, praxisURL string) map[string]any {
+	block := map[string]any{
+		"installed": st.Installed,
+		"found":     st.Found,
+		"pinned":    st.Pinned,
+	}
+	if st.Profile != "" {
+		block["profile"] = st.Profile
+	}
+	if st.Source != "" {
+		block["source"] = string(st.Source)
+	}
+	if st.Found {
+		block["control_plane_url"] = st.ControlPlaneURL
+		if st.Username != "" {
+			block["username"] = st.Username
+		}
+		block["matches_praxis_url"] = raptorstate.MatchesHost(praxisURL, st.ControlPlaneURL)
+	}
+	return block
+}
+
+// raptorStatusLine renders the human one-liner for the raptor auth state.
+func raptorStatusLine(st raptorstate.State, praxisURL string) string {
+	switch {
+	case st.Found:
+		match := "no"
+		if raptorstate.MatchesHost(praxisURL, st.ControlPlaneURL) {
+			match = "yes"
+		}
+		return fmt.Sprintf("profile %s (%s) → %s (matches praxis url: %s)",
+			st.Profile, st.Source, st.ControlPlaneURL, match)
+	case st.Pinned:
+		return fmt.Sprintf("pinned profile %q not found in ~/.facets/credentials — run `raptor login`", st.Profile)
+	case st.Profile != "":
+		// FACETS_PROFILE names a profile raptor doesn't have.
+		return fmt.Sprintf("profile %q (%s) not found in ~/.facets/credentials", st.Profile, st.Source)
+	case !st.Installed:
+		return "not installed"
+	default:
+		return "no profile resolved — run `raptor login`"
+	}
 }
 
 // summarizeInstalls collapses the per-(name, harness) receipt entries into

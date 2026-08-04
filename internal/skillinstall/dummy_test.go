@@ -49,3 +49,41 @@ func TestPraxisMetaSkill_RaptorIsLocalNotGateway(t *testing.T) {
 		t.Error("meta-skill uses the wrong shape `raptor.stale`; tools is an array — find the raptor entry")
 	}
 }
+
+func TestPraxisMetaSkill_RaptorProfileCrossCheck(t *testing.T) {
+	body, err := ContentFor("praxis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The stores are independent; the meta-skill must teach the status
+	// `raptor` block, the pin, and the per-command FACETS_PROFILE prefix.
+	for _, want := range []string{
+		"## Raptor profile ≠ praxis profile",
+		"~/.facets/credentials",
+		"FACETS_PROFILE=<profile> raptor",
+		"--raptor-profile",
+		"matches_praxis_url",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("praxis meta-skill missing raptor-profile guidance %q", want)
+		}
+	}
+}
+
+func TestPraxisMetaSkill_ExplainsLocalMode(t *testing.T) {
+	body, err := ContentFor("praxis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"## Per-directory profiles (local mode)",
+		"praxis login --profile acme --local",
+		"praxis refresh-skills --project",
+		".praxis/config.json",
+		"project_root",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("praxis meta-skill missing local-mode guidance %q", want)
+		}
+	}
+}

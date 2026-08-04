@@ -37,3 +37,14 @@ func TestExecutionPreambleShape(t *testing.T) {
 		t.Fatal("preamble should end with a trailing newline so callers can concatenate cleanly")
 	}
 }
+
+func TestExecutionPreamble_RaptorProfileCrossCheck(t *testing.T) {
+	p := ExecutionPreamble
+	// praxis and raptor resolve profiles independently — the preamble must
+	// teach the status cross-check and the per-command FACETS_PROFILE prefix.
+	for _, want := range []string{"matches_praxis_url", "FACETS_PROFILE", "pinned"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("preamble missing raptor profile cross-check marker %q", want)
+		}
+	}
+}

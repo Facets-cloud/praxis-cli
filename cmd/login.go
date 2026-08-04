@@ -19,6 +19,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
+	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
 )
@@ -35,13 +36,14 @@ const pollInterval = 1500 * time.Millisecond
 var pollRequestTimeout = 5 * time.Second
 
 var (
-	loginProfile string
-	loginURL     string
-	loginToken   string
-	loginForce   bool
-	loginLocal   bool
-	loginJSON    bool
-	loginTimeout time.Duration
+	loginProfile       string
+	loginURL           string
+	loginToken         string
+	loginForce         bool
+	loginLocal         bool
+	loginJSON          bool
+	loginTimeout       time.Duration
+	loginRaptorProfile string
 )
 
 // browserLoginFn and postAuthSetup are package-level seams so tests can
@@ -66,6 +68,8 @@ func init() {
 		"pin this profile to the current directory tree (writes <cwd>/.praxis) and install its skills project-scoped, instead of switching the global profile")
 	loginCmd.Flags().BoolVar(&loginJSON, "json", false, "JSON output")
 	loginCmd.Flags().DurationVar(&loginTimeout, "timeout", 90*time.Second, "max time to wait for browser callback")
+	loginCmd.Flags().StringVar(&loginRaptorProfile, "raptor-profile", "",
+		"pair this praxis profile with a raptor profile (~/.facets/credentials section); `praxis status` then reports raptor via that profile and AI hosts prefix raptor commands with FACETS_PROFILE=<name>")
 	rootCmd.AddCommand(loginCmd)
 }
 
@@ -421,10 +425,12 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 //   - local: write <cwd>/.praxis/config.json and install project-scoped,
 //     leaving the global pointer untouched.
 func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, email string, local bool) error {
+	raptorProfile := resolveRaptorPairing(profileName, baseURL)
 	prof := credentials.Profile{
-		URL:      baseURL,
-		Username: email,
-		Token:    token,
+		URL:           baseURL,
+		Username:      email,
+		Token:         token,
+		RaptorProfile: raptorProfile,
 	}
 	if err := credentials.Put(profileName, prof); err != nil {
 		return fmt.Errorf("save credentials: %w", err)
@@ -478,6 +484,9 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, em
 		if projectRoot != "" {
 			payload["project_root"] = projectRoot
 		}
+		if raptorProfile != "" {
+			payload["raptor_profile"] = raptorProfile
+		}
 		return render.JSON(out, payload)
 	}
 	if local {
@@ -486,6 +495,35 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, em
 	}
 	fmt.Fprintf(out, "\n✓ Logged in as %s (profile: %s, url: %s)\n", email, profileName, baseURL)
 	return nil
+}
+
+// resolveRaptorPairing decides the raptor_profile value to persist:
+// the --raptor-profile flag when given (validated best-effort — warnings,
+// never a failed login), else whatever the profile already stored, so a
+// plain re-login never drops an existing pairing. Warnings go to stderr in
+// both output modes so they never corrupt --json output.
+func resolveRaptorPairing(profileName, baseURL string) string {
+	if loginRaptorProfile == "" {
+		store, err := credentials.Load()
+		if err != nil {
+			return ""
+		}
+		return store[profileName].RaptorProfile
+	}
+	// Validation is advisory: raptor's credentials are the user's to manage,
+	// and they may run `raptor login` after this.
+	ok, cpURL := raptorstate.HasProfile(loginRaptorProfile)
+	switch {
+	case !ok:
+		fmt.Fprintf(os.Stderr,
+			"Warning: raptor profile %q not found in ~/.facets/credentials — pairing saved anyway; run `raptor login` and create it.\n",
+			loginRaptorProfile)
+	case !raptorstate.MatchesHost(baseURL, cpURL):
+		fmt.Fprintf(os.Stderr,
+			"Warning: raptor profile %q points at %s, which is a different host than this praxis profile (%s). Pairing saved anyway.\n",
+			loginRaptorProfile, cpURL, baseURL)
+	}
+	return loginRaptorProfile
 }
 
 type authMeResponse struct {

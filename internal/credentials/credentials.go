@@ -74,6 +74,12 @@ type Profile struct {
 	URL      string
 	Username string
 	Token    string
+	// RaptorProfile optionally names the ~/.facets/credentials profile this
+	// praxis profile is paired with (INI key `raptor_profile`, set via
+	// `praxis login --raptor-profile`). praxis never uses it to authenticate —
+	// it exists so `praxis status` (and the AI host reading it) can point
+	// raptor at the matching control plane via FACETS_PROFILE.
+	RaptorProfile string
 }
 
 // Source describes which level produced the active-profile name. Surfaced
@@ -248,6 +254,14 @@ func Save(store map[string]Profile) error {
 func Put(name string, p Profile) error {
 	if err := validateProfileName(name); err != nil {
 		return err
+	}
+	if p.RaptorProfile != "" {
+		// Same charset rules as section names: the value is written into the
+		// INI and later exported as FACETS_PROFILE — no room for whitespace,
+		// newlines, or bracket/equals corruption.
+		if err := validateProfileName(p.RaptorProfile); err != nil {
+			return fmt.Errorf("raptor profile: %w", err)
+		}
 	}
 	store, err := Load()
 	if err != nil {
@@ -451,13 +465,21 @@ func parseRawINI(data []byte) map[string]map[string]string {
 	return out
 }
 
+// ParseRawINI exposes the flat-INI parser for other packages that read
+// credentials-shaped files (e.g. internal/raptorstate reading raptor's
+// ~/.facets/credentials, which praxis deliberately never writes).
+func ParseRawINI(data []byte) map[string]map[string]string {
+	return parseRawINI(data)
+}
+
 func parseINI(data []byte) map[string]Profile {
 	out := map[string]Profile{}
 	for name, kv := range parseRawINI(data) {
 		out[name] = Profile{
-			URL:      kv["url"],
-			Username: kv["username"],
-			Token:    kv["token"],
+			URL:           kv["url"],
+			Username:      kv["username"],
+			Token:         kv["token"],
+			RaptorProfile: kv["raptor_profile"],
 		}
 	}
 	return out
@@ -478,6 +500,9 @@ func writeINI(store map[string]Profile) []byte {
 		}
 		if p.Token != "" {
 			fmt.Fprintf(&sb, "token    = %s\n", p.Token)
+		}
+		if p.RaptorProfile != "" {
+			fmt.Fprintf(&sb, "raptor_profile = %s\n", p.RaptorProfile)
 		}
 		sb.WriteString("\n")
 	}
