@@ -559,3 +559,82 @@ func TestSetupNotice_InstalledDoesNotSuggestInstalling(t *testing.T) {
 		t.Errorf("raptor is already installed; notice must not point at the install URL:\n%s", got)
 	}
 }
+
+func TestRaptorAssetName(t *testing.T) {
+	// Verified against the real assets on Facets-cloud/raptor-releases
+	// (v0.1.91 publishes darwin/linux, amd64/arm64 only).
+	for _, tt := range []struct{ goos, goarch, want string }{
+		{"darwin", "arm64", "raptor-darwin-arm64"},
+		{"darwin", "amd64", "raptor-darwin-amd64"},
+		{"linux", "amd64", "raptor-linux-amd64"},
+		{"linux", "arm64", "raptor-linux-arm64"},
+		{"windows", "amd64", ""}, // not published — must not invent a URL
+		{"linux", "386", ""},
+	} {
+		if got := raptorAssetName(tt.goos, tt.goarch); got != tt.want {
+			t.Errorf("raptorAssetName(%q,%q) = %q, want %q", tt.goos, tt.goarch, got, tt.want)
+		}
+	}
+}
+
+// The install hint rides inside the existing `raptor` block from #68 rather
+// than as a parallel top-level key, so the meta-skill's "act on the raptor
+// block" contract keeps working. praxis is the only party that knows this
+// machine's OS/arch, so it names the exact build; the skill text can't.
+func TestRaptorStatusBlock_InstallHint(t *testing.T) {
+	t.Run("absent: hint with this machine's asset, no sudo", func(t *testing.T) {
+		b := raptorStatusBlockFor(raptorstate.State{}, "https://x.test", "darwin", "arm64")
+		hint, _ := b["install_hint"].(map[string]any)
+		if hint == nil {
+			t.Fatal("install_hint missing when raptor is not installed")
+		}
+		if !strings.Contains(hint["url"].(string), "raptor-darwin-arm64") {
+			t.Errorf("url must name this machine's build, got %v", hint["url"])
+		}
+		cmds := strings.Join(toStrings(hint["commands"]), "\n")
+		// sudo prompts for a password and hangs a non-interactive AI host.
+		if strings.Contains(cmds, "sudo") {
+			t.Errorf("install commands must not need sudo:\n%s", cmds)
+		}
+		if !strings.Contains(cmds, "chmod +x") {
+			t.Errorf("downloaded binary must be made executable:\n%s", cmds)
+		}
+	})
+
+	t.Run("installed: no hint", func(t *testing.T) {
+		b := raptorStatusBlockFor(raptorstate.State{Installed: true}, "https://x.test", "darwin", "arm64")
+		if _, has := b["install_hint"]; has {
+			t.Error("install_hint must be omitted once raptor is installed")
+		}
+	})
+
+	t.Run("unpublished platform: docs only, no fabricated url", func(t *testing.T) {
+		b := raptorStatusBlockFor(raptorstate.State{}, "https://x.test", "windows", "amd64")
+		hint, _ := b["install_hint"].(map[string]any)
+		if hint == nil {
+			t.Fatal("install_hint missing")
+		}
+		if _, has := hint["url"]; has {
+			t.Error("must not fabricate a download URL for a platform raptor doesn't publish")
+		}
+		if hint["docs"] == nil {
+			t.Error("must still point at the releases page")
+		}
+	})
+
+	// #68's fields must survive untouched.
+	t.Run("preserves the #68 block", func(t *testing.T) {
+		b := raptorStatusBlockFor(raptorstate.State{Installed: true, Found: true,
+			Profile: "default", ControlPlaneURL: "https://x.test"}, "https://x.test", "darwin", "arm64")
+		for _, k := range []string{"installed", "found", "pinned", "control_plane_url", "matches_praxis_url"} {
+			if _, has := b[k]; !has {
+				t.Errorf("#68 field %q went missing", k)
+			}
+		}
+	})
+}
+
+func toStrings(v any) []string {
+	out, _ := v.([]string)
+	return out
+}

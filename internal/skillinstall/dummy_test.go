@@ -104,3 +104,43 @@ func TestPraxisMetaSkill_ProfileManagementSurface(t *testing.T) {
 		}
 	}
 }
+
+// #68 taught the meta-skill to act on the `raptor` block, but only covered a
+// raptor that is present and mis-aimed. A raptor that is absent, or present
+// and logged out, left the host with nothing runnable — the old text said
+// "ask the user to install it" and no instructions existed anywhere.
+//
+// The host now installs and signs raptor in on the user's behalf, matching how
+// it already treats `praxis login`. Credentials stay off-limits either way.
+func TestPraxisMetaSkill_RaptorSetupIsActionable(t *testing.T) {
+	body, err := ContentFor("praxis")
+	if err != nil {
+		t.Fatalf("ContentFor(praxis): %v", err)
+	}
+	for _, want := range []string{
+		"installed: false", // the case #68 didn't cover
+		"install_hint",     // where the resolved commands live
+		"~/.local/bin",     // no-sudo install target
+		"setup_complete",   // the single field to branch on
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("meta-skill missing raptor-setup guidance %q", want)
+		}
+	}
+
+	// The old stance told the host to stop at asking. That dead-ended the user.
+	if strings.Contains(body, "don't install it yourself") {
+		t.Error("stale guidance: the host now installs raptor via install_hint")
+	}
+
+	// Handling raptor's PAT is still forbidden — installing and running a
+	// browser login is not the same as touching credentials.
+	for _, want := range []string{
+		"Never ask for a token in chat",
+		"never write `~/.facets/credentials` yourself",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("credential guardrail weakened — missing %q", want)
+		}
+	}
+}

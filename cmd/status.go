@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"runtime"
 	"slices"
 	"time"
 
@@ -169,14 +170,64 @@ current staleness.`,
 	},
 }
 
+// raptorAssetName is the release asset for a platform, or "" when raptor
+// publishes no build for it. Names match the assets actually on
+// Facets-cloud/raptor-releases (darwin/linux, amd64/arm64).
+func raptorAssetName(goos, goarch string) string {
+	switch goos {
+	case "darwin", "linux":
+	default:
+		return ""
+	}
+	switch goarch {
+	case "amd64", "arm64":
+	default:
+		return ""
+	}
+	return fmt.Sprintf("raptor-%s-%s", goos, goarch)
+}
+
+// raptorInstallHint tells an AI host exactly how to get raptor onto THIS
+// machine. praxis is the only party that knows the OS/arch, so it names the
+// build; skill text can't. Installs into ~/.local/bin deliberately — `sudo`
+// prompts for a password and would hang a non-interactive host.
+func raptorInstallHint(goos, goarch string) map[string]any {
+	hint := map[string]any{"docs": raptorInstallURL}
+	asset := raptorAssetName(goos, goarch)
+	if asset == "" {
+		// No published build for this platform — point at the page rather
+		// than fabricate a download URL that 404s.
+		hint["commands"] = []string{}
+		return hint
+	}
+	url := "https://github.com/Facets-cloud/raptor-releases/releases/latest/download/" + asset
+	hint["url"] = url
+	hint["commands"] = []string{
+		"mkdir -p ~/.local/bin",
+		"curl -fsSL " + url + " -o ~/.local/bin/raptor",
+		"chmod +x ~/.local/bin/raptor",
+	}
+	hint["note"] = "installs to ~/.local/bin (no sudo). If that isn't on PATH, add it."
+	return hint
+}
+
 // raptorStatusBlock shapes a raptorstate.State for JSON output. `installed`
 // and `found` are always present; resolution detail only when it exists, and
 // the praxis-URL comparison only when a control plane actually resolved.
 func raptorStatusBlock(st raptorstate.State, praxisURL string) map[string]any {
+	return raptorStatusBlockFor(st, praxisURL, runtime.GOOS, runtime.GOARCH)
+}
+
+// raptorStatusBlockFor is raptorStatusBlock with the platform injected so the
+// install hint is testable across OS/arch.
+func raptorStatusBlockFor(st raptorstate.State, praxisURL, goos, goarch string) map[string]any {
 	block := map[string]any{
 		"installed": st.Installed,
 		"found":     st.Found,
 		"pinned":    st.Pinned,
+	}
+	if !st.Installed {
+		block["install_hint"] = raptorInstallHint(goos, goarch)
 	}
 	if st.Profile != "" {
 		block["profile"] = st.Profile
