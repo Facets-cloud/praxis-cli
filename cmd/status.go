@@ -187,27 +187,40 @@ func raptorAssetName(goos, goarch string) string {
 	return fmt.Sprintf("raptor-%s-%s", goos, goarch)
 }
 
-// raptorInstallHint tells an AI host exactly how to get raptor onto THIS
-// machine. praxis is the only party that knows the OS/arch, so it names the
-// build; skill text can't. Installs into ~/.local/bin deliberately — `sudo`
-// prompts for a password and would hang a non-interactive host.
+// raptorInstallHint points at raptor's own install instructions, plus an
+// escape hatch for hosts that can't use them.
+//
+// `docs` is the primary answer. raptor owns its install steps and we must not
+// fork them into praxis — that README already drifts from reality (it documents
+// Windows binaries the releases don't publish), and a second copy here would
+// drift further. Those documented steps end in `sudo mv … /usr/local/bin`.
+//
+// `no_sudo_commands` is the hatch: `sudo` prompts for a password, which a
+// non-interactive AI host cannot answer, so it would hang rather than fail.
+// The hatch installs to ~/.local/bin instead. That deviates from the README on
+// purpose, and the note says so — ~/.local/bin is not on every PATH.
+//
+// praxis is the only party that knows this machine's OS/arch, so it resolves
+// the asset; skill text can't.
 func raptorInstallHint(goos, goarch string) map[string]any {
 	hint := map[string]any{"docs": raptorInstallURL}
 	asset := raptorAssetName(goos, goarch)
 	if asset == "" {
-		// No published build for this platform — point at the page rather
-		// than fabricate a download URL that 404s.
-		hint["commands"] = []string{}
+		// No published build for this platform — docs only. Never fabricate a
+		// download URL that 404s, and offer no hatch we can't stand behind.
+		hint["note"] = "raptor publishes no build for this platform; follow docs."
 		return hint
 	}
-	url := "https://github.com/Facets-cloud/raptor-releases/releases/latest/download/" + asset
-	hint["url"] = url
-	hint["commands"] = []string{
+	url := raptorDownloadURL + asset
+	hint["asset_url"] = url
+	hint["no_sudo_commands"] = []string{
 		"mkdir -p ~/.local/bin",
 		"curl -fsSL " + url + " -o ~/.local/bin/raptor",
 		"chmod +x ~/.local/bin/raptor",
 	}
-	hint["note"] = "installs to ~/.local/bin (no sudo). If that isn't on PATH, add it."
+	hint["note"] = "Prefer docs — raptor's own steps install to /usr/local/bin via sudo. " +
+		"no_sudo_commands is an escape hatch for non-interactive hosts that can't answer a " +
+		"sudo password prompt; it installs to ~/.local/bin, which must be on PATH."
 	return hint
 }
 
@@ -245,10 +258,17 @@ func raptorStatusBlockFor(st raptorstate.State, praxisURL, goos, goarch string) 
 	return block
 }
 
-// raptorInstallURL is where a user gets raptor. raptor ships no Homebrew
-// formula or cask today (unlike praxis), so the releases page is the install
-// path we can honestly point at.
-const raptorInstallURL = "https://github.com/Facets-cloud/raptor-releases/releases/latest"
+const (
+	// raptorInstallURL is raptor's OWN install instructions — the single place
+	// those steps are maintained. praxis points at it rather than restating
+	// them, so the two can't drift. raptor ships no Homebrew formula or cask
+	// today (unlike praxis), so this README is the canonical path.
+	raptorInstallURL = "https://github.com/Facets-cloud/raptor-releases#installation"
+
+	// raptorDownloadURL is the release-asset prefix, used only to resolve the
+	// exact build for this machine.
+	raptorDownloadURL = "https://github.com/Facets-cloud/raptor-releases/releases/latest/download/"
+)
 
 // raptorStatusLine renders the human one-liner for the raptor auth state.
 func raptorStatusLine(st raptorstate.State, praxisURL string) string {

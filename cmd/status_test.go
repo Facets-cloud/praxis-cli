@@ -579,22 +579,39 @@ func TestRaptorAssetName(t *testing.T) {
 
 // The install hint rides inside the existing `raptor` block from #68 rather
 // than as a parallel top-level key, so the meta-skill's "act on the raptor
-// block" contract keeps working. praxis is the only party that knows this
-// machine's OS/arch, so it names the exact build; the skill text can't.
+// block" contract keeps working.
+//
+// `docs` is the PRIMARY answer: raptor's own README owns the install steps and
+// we must not fork them (it already drifts — it documents Windows binaries the
+// releases don't publish). `no_sudo_commands` is an explicit escape hatch for
+// non-interactive hosts that cannot answer raptor's documented `sudo mv`.
 func TestRaptorStatusBlock_InstallHint(t *testing.T) {
-	t.Run("absent: hint with this machine's asset, no sudo", func(t *testing.T) {
+	t.Run("absent: README is the primary pointer", func(t *testing.T) {
 		b := raptorStatusBlockFor(raptorstate.State{}, "https://x.test", "darwin", "arm64")
 		hint, _ := b["install_hint"].(map[string]any)
 		if hint == nil {
 			t.Fatal("install_hint missing when raptor is not installed")
 		}
-		if !strings.Contains(hint["url"].(string), "raptor-darwin-arm64") {
-			t.Errorf("url must name this machine's build, got %v", hint["url"])
+		docs, _ := hint["docs"].(string)
+		if !strings.Contains(docs, "raptor-releases") {
+			t.Errorf("docs must point at raptor's own install instructions, got %q", docs)
 		}
-		cmds := strings.Join(toStrings(hint["commands"]), "\n")
+		note, _ := hint["note"].(string)
+		if !strings.Contains(note, "sudo") || !strings.Contains(note, "PATH") {
+			t.Errorf("note must say the official steps use sudo and that ~/.local/bin needs to be on PATH; got %q", note)
+		}
+	})
+
+	t.Run("hatch names this machine's asset and needs no sudo", func(t *testing.T) {
+		b := raptorStatusBlockFor(raptorstate.State{}, "https://x.test", "darwin", "arm64")
+		hint, _ := b["install_hint"].(map[string]any)
+		if !strings.Contains(hint["asset_url"].(string), "raptor-darwin-arm64") {
+			t.Errorf("asset_url must name this machine's build, got %v", hint["asset_url"])
+		}
+		cmds := strings.Join(toStrings(hint["no_sudo_commands"]), "\n")
 		// sudo prompts for a password and hangs a non-interactive AI host.
 		if strings.Contains(cmds, "sudo") {
-			t.Errorf("install commands must not need sudo:\n%s", cmds)
+			t.Errorf("the hatch exists to avoid sudo:\n%s", cmds)
 		}
 		if !strings.Contains(cmds, "chmod +x") {
 			t.Errorf("downloaded binary must be made executable:\n%s", cmds)
@@ -614,11 +631,14 @@ func TestRaptorStatusBlock_InstallHint(t *testing.T) {
 		if hint == nil {
 			t.Fatal("install_hint missing")
 		}
-		if _, has := hint["url"]; has {
-			t.Error("must not fabricate a download URL for a platform raptor doesn't publish")
+		if _, has := hint["asset_url"]; has {
+			t.Error("must not fabricate a download URL for a platform the releases don't publish")
+		}
+		if _, has := hint["no_sudo_commands"]; has {
+			t.Error("no hatch without a real asset — send them to docs")
 		}
 		if hint["docs"] == nil {
-			t.Error("must still point at the releases page")
+			t.Error("docs must always be present")
 		}
 	})
 

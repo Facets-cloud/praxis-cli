@@ -236,12 +236,16 @@ Act on it:
     read-only exploration may proceed with a note.
   - ` + "`installed: false`" + ` — raptor isn't on this machine at all, so every
     control-plane command will fail. The block carries an
-    ` + "`install_hint`" + ` whose ` + "`commands`" + ` are already resolved for
-    this OS/arch — run them for the user. They install to
-    ` + "`~/.local/bin`" + ` and need no sudo. Then continue to
-    ` + "`raptor login`" + ` below. If ` + "`install_hint.url`" + ` is absent,
-    raptor publishes no build for this platform; send the user to
-    ` + "`install_hint.docs`" + `.
+    ` + "`install_hint`" + `. Point the user at ` + "`install_hint.docs`" + `
+    FIRST — that's raptor's own README and the maintained source of truth
+    (its steps end in ` + "`sudo mv … /usr/local/bin`" + `). If the user
+    can't run those, or asks you to do it, use
+    ` + "`install_hint.no_sudo_commands`" + `: already resolved for this
+    OS/arch and free of sudo, which you can't answer a password prompt
+    for. It installs to ` + "`~/.local/bin`" + `, so check that's on PATH
+    afterwards. When ` + "`asset_url`" + ` is absent raptor publishes no
+    build for this platform — docs only, don't improvise. Then continue
+    to ` + "`raptor login`" + ` below.
   - ` + "`found: false`" + ` — raptor has no usable profile. RUN
     ` + "`raptor login`" + ` on the user's behalf, exactly as you do for
     ` + "`praxis login`" + `: it opens their browser and they complete the
