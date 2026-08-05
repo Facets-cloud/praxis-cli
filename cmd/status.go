@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"runtime"
 	"slices"
 	"time"
 
@@ -87,6 +88,11 @@ current staleness.`,
 		raptorSt := raptorstate.Resolve(active.Profile.RaptorProfile)
 		state["raptor"] = raptorStatusBlock(raptorSt, active.Profile.URL)
 
+		// One field an AI host can branch on instead of re-deriving "is this
+		// machine actually usable?" from installed/found/logged_in. The skills'
+		// raptor preflight reads this.
+		state["setup_complete"] = loggedIn && raptorReady(raptorSt)
+
 		if asJSON {
 			if statusFull {
 				// Same shaped schema as `list-skills --json` and
@@ -157,18 +163,84 @@ current staleness.`,
 		for _, a := range agents {
 			fmt.Fprintf(out, "  - %-30s %-9s %-12s @ %s\n", a.AgentName, a.Kind, a.Harness, a.Path)
 		}
+		// Last thing on screen, so an unfinished setup isn't buried above the
+		// skills/agents listings.
+		fmt.Fprint(out, setupNotice(raptorSt))
 		return nil
 	},
+}
+
+// raptorAssetName is the release asset for a platform, or "" when raptor
+// publishes no build for it. Names match the assets actually on
+// Facets-cloud/raptor-releases (darwin/linux, amd64/arm64).
+func raptorAssetName(goos, goarch string) string {
+	switch goos {
+	case "darwin", "linux":
+	default:
+		return ""
+	}
+	switch goarch {
+	case "amd64", "arm64":
+	default:
+		return ""
+	}
+	return fmt.Sprintf("raptor-%s-%s", goos, goarch)
+}
+
+// raptorInstallHint points at raptor's own install instructions, plus an
+// escape hatch for hosts that can't use them.
+//
+// `docs` is the primary answer. raptor owns its install steps and we must not
+// fork them into praxis — that README already drifts from reality (it documents
+// Windows binaries the releases don't publish), and a second copy here would
+// drift further. Those documented steps end in `sudo mv … /usr/local/bin`.
+//
+// `no_sudo_commands` is the hatch: `sudo` prompts for a password, which a
+// non-interactive AI host cannot answer, so it would hang rather than fail.
+// The hatch installs to ~/.local/bin instead. That deviates from the README on
+// purpose, and the note says so — ~/.local/bin is not on every PATH.
+//
+// praxis is the only party that knows this machine's OS/arch, so it resolves
+// the asset; skill text can't.
+func raptorInstallHint(goos, goarch string) map[string]any {
+	hint := map[string]any{"docs": raptorInstallURL}
+	asset := raptorAssetName(goos, goarch)
+	if asset == "" {
+		// No published build for this platform — docs only. Never fabricate a
+		// download URL that 404s, and offer no hatch we can't stand behind.
+		hint["note"] = "raptor publishes no build for this platform; follow docs."
+		return hint
+	}
+	url := raptorDownloadURL + asset
+	hint["asset_url"] = url
+	hint["no_sudo_commands"] = []string{
+		"mkdir -p ~/.local/bin",
+		"curl -fsSL " + url + " -o ~/.local/bin/raptor",
+		"chmod +x ~/.local/bin/raptor",
+	}
+	hint["note"] = "Prefer docs — raptor's own steps install to /usr/local/bin via sudo. " +
+		"no_sudo_commands is an escape hatch for non-interactive hosts that can't answer a " +
+		"sudo password prompt; it installs to ~/.local/bin, which must be on PATH."
+	return hint
 }
 
 // raptorStatusBlock shapes a raptorstate.State for JSON output. `installed`
 // and `found` are always present; resolution detail only when it exists, and
 // the praxis-URL comparison only when a control plane actually resolved.
 func raptorStatusBlock(st raptorstate.State, praxisURL string) map[string]any {
+	return raptorStatusBlockFor(st, praxisURL, runtime.GOOS, runtime.GOARCH)
+}
+
+// raptorStatusBlockFor is raptorStatusBlock with the platform injected so the
+// install hint is testable across OS/arch.
+func raptorStatusBlockFor(st raptorstate.State, praxisURL, goos, goarch string) map[string]any {
 	block := map[string]any{
 		"installed": st.Installed,
 		"found":     st.Found,
 		"pinned":    st.Pinned,
+	}
+	if !st.Installed {
+		block["install_hint"] = raptorInstallHint(goos, goarch)
 	}
 	if st.Profile != "" {
 		block["profile"] = st.Profile
@@ -186,6 +258,18 @@ func raptorStatusBlock(st raptorstate.State, praxisURL string) map[string]any {
 	return block
 }
 
+const (
+	// raptorInstallURL is raptor's OWN install instructions — the single place
+	// those steps are maintained. praxis points at it rather than restating
+	// them, so the two can't drift. raptor ships no Homebrew formula or cask
+	// today (unlike praxis), so this README is the canonical path.
+	raptorInstallURL = "https://github.com/Facets-cloud/raptor-releases#installation"
+
+	// raptorDownloadURL is the release-asset prefix, used only to resolve the
+	// exact build for this machine.
+	raptorDownloadURL = "https://github.com/Facets-cloud/raptor-releases/releases/latest/download/"
+)
+
 // raptorStatusLine renders the human one-liner for the raptor auth state.
 func raptorStatusLine(st raptorstate.State, praxisURL string) string {
 	switch {
@@ -202,10 +286,38 @@ func raptorStatusLine(st raptorstate.State, praxisURL string) string {
 		// FACETS_PROFILE names a profile raptor doesn't have.
 		return fmt.Sprintf("profile %q (%s) not found in ~/.facets/credentials", st.Profile, st.Source)
 	case !st.Installed:
-		return "not installed"
+		// State the fact AND the next step. "not installed" alone names no
+		// consequence, and nothing else in the repo tells a user where to get it.
+		return "not installed — get it at " + raptorInstallURL
 	default:
 		return "no profile resolved — run `raptor login`"
 	}
+}
+
+// raptorReady reports whether raptor can actually run a control-plane command:
+// on PATH and resolved to a control plane it holds credentials for.
+func raptorReady(st raptorstate.State) bool { return st.Installed && st.Found }
+
+// setupNotice is the closing summary printed when raptor isn't usable yet.
+//
+// Without it the per-field `raptor:` line is followed by `logged in: yes`, so
+// the output as a whole still scans as healthy — a user has no reason to look
+// closer. praxis login succeeding is only half of setup: raptor is what reaches
+// projects, resources, environments and releases, so every praxis user needs it
+// working. Returns "" when there is nothing to say.
+func setupNotice(st raptorstate.State) string {
+	if raptorReady(st) {
+		return ""
+	}
+	if !st.Installed {
+		return "\n⚠ setup incomplete: raptor is not installed.\n" +
+			"  Facets projects, resources and releases all run through raptor.\n" +
+			"  Install: " + raptorInstallURL + "\n" +
+			"  Then:    raptor login\n"
+	}
+	// Installed but no usable profile — don't send them back to the install page.
+	return "\n⚠ setup incomplete: raptor is installed but not logged in.\n" +
+		"  Run: raptor login\n"
 }
 
 // summarizeInstalls collapses the per-(name, harness) receipt entries into

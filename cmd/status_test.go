@@ -463,9 +463,11 @@ func TestRaptorStatusLine(t *testing.T) {
 			want: "profile \"ghost\" (env-profile) not found in ~/.facets/credentials",
 		},
 		{
+			// States the fact AND the next step — nothing else in the repo
+			// tells a user where to get raptor.
 			name: "not installed",
 			st:   raptorstate.State{},
-			want: "not installed",
+			want: "not installed — get it at " + raptorInstallURL,
 		},
 		{
 			name: "installed, nothing resolved",
@@ -480,4 +482,179 @@ func TestRaptorStatusLine(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A new user installs praxis, runs `praxis login`, and sees a clean result —
+// but raptor is the CLI that actually reaches the Facets control plane
+// (projects, resources, environments, releases). #68 made status say
+// "not installed", which is the right fact but not an actionable one: it names
+// no consequence and no next step. These tests pin the actionable form.
+func TestRaptorStatusLine_NotInstalledPointsAtTheInstall(t *testing.T) {
+	got := raptorStatusLine(raptorstate.State{}, "https://root.test")
+	if !strings.Contains(got, "not installed") {
+		t.Errorf("line must still state the fact; got %q", got)
+	}
+	if !strings.Contains(got, raptorInstallURL) {
+		t.Errorf("line must point at where to get raptor; got %q", got)
+	}
+}
+
+// setupNotice is the closing summary. Without it the `raptor: not installed`
+// line is followed by `logged in: yes`, so the output as a whole still reads
+// healthy and the user has no reason to look closer.
+func TestSetupNotice(t *testing.T) {
+	tests := []struct {
+		name      string
+		st        raptorstate.State
+		wantEmpty bool
+		must      []string
+	}{
+		{
+			name: "not installed — needs install AND login",
+			st:   raptorstate.State{},
+			must: []string{"setup incomplete", "not installed", raptorInstallURL, "raptor login"},
+		},
+		{
+			name: "installed but nothing resolved — needs login only",
+			st:   raptorstate.State{Installed: true},
+			must: []string{"setup incomplete", "raptor login"},
+		},
+		{
+			name: "installed, pinned profile missing — needs login",
+			st:   raptorstate.State{Installed: true, Pinned: true, Profile: "ghost", Source: raptorstate.SourcePin},
+			must: []string{"setup incomplete", "raptor login"},
+		},
+		{
+			name:      "fully set up — stay quiet",
+			st:        raptorstate.State{Installed: true, Found: true, Profile: "default", ControlPlaneURL: "https://root.test"},
+			wantEmpty: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := setupNotice(tt.st)
+			if tt.wantEmpty {
+				if got != "" {
+					t.Errorf("want no notice when setup is complete; got %q", got)
+				}
+				return
+			}
+			if got == "" {
+				t.Fatal("want a notice, got none")
+			}
+			for _, want := range tt.must {
+				if !strings.Contains(got, want) {
+					t.Errorf("notice missing %q; got:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// An installed-but-not-logged-in raptor must NOT be told to install again —
+// that sends the user down the wrong path.
+func TestSetupNotice_InstalledDoesNotSuggestInstalling(t *testing.T) {
+	got := setupNotice(raptorstate.State{Installed: true})
+	if strings.Contains(got, raptorInstallURL) {
+		t.Errorf("raptor is already installed; notice must not point at the install URL:\n%s", got)
+	}
+}
+
+func TestRaptorAssetName(t *testing.T) {
+	// Verified against the real assets on Facets-cloud/raptor-releases
+	// (v0.1.91 publishes darwin/linux, amd64/arm64 only).
+	for _, tt := range []struct{ goos, goarch, want string }{
+		{"darwin", "arm64", "raptor-darwin-arm64"},
+		{"darwin", "amd64", "raptor-darwin-amd64"},
+		{"linux", "amd64", "raptor-linux-amd64"},
+		{"linux", "arm64", "raptor-linux-arm64"},
+		{"windows", "amd64", ""}, // not published — must not invent a URL
+		{"linux", "386", ""},
+	} {
+		if got := raptorAssetName(tt.goos, tt.goarch); got != tt.want {
+			t.Errorf("raptorAssetName(%q,%q) = %q, want %q", tt.goos, tt.goarch, got, tt.want)
+		}
+	}
+}
+
+// The install hint rides inside the existing `raptor` block from #68 rather
+// than as a parallel top-level key, so the meta-skill's "act on the raptor
+// block" contract keeps working.
+//
+// `docs` is the PRIMARY answer: raptor's own README owns the install steps and
+// we must not fork them (it already drifts — it documents Windows binaries the
+// releases don't publish). `no_sudo_commands` is an explicit escape hatch for
+// non-interactive hosts that cannot answer raptor's documented `sudo mv`.
+func TestRaptorStatusBlock_InstallHint(t *testing.T) {
+	t.Run("absent: README is the primary pointer", func(t *testing.T) {
+		b := raptorStatusBlockFor(raptorstate.State{}, "https://x.test", "darwin", "arm64")
+		hint, _ := b["install_hint"].(map[string]any)
+		if hint == nil {
+			t.Fatal("install_hint missing when raptor is not installed")
+		}
+		docs, _ := hint["docs"].(string)
+		if !strings.Contains(docs, "raptor-releases") {
+			t.Errorf("docs must point at raptor's own install instructions, got %q", docs)
+		}
+		note, _ := hint["note"].(string)
+		if !strings.Contains(note, "sudo") || !strings.Contains(note, "PATH") {
+			t.Errorf("note must say the official steps use sudo and that ~/.local/bin needs to be on PATH; got %q", note)
+		}
+	})
+
+	t.Run("hatch names this machine's asset and needs no sudo", func(t *testing.T) {
+		b := raptorStatusBlockFor(raptorstate.State{}, "https://x.test", "darwin", "arm64")
+		hint, _ := b["install_hint"].(map[string]any)
+		if !strings.Contains(hint["asset_url"].(string), "raptor-darwin-arm64") {
+			t.Errorf("asset_url must name this machine's build, got %v", hint["asset_url"])
+		}
+		cmds := strings.Join(toStrings(hint["no_sudo_commands"]), "\n")
+		// sudo prompts for a password and hangs a non-interactive AI host.
+		if strings.Contains(cmds, "sudo") {
+			t.Errorf("the hatch exists to avoid sudo:\n%s", cmds)
+		}
+		if !strings.Contains(cmds, "chmod +x") {
+			t.Errorf("downloaded binary must be made executable:\n%s", cmds)
+		}
+	})
+
+	t.Run("installed: no hint", func(t *testing.T) {
+		b := raptorStatusBlockFor(raptorstate.State{Installed: true}, "https://x.test", "darwin", "arm64")
+		if _, has := b["install_hint"]; has {
+			t.Error("install_hint must be omitted once raptor is installed")
+		}
+	})
+
+	t.Run("unpublished platform: docs only, no fabricated url", func(t *testing.T) {
+		b := raptorStatusBlockFor(raptorstate.State{}, "https://x.test", "windows", "amd64")
+		hint, _ := b["install_hint"].(map[string]any)
+		if hint == nil {
+			t.Fatal("install_hint missing")
+		}
+		if _, has := hint["asset_url"]; has {
+			t.Error("must not fabricate a download URL for a platform the releases don't publish")
+		}
+		if _, has := hint["no_sudo_commands"]; has {
+			t.Error("no hatch without a real asset — send them to docs")
+		}
+		if hint["docs"] == nil {
+			t.Error("docs must always be present")
+		}
+	})
+
+	// #68's fields must survive untouched.
+	t.Run("preserves the #68 block", func(t *testing.T) {
+		b := raptorStatusBlockFor(raptorstate.State{Installed: true, Found: true,
+			Profile: "default", ControlPlaneURL: "https://x.test"}, "https://x.test", "darwin", "arm64")
+		for _, k := range []string{"installed", "found", "pinned", "control_plane_url", "matches_praxis_url"} {
+			if _, has := b[k]; !has {
+				t.Errorf("#68 field %q went missing", k)
+			}
+		}
+	})
+}
+
+func toStrings(v any) []string {
+	out, _ := v.([]string)
+	return out
 }

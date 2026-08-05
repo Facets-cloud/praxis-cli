@@ -193,12 +193,15 @@ raptor get releases -p <project> -e <env> -o json
 
 Preflight — once per session, before the first raptor command:
 
-  - **Installed?** ` + "`command -v raptor`" + ` — if missing, ask the user to
-    install it; don't install it yourself.
-  - **Logged in?** ` + "`raptor whoami`" + ` — if it errors, ask the user to run
-    ` + "`raptor login`" + ` (a browser flow that stores a PAT in
-    ` + "`~/.facets/credentials`" + `). Never ask for a token in chat or write
-    credentials yourself.
+  - **Installed?** ` + "`command -v raptor`" + ` — if missing, install it for
+    the user with the ` + "`raptor.install_hint.commands`" + ` from
+    ` + "`praxis status --json`" + ` (already resolved for this OS/arch; no
+    sudo). See "Raptor profile ≠ praxis profile" below.
+  - **Logged in?** ` + "`raptor whoami`" + ` — if it errors, RUN
+    ` + "`raptor login`" + ` for the user. It opens their browser and they
+    complete the sign-in; it stores a PAT in
+    ` + "`~/.facets/credentials`" + `. Wait for exit 0. Never ask for a token
+    in chat or write credentials yourself.
   - **Up to date?** ` + "`praxis status --json`" + ` reports ` + "`tools`" + ` as an
     ARRAY, one object per tool with its ` + "`current`" + `/` + "`latest`" + ` version
     and a ` + "`stale`" + ` flag. Find the entry whose ` + "`tool`" + ` is
@@ -231,8 +234,26 @@ Act on it:
     askpraxis.ai (no raptor CP matches it). Otherwise say which two hosts
     you see and ask the user which is intended BEFORE any raptor write;
     read-only exploration may proceed with a note.
-  - ` + "`found: false`" + ` — raptor has no usable profile; ask the user to
-    run ` + "`raptor login`" + `.
+  - ` + "`installed: false`" + ` — raptor isn't on this machine at all, so every
+    control-plane command will fail. The block carries an
+    ` + "`install_hint`" + `. Point the user at ` + "`install_hint.docs`" + `
+    FIRST — that's raptor's own README and the maintained source of truth
+    (its steps end in ` + "`sudo mv … /usr/local/bin`" + `). If the user
+    can't run those, or asks you to do it, use
+    ` + "`install_hint.no_sudo_commands`" + `: already resolved for this
+    OS/arch and free of sudo, which you can't answer a password prompt
+    for. It installs to ` + "`~/.local/bin`" + `, so check that's on PATH
+    afterwards. When ` + "`asset_url`" + ` is absent raptor publishes no
+    build for this platform — docs only, don't improvise. Then continue
+    to ` + "`raptor login`" + ` below.
+  - ` + "`found: false`" + ` — raptor has no usable profile. RUN
+    ` + "`raptor login`" + ` on the user's behalf, exactly as you do for
+    ` + "`praxis login`" + `: it opens their browser and they complete the
+    sign-in themselves. Wait for exit 0. Never ask for a token in chat,
+    and never write ` + "`~/.facets/credentials`" + ` yourself.
+  - ` + "`setup_complete`" + ` (top level, not inside the raptor block) — true
+    only when praxis is logged in AND raptor is installed and resolved.
+    Check it first; the two bullets above say what to do when it's false.
 
 ## Discovering MCP tools
 
