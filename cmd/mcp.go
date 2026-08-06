@@ -318,8 +318,8 @@ var callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Dur
 	client := &http.Client{
 		Timeout: timeout,
 		// Go's default redirect policy downgrades POST→GET and drops the
-		// body on 301/302/303. A gateway that 301-redirects (e.g. the
-		// askpraxis.ai apex → www) would therefore turn every invoke into
+		// body on 301/302/303. A gateway that 301-redirects to its canonical
+		// host would therefore turn every invoke into
 		// a body-less GET that 404s — misreported downstream as "unknown
 		// mcp/fn". Preserve the method, body, and Authorization header so
 		// the invoke survives the redirect intact.
@@ -368,8 +368,8 @@ var callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Dur
 }
 
 // isDomainOrSubdomain reports whether child is the same host as parent
-// or a label-aligned subdomain of it (www.askpraxis.ai ⊂ askpraxis.ai,
-// but evilaskpraxis.ai ⊄ askpraxis.ai). This is the same rule net/http
+// or a label-aligned subdomain of it (www.example.test ⊂ example.test,
+// but evilexample.test ⊄ example.test). This is the same rule net/http
 // uses to decide whether sensitive headers may follow a redirect.
 func isDomainOrSubdomain(child, parent string) bool {
 	child, parent = strings.ToLower(child), strings.ToLower(parent)

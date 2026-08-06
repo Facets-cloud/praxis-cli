@@ -43,8 +43,7 @@ const ExecutionPreamble = "" +
 	"> Raptor's profile is NOT praxis's profile — check the `raptor` block in\n" +
 	"> `praxis status --json`. If `pinned` is true, prefix EVERY raptor command\n" +
 	"> with `FACETS_PROFILE=<profile>` (env vars don't persist across shell\n" +
-	"> calls). If `matches_praxis_url` is false unexpectedly (a praxis profile\n" +
-	"> on askpraxis.ai never matches — that's fine), raptor is aimed at a\n" +
+	"> calls). If `matches_praxis_url` is false unexpectedly, raptor is aimed at a\n" +
 	"> DIFFERENT control plane than praxis: ask the user before any write.\n" +
 	">\n" +
 	"> **Discovering what's available** — to see every MCP and function the\n" +

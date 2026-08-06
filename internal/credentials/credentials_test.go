@@ -96,7 +96,7 @@ func TestPutLoadGet_RoundTrip(t *testing.T) {
 
 func TestPut_AddsSecondProfileWithoutClobberingFirst(t *testing.T) {
 	withHome(t)
-	if err := Put("default", Profile{URL: "https://askpraxis.ai", Username: "a@x", Token: "t1"}); err != nil {
+	if err := Put("default", Profile{URL: "https://default.test", Username: "a@x", Token: "t1"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := Put("acme", Profile{URL: "https://acme.test", Username: "b@x", Token: "t2"}); err != nil {
@@ -192,10 +192,10 @@ func TestSave_FilePerm0600(t *testing.T) {
 
 func TestINI_FormatMatchesFacetsConvention(t *testing.T) {
 	withHome(t)
-	_ = Put("default", Profile{URL: "https://askpraxis.ai", Username: "a@x", Token: "t"})
+	_ = Put("default", Profile{URL: "https://default.test", Username: "a@x", Token: "t"})
 	home, _ := os.UserHomeDir()
 	body, _ := os.ReadFile(filepath.Join(home, ".praxis", "credentials"))
-	for _, want := range []string{"[default]", "url      = https://askpraxis.ai", "username = a@x", "token    = t"} {
+	for _, want := range []string{"[default]", "url      = https://default.test", "username = a@x", "token    = t"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("ini output missing %q\nfile:\n%s", want, body)
 		}
@@ -281,17 +281,6 @@ url = https://y
 	}
 	if got["acme"]["url"] != "https://y" {
 		t.Errorf("acme.url = %q", got["acme"]["url"])
-	}
-}
-
-// TestDefaultURL_IsCanonicalHost guards issue #18: the apex
-// https://askpraxis.ai 301-redirects to www, which (before the callMCP
-// redirect fix) broke every MCP invoke on a fresh install. Default to
-// the canonical host so fresh logins don't redirect at all.
-func TestDefaultURL_IsCanonicalHost(t *testing.T) {
-	const want = "https://www.askpraxis.ai"
-	if DefaultURL != want {
-		t.Errorf("DefaultURL = %q, want %q (canonical host, no 301 redirect)", DefaultURL, want)
 	}
 }
 

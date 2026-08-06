@@ -62,7 +62,7 @@ var osExit = os.Exit
 
 func init() {
 	loginCmd.Flags().StringVar(&loginProfile, "profile", "", "save under this profile name (default: \"default\")")
-	loginCmd.Flags().StringVar(&loginURL, "url", "", "Praxis deployment URL (default: existing profile URL or "+credentials.DefaultURL+")")
+	loginCmd.Flags().StringVar(&loginURL, "url", "", "Praxis deployment URL (required for a new profile; existing profiles reuse their saved URL)")
 	loginCmd.Flags().StringVar(&loginToken, "token", "", "skip browser flow; save and verify the given API key directly")
 	loginCmd.Flags().BoolVar(&loginForce, "force", false, "skip reusing a stored token; always open the browser")
 	loginCmd.Flags().BoolVar(&loginLocal, "local", false,
@@ -99,7 +99,7 @@ var loginCmd = &cobra.Command{
 
 Multiple deployments? Use --profile to keep them separate:
 
-  praxis login                                    → "default"
+  praxis login --url https://acme.console.facets.cloud → "default"
   praxis login --profile acme --url https://...   → "acme"
   praxis login --profile bigcorp --url https://.. → "bigcorp"
 
@@ -123,7 +123,7 @@ installed skills — then exits without changing anything.`,
 		baseURL, err := resolveLoginURL(profileName, loginURL)
 		if err != nil {
 			render.PrintError(out, asJSON, err.Error(),
-				"pass --url <https://your-praxis-deployment> to create this profile",
+				"pass --url https://<account-id>.console.facets.cloud to create this profile",
 				exitcode.Usage)
 			return err
 		}
@@ -154,12 +154,9 @@ installed skills — then exits without changing anything.`,
 }
 
 // resolveLoginURL resolves the URL for a NEW or EXISTING profile during
-// login: explicit --url > existing profile's saved URL > built-in default.
-//
-// A NEW *named* profile (one not present in the store) without --url is
-// an error — there's no URL to reuse and guessing askpraxis.ai for a
-// named deployment would be wrong. The "default" profile keeps the
-// built-in fallback so a zero-config first run still works.
+// login: explicit --url > existing profile's saved URL. A new profile,
+// including "default", must provide --url because the CLI cannot safely
+// infer which organization deployment the user intends to authenticate to.
 func resolveLoginURL(profileName, flagURL string) (string, error) {
 	if flagURL != "" {
 		return normalizeBaseURL(flagURL), nil
@@ -168,10 +165,7 @@ func resolveLoginURL(profileName, flagURL string) (string, error) {
 	if p, ok := store[profileName]; ok && p.URL != "" {
 		return normalizeBaseURL(p.URL), nil
 	}
-	if profileName == credentials.DefaultProfileName {
-		return credentials.DefaultURL, nil
-	}
-	return "", fmt.Errorf("profile %q does not exist yet; pass --url to create it", profileName)
+	return "", fmt.Errorf("profile %q has no saved URL; pass --url to create it", profileName)
 }
 
 // normalizeBaseURL strips trailing slashes so path concatenation
@@ -263,7 +257,7 @@ func browserSessionPollLogin(out io.Writer, asJSON bool, profileName, baseURL st
 	openURL, err := buildLoginURL(baseURL, sessionNonce, suggestedKeyName())
 	if err != nil {
 		render.PrintError(out, asJSON, err.Error(),
-			"check the --url value (or PRAXIS_URL) — it must be a valid URL",
+			"check the --url value — it must be a valid URL",
 			exitcode.Usage)
 		os.Exit(exitcode.Usage)
 	}
@@ -549,9 +543,9 @@ type authMeResponse struct {
 	Username string `json:"username"`
 
 	// canonicalBaseURL is the deployment base URL the /auth/me call
-	// actually landed on after following redirects (e.g. the apex
-	// askpraxis.ai 301s to www). Login persists this instead of the URL
-	// the user typed, so later MCP invokes never pay that redirect.
+	// actually landed on after following redirects. Login persists this
+	// instead of the URL the user typed, so later MCP invokes never pay
+	// that redirect.
 	// Empty when a test stub doesn't set it — callers fall back to the
 	// URL they already have.
 	canonicalBaseURL string
