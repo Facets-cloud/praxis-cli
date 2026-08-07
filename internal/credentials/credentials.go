@@ -3,7 +3,7 @@
 // users coming from facets-cli have zero learning curve.
 //
 //	[default]
-//	url      = https://askpraxis.ai
+//	url      = https://acme.console.facets.cloud
 //	username = anshul@facets.cloud
 //	token    = sk_live_…
 //
@@ -58,12 +58,6 @@ func validateProfileName(name string) error {
 	}
 	return nil
 }
-
-// DefaultURL is the built-in fallback when a profile has no URL set.
-// Use the canonical www host: the apex https://askpraxis.ai
-// 301-redirects to www, and a stored apex URL forces every MCP invoke
-// to pay (and, before the callMCP redirect fix, fail on) that redirect.
-const DefaultURL = "https://www.askpraxis.ai"
 
 // DefaultProfileName is the literal section name used when no other
 // signal selects a profile.

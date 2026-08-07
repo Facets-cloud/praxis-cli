@@ -12,11 +12,10 @@ import (
 
 // ─── issue #19-A: canonicalize the host at login ─────────────────────────
 //
-// The apex https://askpraxis.ai 301-redirects to www. fetchAuthMe's GET
-// follows the redirect, so login *works* against the apex — but if the
-// CLI then stores the apex URL, every later MCP invoke pays (and used to
-// fail on) that redirect. Login must store the scheme://host the
-// /auth/me call actually landed on.
+// A deployment URL can redirect to its canonical host. fetchAuthMe's GET
+// follows the redirect, but storing the original URL makes every later MCP
+// invoke pay that redirect. Login must store the scheme://host the /auth/me
+// call actually landed on.
 
 // canonicalPair spins up a "final" server serving /ai-api/auth/me and a
 // "stale" server that 301-redirects everything to it, mimicking the

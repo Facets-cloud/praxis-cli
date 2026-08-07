@@ -69,7 +69,7 @@ homebrew_casks:
       # repo secret of the same name.
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Casks
-    homepage: https://askpraxis.ai
+    homepage: https://facets.cloud
     description: Bring Praxis cloud capabilities to any local AI host
     license: MIT
     # Helps `brew audit` pass when homepage domain differs from the
@@ -95,7 +95,7 @@ homebrew_casks:
           system_command "#{HOMEBREW_PREFIX}/bin/praxis", args: ["setup"], must_succeed: false
     commit_author:
       name: praxis-bot
-      email: bot@askpraxis.ai
+      email: bot@facets.cloud
 
 changelog:
   sort: asc

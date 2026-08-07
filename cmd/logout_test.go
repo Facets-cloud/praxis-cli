@@ -44,7 +44,7 @@ func TestLogoutCmd_RemovesActive(t *testing.T) {
 	resetLogoutFlags()
 
 	if err := credentials.Put("default", credentials.Profile{
-		URL:      "https://askpraxis.ai",
+		URL:      "https://default.test",
 		Username: "x@x.com",
 		Token:    "sk_live_abc",
 	}); err != nil {

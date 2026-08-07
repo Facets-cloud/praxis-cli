@@ -210,9 +210,9 @@ func TestMatchesHost(t *testing.T) {
 		{"same host", "https://root.console.facets.cloud", "https://root.console.facets.cloud", true},
 		{"case-insensitive", "https://Root.Console.Facets.Cloud", "https://root.console.facets.cloud", true},
 		{"scheme and path ignored", "https://acme.console.facets.cloud/ai-api", "http://acme.console.facets.cloud", true},
-		{"different hosts", "https://www.askpraxis.ai", "https://root.console.facets.cloud", false},
+		{"different hosts", "https://praxis.example.test", "https://root.console.facets.cloud", false},
 		{"empty praxis URL", "", "https://root.console.facets.cloud", false},
-		{"empty cp URL", "https://www.askpraxis.ai", "", false},
+		{"empty cp URL", "https://praxis.example.test", "", false},
 		{"unparseable", "://bad", "https://root.console.facets.cloud", false},
 		{"hostless (no scheme)", "root.console.facets.cloud", "https://root.console.facets.cloud", false},
 	}

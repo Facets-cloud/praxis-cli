@@ -80,11 +80,11 @@ func stubOsExit(t *testing.T) *int {
 func resetLoginFlags(t *testing.T) {
 	t.Helper()
 	loginProfile, loginURL, loginToken, loginRaptorProfile = "", "", "", ""
-	loginForce, loginLocal, loginJSON = false, false, false
+	loginForce, loginLocal, loginJSON, loginDryRun = false, false, false, false
 	loginTimeout = 90 * time.Second
 	t.Cleanup(func() {
 		loginProfile, loginURL, loginToken, loginRaptorProfile = "", "", "", ""
-		loginForce, loginLocal, loginJSON = false, false, false
+		loginForce, loginLocal, loginJSON, loginDryRun = false, false, false, false
 		loginTimeout = 90 * time.Second
 	})
 }
@@ -123,9 +123,9 @@ func TestResolveLoginURL(t *testing.T) {
 			wantURL: "https://acme.test",
 		},
 		{
-			name:    "default profile falls back to the built-in URL",
+			name:    "new default profile without --url errors",
 			profile: "default", flagURL: "",
-			wantURL: credentials.DefaultURL,
+			wantErr: true, errContains: "--url",
 		},
 		{
 			name:    "new named profile without --url errors",
@@ -180,7 +180,7 @@ func TestTryReuseStoredToken(t *testing.T) {
 		{
 			name:      "no stored token → no reuse, browser fallback",
 			seed:      false,
-			targetURL: credentials.DefaultURL,
+			targetURL: "https://new.test",
 		},
 		{
 			name:      "URL re-target skips reuse without verifying",
@@ -286,6 +286,34 @@ func TestTryReuseStoredToken(t *testing.T) {
 	}
 }
 
+func TestLoginRunE_NewDefaultRequiresURLBeforeSideEffects(t *testing.T) {
+	isolateHome(t)
+	resetLoginFlags(t)
+	browser := stubBrowserLogin(t)
+	post := stubPostAuth(t)
+
+	out, err := runLoginRunE(t)
+	if err == nil || !strings.Contains(err.Error(), "--url") {
+		t.Fatalf("err = %v, want missing --url error", err)
+	}
+	if !strings.Contains(out, "console.facets.cloud") {
+		t.Errorf("output = %q, want organization URL guidance", out)
+	}
+	if *browser {
+		t.Error("browser flow ran before a URL was configured")
+	}
+	if *post {
+		t.Error("post-auth setup ran before a URL was configured")
+	}
+	store, loadErr := credentials.Load()
+	if loadErr != nil {
+		t.Fatalf("credentials.Load(): %v", loadErr)
+	}
+	if len(store) != 0 {
+		t.Errorf("credentials were written: %+v", store)
+	}
+}
+
 // ─── RunE precedence ─────────────────────────────────────────────────────
 //
 // These stay as separate functions rather than a table: each exercises a
@@ -379,6 +407,7 @@ func TestLoginRunE_ForceOpensBrowser(t *testing.T) {
 func TestLoginRunE_NoStoredTokenOpensBrowser(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
+	loginURL = "https://new.test"
 	browser := stubBrowserLogin(t)
 	stubPostAuth(t)
 	if _, err := runLoginRunE(t); err != nil {

@@ -176,8 +176,8 @@ func TestPrettyJSON(t *testing.T) {
 }
 
 // TestCallMCP_PreservesPOSTAcrossRedirect reproduces the issue #18 P0:
-// the default host https://askpraxis.ai 301-redirects to www, and Go's
-// default http.Client downgrades POST→GET and drops the body on a 301,
+// a canonical-host redirect exposed that Go's default http.Client
+// downgrades POST→GET and drops the body on a 301,
 // so every invoke hits a body-less GET that 404s and gets misreported
 // as "unknown mcp/fn". callMCP must preserve the method, body, and
 // Authorization header across the gateway's redirect.
@@ -269,12 +269,12 @@ func TestIsDomainOrSubdomain(t *testing.T) {
 		child, parent string
 		want          bool
 	}{
-		{"askpraxis.ai", "askpraxis.ai", true},
-		{"www.askpraxis.ai", "askpraxis.ai", true},  // apex → www
-		{"WWW.ASKPRAXIS.AI", "askpraxis.ai", true},  // case-insensitive
-		{"askpraxis.ai", "www.askpraxis.ai", false}, // parent isn't a suffix domain of child
-		{"evilaskpraxis.ai", "askpraxis.ai", false}, // suffix must be label-aligned
-		{"evil.com", "askpraxis.ai", false},
+		{"example.test", "example.test", true},
+		{"www.example.test", "example.test", true},  // apex → www
+		{"WWW.EXAMPLE.TEST", "example.test", true},  // case-insensitive
+		{"example.test", "www.example.test", false}, // parent isn't a suffix domain of child
+		{"evilexample.test", "example.test", false}, // suffix must be label-aligned
+		{"evil.test", "example.test", false},
 		{"localhost", "127.0.0.1", false},
 	}
 	for _, tt := range tests {

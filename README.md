@@ -101,14 +101,11 @@ that does everything you need:
 
 ### Where does login go?
 
-By default `praxis login` points at the public SaaS instance
-(`https://askpraxis.ai`). If your team runs Praxis at a different URL
-— e.g. a Facets-hosted deployment for your org, or a self-hosted
-install — pass `--url` the first time you log in. Ask your Praxis
-admin if you don't know the URL.
+Pass your organization's Praxis deployment URL the first time you log in.
+Ask your Praxis administrator if you don't know it.
 
 ```bash
-praxis login --url https://praxis.your-org.example
+praxis login --url https://<account-id>.console.facets.cloud
 ```
 
 Once saved, you don't need to pass `--url` again. Re-running

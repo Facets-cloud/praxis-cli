@@ -176,8 +176,7 @@ Override at build time: `make build VERSION=v0.5.0-dev`.
 
 Released via Homebrew (`Facets-cloud/homebrew-tap`) and direct GitHub
 Releases binary download. `praxis update` self-updates against GitHub
-Releases. `install.askpraxis.ai` is a separate shell-script install
-path (not yet built).
+Releases.
 
 ## Shipping a change (merge → release → upgrade → test)
 

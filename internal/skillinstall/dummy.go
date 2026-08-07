@@ -230,9 +230,8 @@ Act on it:
     raptor command: ` + "`FACETS_PROFILE=<profile> raptor …`" + `. Per-command
     prefix, never ` + "`export`" + ` — each shell call starts fresh.
   - ` + "`matches_praxis_url: false`" + ` — raptor targets a different control
-    plane than this praxis profile. Expected when praxis points at
-    askpraxis.ai (no raptor CP matches it). Otherwise say which two hosts
-    you see and ask the user which is intended BEFORE any raptor write;
+    plane than this praxis profile. Say which two hosts you see and ask the
+    user which is intended BEFORE any raptor write;
     read-only exploration may proceed with a note.
   - ` + "`installed: false`" + ` — raptor isn't on this machine at all, so every
     control-plane command will fail. The block carries an
