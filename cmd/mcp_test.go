@@ -182,7 +182,7 @@ func TestPrettyJSON(t *testing.T) {
 // as "unknown mcp/fn". callMCP must preserve the method, body, and
 // Authorization header across the gateway's redirect.
 func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
-	var gotMethod, gotBody, gotAuth string
+	var gotMethod, gotBody, gotAuth, gotUser string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ai-api/v1/mcp/raptor_cli/run_raptor_cli", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ai-api/v1/mcp/raptor_cli/run_raptor_cli/final", http.StatusMovedPermanently)
@@ -190,6 +190,7 @@ func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
 	mux.HandleFunc("/ai-api/v1/mcp/raptor_cli/run_raptor_cli/final", func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotAuth = r.Header.Get("Authorization")
+		gotUser = r.Header.Get("X-Facets-Username")
 		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
 		w.WriteHeader(http.StatusOK)
@@ -199,7 +200,8 @@ func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
 	defer srv.Close()
 
 	body := []byte(`{"command":"get projects"}`)
-	resp, status, err := callMCP(srv.URL, bearer("sk_test_T"), "raptor_cli", "run_raptor_cli", body, 5*time.Second)
+	auth := map[string]string{"Authorization": "Bearer sk_test_T", "X-Facets-Username": "u@corp"}
+	resp, status, err := callMCP(srv.URL, auth, "raptor_cli", "run_raptor_cli", body, 5*time.Second)
 	if err != nil {
 		t.Fatalf("callMCP error: %v", err)
 	}
@@ -214,6 +216,11 @@ func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
 	}
 	if gotAuth != "Bearer sk_test_T" {
 		t.Errorf("Authorization after redirect = %q, want %q", gotAuth, "Bearer sk_test_T")
+	}
+	// The identity header must survive a same-origin redirect too, or a
+	// facets-mode invoke 401s after the gateway's canonical-host hop.
+	if gotUser != "u@corp" {
+		t.Errorf("X-Facets-Username after same-origin redirect = %q, want %q", gotUser, "u@corp")
 	}
 }
 

@@ -126,3 +126,78 @@ func TestIsDomainOrSubdomain(t *testing.T) {
 		}
 	}
 }
+
+// checkRedirect is unit-tested directly for the scheme/cookie rules: an
+// https→http redirect can't be built from httptest without wiring a trusted
+// TLS cert into the client under test.
+func TestCheckRedirect_StripsSensitiveHeaders(t *testing.T) {
+	tests := []struct {
+		name     string
+		from, to string
+		wantKept bool
+	}{
+		{"same host keeps everything", "https://cp.test/a", "https://cp.test/b", true},
+		{"subdomain keeps everything", "https://cp.test/a", "https://www.cp.test/b", true},
+		{"foreign host strips", "https://cp.test/a", "https://evil.example/b", false},
+		{"https→http on the SAME host strips", "https://cp.test/a", "http://cp.test/b", false},
+		{"http→http is not a downgrade", "http://cp.test/a", "http://cp.test/b", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orig, err := http.NewRequest("GET", tt.from, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Mirror what net/http hands CheckRedirect: the header set it
+			// already prepared for the NEW request.
+			req, err := http.NewRequest("GET", tt.to, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, h := range []string{"Authorization", "Cookie", "X-Facets-Username"} {
+				req.Header.Set(h, "secret")
+			}
+			if err := checkRedirect(req, []*http.Request{orig}); err != nil {
+				t.Fatal(err)
+			}
+			for _, h := range []string{"Authorization", "Cookie", "X-Facets-Username"} {
+				got := req.Header.Get(h) != ""
+				if got != tt.wantKept {
+					t.Errorf("%s kept = %v, want %v", h, got, tt.wantKept)
+				}
+			}
+		})
+	}
+}
+
+// The old policy cloned the original headers over the ones net/http prepared,
+// which restored the Cookie Go had just stripped for a foreign host.
+func TestNew_DropsCookieOnForeignRedirect(t *testing.T) {
+	var gotCookie string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCookie = r.Header.Get("Cookie")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	from := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, strings.Replace(target.URL, "127.0.0.1", "localhost", 1), http.StatusFound)
+	}))
+	defer from.Close()
+
+	req, err := http.NewRequest("GET", from.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Cookie", "session=abc")
+
+	resp, err := New(5 * time.Second).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if gotCookie != "" {
+		t.Errorf("Cookie survived a foreign redirect: %q", gotCookie)
+	}
+}

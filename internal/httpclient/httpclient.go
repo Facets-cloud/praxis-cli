@@ -13,14 +13,16 @@ package httpclient
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
-// sensitiveHeaders are stripped when a redirect leaves the original domain.
-// Authorization is listed even though Go strips it itself — the CheckRedirect
-// hook below replaces the whole header set, so it has to reapply the rule.
-var sensitiveHeaders = []string{"Authorization", "X-Facets-Username"}
+// sensitiveHeaders must not survive a redirect that leaves the original domain
+// or downgrades the scheme. Go already strips its own list on a domain change,
+// but not on an https→http downgrade (that isn't a domain change) — and it has
+// never heard of X-Facets-Username.
+var sensitiveHeaders = []string{"Authorization", "Cookie", "Cookie2", "X-Facets-Username"}
 
 // New returns a client that carries a request's method, body, and auth headers
 // across redirects, dropping the auth headers when the target leaves the
@@ -39,9 +41,12 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 		return errors.New("stopped after 10 redirects")
 	}
 	orig := via[0]
+	// Restore the method and body only. req.Header is the set net/http already
+	// prepared, with ITS sensitive headers stripped if the domain changed —
+	// cloning orig.Header over it would undo that and hand a foreign host the
+	// cookies Go had just removed.
 	req.Method = orig.Method
-	req.Header = orig.Header.Clone()
-	if !isDomainOrSubdomain(req.URL.Hostname(), orig.URL.Hostname()) {
+	if !isDomainOrSubdomain(req.URL.Hostname(), orig.URL.Hostname()) || isDowngrade(orig.URL, req.URL) {
 		for _, h := range sensitiveHeaders {
 			req.Header.Del(h)
 		}
@@ -55,6 +60,13 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 		req.ContentLength = orig.ContentLength
 	}
 	return nil
+}
+
+// isDowngrade reports an https→http redirect. Go doesn't treat this as
+// sensitive because the host may be unchanged, but it would put a bearer token
+// on the wire in cleartext.
+func isDowngrade(from, to *url.URL) bool {
+	return from.Scheme == "https" && to.Scheme != "https"
 }
 
 // isDomainOrSubdomain mirrors Go's own sensitive-header rule: the target is the
