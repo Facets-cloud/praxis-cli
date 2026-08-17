@@ -15,6 +15,14 @@ func bearer(tok string) map[string]string {
 	return map[string]string{"Authorization": "Bearer " + tok}
 }
 
+// facetsAuth is the Auth() header map a facets-mode (control-plane PAT) profile
+// produces: the identity header rides alongside the bearer token, and this
+// transport must forward BOTH — an Authorization-only assertion would pass while
+// facets-mode requests fail server-side.
+func facetsAuth(user, tok string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + tok, "X-Facets-Username": user}
+}
+
 func assertReq(t *testing.T, r *http.Request, wantMethod, wantPath, wantBearer string) {
 	t.Helper()
 	if r.Method != wantMethod {
@@ -609,5 +617,37 @@ func TestRequiresBaseURLAndToken(t *testing.T) {
 	}
 	if _, _, _, err := DownloadBundle("", bearer("tok"), "c", ""); err == nil {
 		t.Error("want error for empty baseURL on DownloadBundle")
+	}
+}
+
+func TestSendBytes_ForwardsFacetsIdentityHeader(t *testing.T) {
+	var auth, ident string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, ident = r.Header.Get("Authorization"), r.Header.Get("X-Facets-Username")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	if err := PublishMember(srv.URL, facetsAuth("u@corp", "pat"), "cat", "mem", []byte("gz"), "git", "sha"); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer pat" || ident != "u@corp" {
+		t.Errorf("forwarded auth=%q identity=%q, want both", auth, ident)
+	}
+}
+
+func TestDownloadBundle_ForwardsFacetsIdentityHeader(t *testing.T) {
+	var auth, ident string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, ident = r.Header.Get("Authorization"), r.Header.Get("X-Facets-Username")
+		_, _ = w.Write([]byte("bundle"))
+	}))
+	defer srv.Close()
+
+	if _, _, _, err := DownloadBundle(srv.URL, facetsAuth("u@corp", "pat"), "cat", ""); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer pat" || ident != "u@corp" {
+		t.Errorf("forwarded auth=%q identity=%q, want both", auth, ident)
 	}
 }

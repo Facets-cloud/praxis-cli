@@ -12,6 +12,14 @@ func bearer(tok string) map[string]string {
 	return map[string]string{"Authorization": "Bearer " + tok}
 }
 
+// facetsAuth is the Auth() header map a facets-mode (control-plane PAT) profile
+// produces: the identity header rides alongside the bearer token, and this
+// transport must forward BOTH — an Authorization-only assertion would pass while
+// facets-mode requests fail server-side.
+func facetsAuth(user, tok string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + tok, "X-Facets-Username": user}
+}
+
 // assertReq pins the request's method, path, and Bearer token. Shared by
 // stubServer and the query-asserting tests below so none of them lose the
 // method/path/auth checks.
@@ -230,5 +238,37 @@ func TestDoJSON_RequiresBaseURLAndToken(t *testing.T) {
 	}
 	if _, err := ListRuns("http://x.test", nil, "agt", "", 0); err == nil {
 		t.Error("want error for empty token")
+	}
+}
+
+func TestDoJSON_ForwardsFacetsIdentityHeader(t *testing.T) {
+	var auth, ident string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, ident = r.Header.Get("Authorization"), r.Header.Get("X-Facets-Username")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	if _, err := ListSchedules(srv.URL, facetsAuth("u@corp", "pat"), "agent1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer pat" || ident != "u@corp" {
+		t.Errorf("forwarded auth=%q identity=%q, want both", auth, ident)
+	}
+}
+
+func TestFetchArtifactContent_ForwardsFacetsIdentityHeader(t *testing.T) {
+	var auth, ident string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, ident = r.Header.Get("Authorization"), r.Header.Get("X-Facets-Username")
+		_, _ = w.Write([]byte("report"))
+	}))
+	defer srv.Close()
+
+	if _, _, err := FetchArtifactContent(srv.URL, facetsAuth("u@corp", "pat"), "art1"); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer pat" || ident != "u@corp" {
+		t.Errorf("forwarded auth=%q identity=%q, want both", auth, ident)
 	}
 }

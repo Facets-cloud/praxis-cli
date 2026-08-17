@@ -271,33 +271,6 @@ func TestCallMCP_DropsAuthOnCrossDomainRedirect(t *testing.T) {
 	}
 }
 
-func TestIsDomainOrSubdomain(t *testing.T) {
-	tests := []struct {
-		child, parent string
-		want          bool
-	}{
-		{"example.test", "example.test", true},
-		{"www.example.test", "example.test", true},  // apex → www
-		{"WWW.EXAMPLE.TEST", "example.test", true},  // case-insensitive
-		{"example.test", "www.example.test", false}, // parent isn't a suffix domain of child
-		{"evilexample.test", "example.test", false}, // suffix must be label-aligned
-		{"evil.test", "example.test", false},
-		{"localhost", "127.0.0.1", false},
-	}
-	for _, tt := range tests {
-		if got := isDomainOrSubdomain(tt.child, tt.parent); got != tt.want {
-			t.Errorf("isDomainOrSubdomain(%q, %q) = %v, want %v", tt.child, tt.parent, got, tt.want)
-		}
-	}
-}
-
-// TestPrettyMCPOutput_UnwrapsSingleTextEnvelope covers issue #18 E3:
-// the gateway wraps tool output as
-// {"content":[{"type":"text","text":"<escaped JSON>"}]}. For human
-// (pretty) output the single text payload should be unwrapped and its
-// inner JSON pretty-printed, instead of showing double-encoded escapes.
-// humanOutput parses raw and renders it the way the command's human
-// (non-JSON) path does.
 func humanOutput(raw string, forceEnvelope bool) string {
 	return mcpHumanOutput([]byte(raw), parseMCPResponse([]byte(raw)), forceEnvelope)
 }

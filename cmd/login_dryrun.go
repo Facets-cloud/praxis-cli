@@ -68,7 +68,15 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		case "supplied":
 			tokenStatus, action = "supplied-invalid", "fail (supplied token rejected)"
 		case "stored":
+			// Login doesn't stop at a dead stored token: tryReuseStoredToken
+			// returns handled=false and the PAT gets its turn. Probe it too, or
+			// the report says "browser" where login would use the PAT.
 			tokenStatus, action = "stored-invalid", "browser"
+			if c, hasPAT := facetsPATCandidate(profileName, baseURL); hasPAT && !loginForce {
+				if _, perr := fetchAuthMe(baseURL, c.asProfile().Auth()); perr == nil {
+					tokenStatus, action = "stored-invalid, facets-pat-valid", "facets-pat (no browser)"
+				}
+			}
 		case "facets-pat":
 			tokenStatus, action = "facets-pat-invalid", "browser"
 		}

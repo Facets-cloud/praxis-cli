@@ -1,10 +1,33 @@
 package cmd
 
 import (
+	"errors"
+	"io"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 )
+
+// captureStderr redirects os.Stderr for the duration of the test; the returned
+// func reads what was written. login's fallback notices go to stderr so they
+// never corrupt --json output on stdout.
+func captureStderr(t *testing.T) func() string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = orig })
+	return func() string {
+		w.Close()
+		b, _ := io.ReadAll(r)
+		return string(b)
+	}
+}
 
 // clearFacetsEnv keeps raptor's env-based resolution (which raptorstate
 // mirrors) out of the fake HOME the credentials file lives in.
@@ -108,6 +131,40 @@ func TestLoginRunE_FallsBackToBrowserWhenPATRejected(t *testing.T) {
 	}
 }
 
+// A transient failure is not a verdict on the PAT: login still falls through
+// (the browser flow hits the same unreachable host) but must not report the
+// credential as rejected.
+func TestLoginRunE_TransientErrorIsNotAPATVerdict(t *testing.T) {
+	isolateHome(t)
+	resetLoginFlags(t)
+	clearFacetsEnv(t)
+	seedRaptorCreds(t, "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat123\n")
+	stubPostAuth(t)
+	browsed := stubBrowserLogin(t)
+	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
+		return nil, errors.New("dial tcp: i/o timeout")
+	})
+
+	loginURL = "https://cp.test"
+	stderr := captureStderr(t)
+	if _, err := runLoginRunE(t); err != nil {
+		t.Fatalf("login err: %v", err)
+	}
+	if !*browsed {
+		t.Error("browser did not open after the PAT could not be verified")
+	}
+	got := stderr()
+	if strings.Contains(got, "not accepted") {
+		t.Errorf("transient failure reported as a rejected PAT: %q", got)
+	}
+	if !strings.Contains(got, "could not be verified") {
+		t.Errorf("stderr should say the PAT was unverified; got %q", got)
+	}
+	if store, _ := credentials.Load(); store["default"].Token != "" {
+		t.Errorf("an unverified PAT must not be persisted; got %+v", store["default"])
+	}
+}
+
 func TestLoginRunE_NoFacetsCredsGoesStraightToBrowser(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
@@ -181,6 +238,13 @@ func TestFacetsPATCandidate(t *testing.T) {
 			baseURL:     "http://localhost:8000",
 			wantSection: "default",
 			wantOK:      true,
+		},
+		{
+			// http:// to the CP would put the PAT on the wire in cleartext.
+			name:    "plaintext http to the control plane gets no candidate",
+			creds:   "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat\n",
+			baseURL: "http://cp.test",
+			wantOK:  false,
 		},
 		{
 			// A control-plane PAT must never reach a host that isn't that CP.

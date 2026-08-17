@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 )
 
@@ -131,7 +132,7 @@ func fetchOne(baseURL string, auth map[string]string, path, kind string) ([]Agen
 	}
 	req.Header.Set("Accept", "application/json")
 
-	client := &http.Client{Timeout: defaultTimeout}
+	client := httpclient.New(defaultTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

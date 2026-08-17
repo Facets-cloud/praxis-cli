@@ -14,6 +14,14 @@ func bearer(tok string) map[string]string {
 	return map[string]string{"Authorization": "Bearer " + tok}
 }
 
+// facetsAuth is the Auth() header map a facets-mode (control-plane PAT) profile
+// produces: the identity header rides alongside the bearer token, and this
+// transport must forward BOTH — an Authorization-only assertion would pass while
+// facets-mode requests fail server-side.
+func facetsAuth(user, tok string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + tok, "X-Facets-Username": user}
+}
+
 // stubServer spins up an httptest.Server with a request-validating
 // handler. The handler asserts auth headers and content-type, and
 // returns whatever body the table-row provides.
@@ -238,5 +246,21 @@ func TestTruncate(t *testing.T) {
 				t.Errorf("got %q; want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDoJSON_ForwardsFacetsIdentityHeader(t *testing.T) {
+	var auth, ident string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, ident = r.Header.Get("Authorization"), r.Header.Get("X-Facets-Username")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	if _, err := List(srv.URL, facetsAuth("u@corp", "pat"), ListParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer pat" || ident != "u@corp" {
+		t.Errorf("forwarded auth=%q identity=%q, want both", auth, ident)
 	}
 }

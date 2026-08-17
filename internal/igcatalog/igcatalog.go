@@ -33,6 +33,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 )
 
 const (
@@ -223,7 +225,7 @@ var DownloadBundle = func(baseURL string, auth map[string]string, catalog, ifNon
 		req.Header.Set("If-None-Match", quoteETag(ifNoneMatch))
 	}
 
-	client := &http.Client{Timeout: bundleTimeout}
+	client := httpclient.New(bundleTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", false, err
@@ -335,7 +337,7 @@ func doJSON[T any](baseURL string, auth map[string]string, method, path string, 
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	client := &http.Client{Timeout: defaultTimeout}
+	client := httpclient.New(defaultTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return zero, err
@@ -384,7 +386,7 @@ func sendBytes(baseURL string, auth map[string]string, method, path, contentType
 		req.Header.Set("Content-Type", contentType)
 	}
 
-	client := &http.Client{Timeout: defaultTimeout}
+	client := httpclient.New(defaultTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

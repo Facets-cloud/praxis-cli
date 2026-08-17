@@ -19,6 +19,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
@@ -320,7 +321,7 @@ func browserSessionPollLogin(out io.Writer, asJSON bool, profileName, baseURL st
 func pollSessionKey(ctx context.Context, baseURL, nonce string, interval time.Duration) (string, error) {
 	endpoint := fmt.Sprintf("%s/ai-api/v1/cli-session/%s/key",
 		strings.TrimRight(baseURL, "/"), nonce)
-	client := &http.Client{Timeout: pollRequestTimeout}
+	client := httpclient.New(pollRequestTimeout)
 
 	for {
 		key, status, err := pollSessionOnce(ctx, client, endpoint)
@@ -431,11 +432,18 @@ func tryFacetsPAT(out io.Writer, asJSON bool, profileName, baseURL string, local
 	prof := c.asProfile()
 	user, err := fetchAuthMe(c.url, prof.Auth())
 	if err != nil {
-		if !asJSON {
-			fmt.Fprintf(os.Stderr,
-				"Control-plane PAT for %s (~/.facets/credentials profile %q) not accepted at %s (%v); opening browser…\n",
-				c.username, c.section, c.url, err)
+		// Only a server verdict means "this PAT is dead". A timeout or 5xx
+		// leaves it unjudged, so say so rather than blaming the credential.
+		// Stderr in both output modes, like resolveRaptorPairing's warnings:
+		// it can't corrupt --json, and a silent fallback to the browser is
+		// the one thing an AI host can't diagnose.
+		verdict := "could not be verified"
+		if errors.Is(err, errTokenRejected) {
+			verdict = "was not accepted"
 		}
+		fmt.Fprintf(os.Stderr,
+			"Control-plane PAT for %s (~/.facets/credentials profile %q) %s at %s (%v); opening browser…\n",
+			c.username, c.section, verdict, c.url, err)
 		return false, nil
 	}
 	if user.canonicalBaseURL != "" {
@@ -474,8 +482,8 @@ func (c facetsPAT) asProfile() credentials.Profile {
 // chosen by raptor's own rules (pin > FACETS_PROFILE > [default] > sole), so
 // praxis picks the PAT raptor commands in the same shell would use.
 //
-// A candidate is only produced for a URL that IS that control plane: in facets
-// mode the agent server is served under the control-plane host itself (it
+// A candidate is only produced for an https URL that IS that control plane: in
+// facets mode the agent server is served under the control-plane host itself (it
 // derives its CP URL from its own X-Forwarded-Host), so a host mismatch could
 // never validate — and a control-plane PAT must never be offered to a host that
 // was merely typed after --url. Loopback is exempt: a developer's own agent
@@ -485,7 +493,11 @@ func facetsPATCandidate(profileName, baseURL string) (facetsPAT, bool) {
 	if !st.Found {
 		return facetsPAT{}, false
 	}
-	if !raptorstate.MatchesHost(baseURL, st.ControlPlaneURL) && !isLoopbackURL(baseURL) {
+	// The PAT only ever travels to its own control plane, and only over TLS.
+	// Loopback is exempt from both: that's a developer's own agent server,
+	// where http:// is normal and there is no network to eavesdrop.
+	if !isLoopbackURL(baseURL) &&
+		(!raptorstate.MatchesHost(baseURL, st.ControlPlaneURL) || !strings.HasPrefix(baseURL, "https://")) {
 		return facetsPAT{}, false
 	}
 	username, token, ok := raptorstate.PAT(st.Profile)
@@ -684,7 +696,7 @@ var errTokenRejected = errors.New("token rejected by server")
 
 // fetchAuthMe is the seam: tests swap it to avoid hitting a real server.
 var fetchAuthMe = func(baseURL string, auth map[string]string) (*authMeResponse, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := httpclient.New(10 * time.Second)
 	req, err := http.NewRequest("GET", baseURL+"/ai-api/auth/me", nil)
 	if err != nil {
 		return nil, err

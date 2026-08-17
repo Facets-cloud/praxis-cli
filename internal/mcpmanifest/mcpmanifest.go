@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
@@ -52,7 +53,7 @@ var Fetch = func(baseURL string, auth map[string]string, timeout time.Duration) 
 	for k, v := range auth {
 		req.Header.Set(k, v)
 	}
-	client := &http.Client{Timeout: timeout}
+	client := httpclient.New(timeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch manifest: %w", err)

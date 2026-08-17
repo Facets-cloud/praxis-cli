@@ -15,6 +15,14 @@ func bearer(tok string) map[string]string {
 	return map[string]string{"Authorization": "Bearer " + tok}
 }
 
+// facetsAuth is the Auth() header map a facets-mode (control-plane PAT) profile
+// produces: the identity header rides alongside the bearer token, and this
+// transport must forward BOTH — an Authorization-only assertion would pass while
+// facets-mode requests fail server-side.
+func facetsAuth(user, tok string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + tok, "X-Facets-Username": user}
+}
+
 func TestFetch_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ai-api/v1/mcp/manifest" {
@@ -125,5 +133,21 @@ func TestWriteSnapshot_OverwritesExisting(t *testing.T) {
 	got, _ := os.ReadFile(dest)
 	if string(got) != "new" {
 		t.Errorf("expected overwrite, got %q", got)
+	}
+}
+
+func TestFetch_ForwardsFacetsIdentityHeader(t *testing.T) {
+	var auth, ident string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, ident = r.Header.Get("Authorization"), r.Header.Get("X-Facets-Username")
+		_, _ = w.Write([]byte(`{"mcps":{}}`))
+	}))
+	defer srv.Close()
+
+	if _, err := Fetch(srv.URL, facetsAuth("u@corp", "pat"), 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer pat" || ident != "u@corp" {
+		t.Errorf("forwarded auth=%q identity=%q, want both", auth, ident)
 	}
 }

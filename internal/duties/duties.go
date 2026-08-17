@@ -34,6 +34,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 )
 
 const (
@@ -223,7 +225,7 @@ var FetchArtifactContent = func(baseURL string, auth map[string]string, artifact
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: defaultTimeout}
+	client := httpclient.New(defaultTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", err
@@ -277,7 +279,7 @@ func doJSON[T any](baseURL string, auth map[string]string, method, path string, 
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	client := &http.Client{Timeout: defaultTimeout}
+	client := httpclient.New(defaultTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return zero, err
