@@ -201,6 +201,55 @@ func TestHasProfile(t *testing.T) {
 	}
 }
 
+func TestPAT(t *testing.T) {
+	body := `[default]
+control_plane_url = https://root.console.facets.cloud
+username = user@corp
+token = pat_abc123
+
+[acme]
+control_plane_url = https://acme.console.facets.cloud
+username = admin@acme
+
+[empty]
+control_plane_url = https://empty.test
+token = pat_no_user
+`
+	tests := []struct {
+		name, profile, wantUser, wantToken string
+		wantOK                             bool
+	}{
+		{name: "default", profile: "default", wantUser: "user@corp", wantToken: "pat_abc123", wantOK: true},
+		{name: "missing token", profile: "acme"},
+		{name: "missing username", profile: "empty"},
+		{name: "unknown profile", profile: "ghost"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			if err := os.MkdirAll(filepath.Join(home, ".facets"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".facets", "credentials"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			user, token, ok := PAT(tt.profile)
+			if ok != tt.wantOK || user != tt.wantUser || token != tt.wantToken {
+				t.Errorf("PAT(%q) = (%q, %q, %v), want (%q, %q, %v)",
+					tt.profile, user, token, ok, tt.wantUser, tt.wantToken, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestPAT_MissingFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, ok := PAT("default"); ok {
+		t.Error("PAT with no credentials file = ok, want false")
+	}
+}
+
 func TestMatchesHost(t *testing.T) {
 	tests := []struct {
 		name             string

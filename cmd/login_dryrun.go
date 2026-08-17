@@ -35,11 +35,13 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 
 	var probeAuth map[string]string
 	tokenSource := "none"
-	switch {
+	switch c, hasPAT := facetsPATCandidate(profileName, baseURL); {
 	case loginToken != "":
 		probeAuth, tokenSource = credentials.Profile{Token: loginToken}.Auth(), "supplied"
 	case exists && prof.Token != "" && prof.URL == baseURL:
 		probeAuth, tokenSource = prof.Auth(), "stored"
+	case hasPAT && !loginForce:
+		probeAuth, tokenSource = c.asProfile().Auth(), "facets-pat"
 	}
 
 	reachable := true
@@ -56,6 +58,8 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 			} else {
 				tokenStatus, action = "stored-valid", "reuse-token (no browser)"
 			}
+		case "facets-pat":
+			tokenStatus, action = "facets-pat-valid", "facets-pat (no browser)"
 		}
 	case errors.Is(err, errTokenRejected):
 		// The server answered — reachable. A 401 on an empty probe token is
@@ -65,6 +69,8 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 			tokenStatus, action = "supplied-invalid", "fail (supplied token rejected)"
 		case "stored":
 			tokenStatus, action = "stored-invalid", "browser"
+		case "facets-pat":
+			tokenStatus, action = "facets-pat-invalid", "browser"
 		}
 	default:
 		reachable = false

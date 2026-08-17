@@ -4,9 +4,10 @@
 // whether that matches the active praxis profile's URL.
 //
 // praxis and raptor keep deliberately independent credential stores; this
-// package never writes raptor's file and never uses its tokens. It only
-// mirrors raptor's own profile-resolution rules
-// (raptor/pkg/config.Config.GetProfile):
+// package never writes raptor's file. It is the only reader of it: it mirrors
+// raptor's own profile-resolution rules (raptor/pkg/config.Config.GetProfile)
+// for status reporting, and PAT() hands `praxis login` the control-plane token
+// of a resolved profile (see PAT for why that is not a State field):
 //
 //  1. env override — CONTROL_PLANE_URL set (FACETS_USERNAME/FACETS_TOKEN
 //     optional with FACETS_HEADERS)
@@ -160,6 +161,23 @@ func resolve(pinnedProfile, credentialsPath string) State {
 
 	// 6. Nothing resolved — zero or multiple profiles without a selector.
 	return st
+}
+
+// PAT returns the (username, control-plane PAT) pair stored for the named
+// profile; ok=false when the file, the section, or either value is missing.
+// `praxis login` authenticates with it before falling back to minting a Praxis
+// API key. Deliberately a separate call rather than a State field, so the token
+// can't ride along into anything that prints State (e.g. `praxis status`).
+func PAT(profile string) (username, token string, ok bool) {
+	path, err := DefaultPath()
+	if err != nil {
+		return "", "", false
+	}
+	p, found := loadProfiles(path)[profile]
+	if !found || p["username"] == "" || p["token"] == "" {
+		return "", "", false
+	}
+	return p["username"], p["token"], true
 }
 
 // HasProfile reports whether raptor's credentials file contains the named
