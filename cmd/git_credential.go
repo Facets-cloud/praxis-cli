@@ -18,23 +18,34 @@ func init() {
 
 var gitCredentialCmd = &cobra.Command{
 	Use:   "git-credential <get|store|erase>",
-	Short: "Git credential helper: broker a short-lived GitHub token for git push",
-	Long: `Implements git's credential-helper protocol. Configure git with:
+	Short: "Git credential helper: broker short-lived VCS tokens for git push",
+	Long: `Implements git's credential-helper protocol. Configure git per host:
 
   git config --global credential.https://github.com.helper "!praxis git-credential"
   git config --global credential.https://github.com.useHttpPath true
+  git config --global credential.https://gitlab.com.helper "!praxis git-credential"
+  git config --global credential.https://bitbucket.org.helper "!praxis git-credential"
 
-Scope the helper to https://github.com as shown. An unscoped
+Scope the helper to the specific hosts as shown. An unscoped
 'credential.helper' is invoked by git for every host, and this helper only
-ever mints for GitHub — it emits nothing for other hosts so git falls through.
+mints for the brokered hosts (github.com / GitHub Enterprise Cloud,
+gitlab.com, bitbucket.org) — it emits nothing for other hosts so git falls
+through. Don't combine with a caching/storing helper (e.g.
+'credential.helper store') for these hosts: it would persist the ephemeral
+token to disk, defeating the design.
 
 'useHttpPath' is what makes git send the repository path (e.g.
 owner/repo.git); without it git sends only the host, so the mint request
 carries no repo and cannot be scoped or audited per-repository.
 
 On 'get', it reads the requested protocol/host/path from stdin and returns a
-short-lived, org-brokered token (username x-access-token). 'store' and 'erase'
-are no-ops because the token is ephemeral — nothing is persisted on the laptop.`,
+short-lived, org-brokered token. The username comes from the server per
+provider (x-access-token for GitHub, oauth2 for GitLab, x-token-auth for
+Bitbucket). GitHub requires the org's GitHub App installation; GitLab and
+Bitbucket require a control-plane app account linked in Praxis
+(Settings > Integrations > GitLab/Bitbucket > OAuth App Connection).
+'store' and 'erase' are no-ops because the token is ephemeral — nothing is
+persisted on the laptop.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runGitCredential(cmd.OutOrStdout(), cmd.InOrStdin(), args[0], resolveGateway)
@@ -55,13 +66,15 @@ func resolveGateway() (string, map[string]string, error) {
 	return active.Profile.URL, active.Profile.Auth(), nil
 }
 
-// isGitHubHost reports whether a brokered GitHub token may be handed to host.
+// isBrokeredHost reports whether a brokered token may be handed to host.
 //
 // git invokes a credential helper for whatever host it is talking to. If the
 // helper is configured unscoped (`credential.helper` rather than
-// `credential.https://github.com.helper`), a push to any other host would
-// otherwise receive our GitHub token. Fail closed on anything unrecognized.
-func isGitHubHost(host string) bool {
+// `credential.https://<host>.helper`), a push to any other host would
+// otherwise receive one of our tokens. Fail closed on anything unrecognized;
+// the GitLab/Bitbucket entries are exact matches only (no subdomain logic —
+// mirrors the server's _OAUTH_HOSTS allowlist).
+func isBrokeredHost(host string) bool {
 	h := strings.ToLower(strings.TrimSpace(host))
 	if h == "" {
 		return false
@@ -72,7 +85,9 @@ func isGitHubHost(host string) bool {
 	}
 	return h == "github.com" ||
 		strings.HasSuffix(h, ".github.com") || // github.com subdomains
-		strings.HasSuffix(h, ".ghe.com") // GitHub Enterprise Cloud
+		strings.HasSuffix(h, ".ghe.com") || // GitHub Enterprise Cloud
+		h == "gitlab.com" || // VCS OAuth (exact)
+		h == "bitbucket.org" // VCS OAuth (exact)
 }
 
 // runGitCredential handles one credential-helper invocation.
@@ -89,10 +104,10 @@ func runGitCredential(out io.Writer, in io.Reader, op string, gw func() (string,
 
 	attrs := parseCredentialInput(in)
 
-	// Never mint for a host that isn't GitHub, or over plaintext. Emitting
+	// Never mint for a host that isn't brokered, or over plaintext. Emitting
 	// nothing and exiting 0 is git's protocol for "this helper has no
 	// credentials" — git then falls through to the next helper.
-	if attrs["protocol"] != "https" || !isGitHubHost(attrs["host"]) {
+	if attrs["protocol"] != "https" || !isBrokeredHost(attrs["host"]) {
 		return nil
 	}
 
