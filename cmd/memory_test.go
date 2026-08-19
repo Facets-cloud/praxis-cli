@@ -60,9 +60,9 @@ func TestMemoryRecall_HappyPath_JSON(t *testing.T) {
 
 	score := 1.42
 	orig := memory.Recall
-	memory.Recall = func(baseURL, token string, req memory.RecallRequest) ([]memory.Memory, error) {
-		if baseURL != "https://x.test" || token != "sk_test_T" {
-			t.Errorf("auth threading wrong: url=%q token=%q", baseURL, token)
+	memory.Recall = func(baseURL string, auth map[string]string, req memory.RecallRequest) ([]memory.Memory, error) {
+		if baseURL != "https://x.test" || auth["Authorization"] != "Bearer sk_test_T" {
+			t.Errorf("auth threading wrong: url=%q auth=%v", baseURL, auth)
 		}
 		if req.Query != "retry handling" {
 			t.Errorf("query = %q", req.Query)
@@ -108,7 +108,7 @@ func TestMemoryRecall_NoResults_EmitsEmptyArray(t *testing.T) {
 	defer resetMemoryFlags()
 
 	orig := memory.Recall
-	memory.Recall = func(string, string, memory.RecallRequest) ([]memory.Memory, error) {
+	memory.Recall = func(string, map[string]string, memory.RecallRequest) ([]memory.Memory, error) {
 		return nil, nil
 	}
 	defer func() { memory.Recall = orig }()
@@ -134,7 +134,7 @@ func TestMemoryList_AppliesFilters(t *testing.T) {
 
 	var captured memory.ListParams
 	orig := memory.List
-	memory.List = func(_, _ string, p memory.ListParams) ([]memory.Memory, error) {
+	memory.List = func(_ string, _ map[string]string, p memory.ListParams) ([]memory.Memory, error) {
 		captured = p
 		return []memory.Memory{
 			{ID: "m1", Slug: "x", Title: "X", Content: "full content body",
@@ -182,7 +182,7 @@ func TestMemoryList_EmptyResults_EmitsEmptyArray(t *testing.T) {
 	defer resetMemoryFlags()
 
 	orig := memory.List
-	memory.List = func(string, string, memory.ListParams) ([]memory.Memory, error) {
+	memory.List = func(string, map[string]string, memory.ListParams) ([]memory.Memory, error) {
 		return nil, nil
 	}
 	defer func() { memory.List = orig }()
@@ -208,7 +208,7 @@ func TestMemoryAdd_HappyPath_JSON(t *testing.T) {
 
 	var captured memory.CreateRequest
 	orig := memory.Create
-	memory.Create = func(_, _ string, req memory.CreateRequest) (*memory.Memory, error) {
+	memory.Create = func(_ string, _ map[string]string, req memory.CreateRequest) (*memory.Memory, error) {
 		captured = req
 		return &memory.Memory{
 			ID: "m1", Slug: "retry-budgets", Title: req.Title, Content: req.Content,
@@ -252,7 +252,7 @@ func TestMemoryAdd_StdinContent(t *testing.T) {
 
 	var captured memory.CreateRequest
 	orig := memory.Create
-	memory.Create = func(_, _ string, req memory.CreateRequest) (*memory.Memory, error) {
+	memory.Create = func(_ string, _ map[string]string, req memory.CreateRequest) (*memory.Memory, error) {
 		captured = req
 		return &memory.Memory{Title: req.Title, Slug: "s", Content: req.Content,
 			Kind: req.Kind, Audience: req.Audience, Category: "fact",

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
@@ -94,7 +95,7 @@ Examples:
 			os.Exit(exitcode.Usage)
 		}
 
-		resp, status, err := callMCP(active.Profile.URL, active.Profile.Token, mcpName, fnName, body, mcpTimeout)
+		resp, status, err := callMCP(active.Profile.URL, active.Profile.Auth(), mcpName, fnName, body, mcpTimeout)
 		if err != nil {
 			render.PrintError(out, asJSON,
 				fmt.Sprintf("network error: %v", err),
@@ -209,7 +210,7 @@ func buildMCPBody(argFlags []string, bodyFlag string, stdin io.Reader) ([]byte, 
 // wants the structured detail they can pipe `praxis mcp --json` through
 // jq instead.
 func runManifestList(out io.Writer, asJSON bool, active credentials.Active) error {
-	raw, err := mcpmanifest.Fetch(active.Profile.URL, active.Profile.Token, mcpTimeout)
+	raw, err := mcpmanifest.Fetch(active.Profile.URL, active.Profile.Auth(), mcpTimeout)
 	if err != nil {
 		// Auth-failure shape from Fetch: "manifest fetch returned HTTP 401: ..."
 		errStr := err.Error()
@@ -311,49 +312,23 @@ func sortStrings(s []string) {
 }
 
 // callMCP is the HTTP seam — tests swap it to avoid hitting the network.
-var callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+var callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
 	if baseURL == "" {
 		return nil, 0, errors.New("profile has no URL set")
 	}
-	client := &http.Client{
-		Timeout: timeout,
-		// Go's default redirect policy downgrades POST→GET and drops the
-		// body on 301/302/303. A gateway that 301-redirects to its canonical
-		// host would therefore turn every invoke into
-		// a body-less GET that 404s — misreported downstream as "unknown
-		// mcp/fn". Preserve the method, body, and Authorization header so
-		// the invoke survives the redirect intact.
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return errors.New("stopped after 10 redirects")
-			}
-			orig := via[0]
-			req.Method = orig.Method
-			req.Header = orig.Header.Clone()
-			// Never leak the bearer token to a foreign domain: mirror
-			// Go's own sensitive-header rule and forward Authorization
-			// only when the redirect target is the original host or a
-			// subdomain of it (apex → www stays covered).
-			if !isDomainOrSubdomain(req.URL.Hostname(), orig.URL.Hostname()) {
-				req.Header.Del("Authorization")
-			}
-			if orig.GetBody != nil {
-				b, err := orig.GetBody()
-				if err != nil {
-					return err
-				}
-				req.Body = b
-				req.ContentLength = orig.ContentLength
-			}
-			return nil
-		},
-	}
+	// httpclient.New keeps the method, body, and auth headers across a
+	// canonical-host redirect (Go's default would downgrade this POST to a
+	// body-less GET that 404s as "unknown mcp/fn") and strips the auth headers
+	// if the redirect leaves the domain.
+	client := httpclient.New(timeout)
 	url := strings.TrimRight(baseURL, "/") + "/ai-api/v1/mcp/" + mcp + "/" + fn
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -365,18 +340,6 @@ var callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Dur
 		return nil, resp.StatusCode, err
 	}
 	return raw, resp.StatusCode, nil
-}
-
-// isDomainOrSubdomain reports whether child is the same host as parent
-// or a label-aligned subdomain of it (www.example.test ⊂ example.test,
-// but evilexample.test ⊄ example.test). This is the same rule net/http
-// uses to decide whether sensitive headers may follow a redirect.
-func isDomainOrSubdomain(child, parent string) bool {
-	child, parent = strings.ToLower(child), strings.ToLower(parent)
-	if child == parent {
-		return true
-	}
-	return strings.HasSuffix(child, "."+parent)
 }
 
 // extractDetail tries to pull `detail` out of a FastAPI-style error body

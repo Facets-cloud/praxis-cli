@@ -89,9 +89,11 @@ that does everything you need:
    (`~/.claude/skills/praxis/`, `~/.agents/skills/praxis/`,
    `~/.gemini/skills/praxis/`). The meta-skill teaches your AI how to
    drive the rest of the CLI.
-2. Opens your browser to **create an API key** (you click "Create"
-   once; the CLI captures the new key over a one-shot localhost
-   listener).
+2. **Authenticates.** If `raptor` is already logged in, login reuses
+   that control-plane token (and its control plane) — nothing to click.
+   Otherwise it opens your browser to **create an API key** (you click
+   "Create" once; the CLI polls the deployment for the new key and picks
+   it up).
 3. **Wipes any leftover org skills** from a previous profile.
 4. **Fetches your org's catalog of skills** from the Praxis server
    and installs each one as `praxis-<name>` across every AI host.
@@ -101,8 +103,11 @@ that does everything you need:
 
 ### Where does login go?
 
-Pass your organization's Praxis deployment URL the first time you log in.
-Ask your Praxis administrator if you don't know it.
+If `raptor` is logged in on this machine, `praxis login` targets that
+control plane and authenticates with the token already there — no
+`--url`, no browser. Otherwise pass your organization's Praxis
+deployment URL the first time you log in. Ask your Praxis administrator
+if you don't know it.
 
 ```bash
 praxis login --url https://<account-id>.console.facets.cloud

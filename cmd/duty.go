@@ -98,7 +98,7 @@ func resolveNameOrID[T any](arg string, items []T, key func(T) (name, id string)
 // id, which addresses its nested duty resources. GLOBAL agents (the
 // praxis duty agent) are fetched via include_global=true.
 func resolveAgentID(out io.Writer, active credentials.Active, agentArg string) string {
-	agents, err := agentcatalog.FetchIncludingGlobal(active.Profile.URL, active.Profile.Token)
+	agents, err := agentcatalog.FetchIncludingGlobal(active.Profile.URL, active.Profile.Auth())
 	if err != nil {
 		return reportResolveErr(out, active.Name, err)
 	}
@@ -111,7 +111,7 @@ func resolveAgentID(out io.Writer, active credentials.Active, agentArg string) s
 // under the resolved agent. Same name→id-then-passthrough policy as
 // resolveAgentID.
 func resolveScheduleID(out io.Writer, active credentials.Active, agentID, dutyArg string) string {
-	schedules, err := duties.ListSchedules(active.Profile.URL, active.Profile.Token, agentID, "")
+	schedules, err := duties.ListSchedules(active.Profile.URL, active.Profile.Auth(), agentID, "")
 	if err != nil {
 		return reportResolveErr(out, active.Name, err)
 	}
@@ -141,7 +141,7 @@ var dutyListCmd = &cobra.Command{
 		active := activeOrAuthExit(out)
 		agentID := resolveAgentID(out, active, dutyAgent)
 
-		schedules, err := duties.ListSchedules(active.Profile.URL, active.Profile.Token, agentID, "")
+		schedules, err := duties.ListSchedules(active.Profile.URL, active.Profile.Auth(), agentID, "")
 		if err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}
@@ -176,7 +176,7 @@ var dutyRunsCmd = &cobra.Command{
 			scheduleID = resolveScheduleID(out, active, agentID, dutyRunsDuty)
 		}
 
-		runs, err := duties.ListRuns(active.Profile.URL, active.Profile.Token, agentID, scheduleID, dutyRunsLimit)
+		runs, err := duties.ListRuns(active.Profile.URL, active.Profile.Auth(), agentID, scheduleID, dutyRunsLimit)
 		if err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}
@@ -203,7 +203,7 @@ var dutyRunCmd = &cobra.Command{
 		active := activeOrAuthExit(out)
 		agentID := resolveAgentID(out, active, dutyAgent)
 
-		run, err := duties.GetRun(active.Profile.URL, active.Profile.Token, agentID, args[0])
+		run, err := duties.GetRun(active.Profile.URL, active.Profile.Auth(), agentID, args[0])
 		if err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}
@@ -227,7 +227,7 @@ var dutyReportCmd = &cobra.Command{
 		active := activeOrAuthExit(out)
 		agentID := resolveAgentID(out, active, dutyAgent)
 
-		run, err := duties.GetRun(active.Profile.URL, active.Profile.Token, agentID, args[0])
+		run, err := duties.GetRun(active.Profile.URL, active.Profile.Auth(), agentID, args[0])
 		if err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}
@@ -239,7 +239,7 @@ var dutyReportCmd = &cobra.Command{
 			os.Exit(exitcode.Error)
 		}
 
-		body, mime, err := duties.FetchArtifactContent(active.Profile.URL, active.Profile.Token, *run.ReportArtifactID)
+		body, mime, err := duties.FetchArtifactContent(active.Profile.URL, active.Profile.Auth(), *run.ReportArtifactID)
 		if err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}
@@ -279,7 +279,7 @@ var dutyFindingsCmd = &cobra.Command{
 		agentID := resolveAgentID(out, active, dutyAgent)
 		scheduleID := resolveScheduleID(out, active, agentID, args[0])
 
-		findings, err := duties.ListFindings(active.Profile.URL, active.Profile.Token, agentID, scheduleID, dutyFindingsStatus, dutyFindingsLimit)
+		findings, err := duties.ListFindings(active.Profile.URL, active.Profile.Auth(), agentID, scheduleID, dutyFindingsStatus, dutyFindingsLimit)
 		if err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}

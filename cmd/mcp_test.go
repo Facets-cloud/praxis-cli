@@ -182,7 +182,7 @@ func TestPrettyJSON(t *testing.T) {
 // as "unknown mcp/fn". callMCP must preserve the method, body, and
 // Authorization header across the gateway's redirect.
 func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
-	var gotMethod, gotBody, gotAuth string
+	var gotMethod, gotBody, gotAuth, gotUser string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ai-api/v1/mcp/raptor_cli/run_raptor_cli", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ai-api/v1/mcp/raptor_cli/run_raptor_cli/final", http.StatusMovedPermanently)
@@ -190,6 +190,7 @@ func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
 	mux.HandleFunc("/ai-api/v1/mcp/raptor_cli/run_raptor_cli/final", func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotAuth = r.Header.Get("Authorization")
+		gotUser = r.Header.Get("X-Facets-Username")
 		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
 		w.WriteHeader(http.StatusOK)
@@ -199,7 +200,8 @@ func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
 	defer srv.Close()
 
 	body := []byte(`{"command":"get projects"}`)
-	resp, status, err := callMCP(srv.URL, "sk_test_T", "raptor_cli", "run_raptor_cli", body, 5*time.Second)
+	auth := map[string]string{"Authorization": "Bearer sk_test_T", "X-Facets-Username": "u@corp"}
+	resp, status, err := callMCP(srv.URL, auth, "raptor_cli", "run_raptor_cli", body, 5*time.Second)
 	if err != nil {
 		t.Fatalf("callMCP error: %v", err)
 	}
@@ -215,6 +217,11 @@ func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
 	if gotAuth != "Bearer sk_test_T" {
 		t.Errorf("Authorization after redirect = %q, want %q", gotAuth, "Bearer sk_test_T")
 	}
+	// The identity header must survive a same-origin redirect too, or a
+	// facets-mode invoke 401s after the gateway's canonical-host hop.
+	if gotUser != "u@corp" {
+		t.Errorf("X-Facets-Username after same-origin redirect = %q, want %q", gotUser, "u@corp")
+	}
 }
 
 // TestCallMCP_DropsAuthOnCrossDomainRedirect: preserving the method and
@@ -225,10 +232,11 @@ func TestCallMCP_PreservesPOSTAcrossRedirect(t *testing.T) {
 // "foreign" host (localhost — same loopback, different hostname), so the
 // token must be stripped while method and body still survive.
 func TestCallMCP_DropsAuthOnCrossDomainRedirect(t *testing.T) {
-	var gotMethod, gotBody, gotAuth string
+	var gotMethod, gotBody, gotAuth, gotUser string
 	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotAuth = r.Header.Get("Authorization")
+		gotUser = r.Header.Get("X-Facets-Username")
 		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
 		w.WriteHeader(http.StatusOK)
@@ -246,7 +254,10 @@ func TestCallMCP_DropsAuthOnCrossDomainRedirect(t *testing.T) {
 	defer origin.Close()
 
 	body := []byte(`{"command":"get projects"}`)
-	_, status, err := callMCP(origin.URL, "sk_test_SECRET", "raptor_cli", "run_raptor_cli", body, 5*time.Second)
+	// Facets-mode auth: both the Bearer token AND the X-Facets-Username
+	// identity header must be stripped on a cross-domain redirect.
+	auth := map[string]string{"Authorization": "Bearer sk_test_SECRET", "X-Facets-Username": "u@corp"}
+	_, status, err := callMCP(origin.URL, auth, "raptor_cli", "run_raptor_cli", body, 5*time.Second)
 	if err != nil {
 		t.Fatalf("callMCP error: %v", err)
 	}
@@ -256,6 +267,9 @@ func TestCallMCP_DropsAuthOnCrossDomainRedirect(t *testing.T) {
 	if gotAuth != "" {
 		t.Errorf("Authorization leaked across domains: got %q, want empty", gotAuth)
 	}
+	if gotUser != "" {
+		t.Errorf("X-Facets-Username leaked across domains: got %q, want empty", gotUser)
+	}
 	if gotMethod != http.MethodPost {
 		t.Errorf("method after redirect = %q, want POST", gotMethod)
 	}
@@ -264,33 +278,6 @@ func TestCallMCP_DropsAuthOnCrossDomainRedirect(t *testing.T) {
 	}
 }
 
-func TestIsDomainOrSubdomain(t *testing.T) {
-	tests := []struct {
-		child, parent string
-		want          bool
-	}{
-		{"example.test", "example.test", true},
-		{"www.example.test", "example.test", true},  // apex → www
-		{"WWW.EXAMPLE.TEST", "example.test", true},  // case-insensitive
-		{"example.test", "www.example.test", false}, // parent isn't a suffix domain of child
-		{"evilexample.test", "example.test", false}, // suffix must be label-aligned
-		{"evil.test", "example.test", false},
-		{"localhost", "127.0.0.1", false},
-	}
-	for _, tt := range tests {
-		if got := isDomainOrSubdomain(tt.child, tt.parent); got != tt.want {
-			t.Errorf("isDomainOrSubdomain(%q, %q) = %v, want %v", tt.child, tt.parent, got, tt.want)
-		}
-	}
-}
-
-// TestPrettyMCPOutput_UnwrapsSingleTextEnvelope covers issue #18 E3:
-// the gateway wraps tool output as
-// {"content":[{"type":"text","text":"<escaped JSON>"}]}. For human
-// (pretty) output the single text payload should be unwrapped and its
-// inner JSON pretty-printed, instead of showing double-encoded escapes.
-// humanOutput parses raw and renders it the way the command's human
-// (non-JSON) path does.
 func humanOutput(raw string, forceEnvelope bool) string {
 	return mcpHumanOutput([]byte(raw), parseMCPResponse([]byte(raw)), forceEnvelope)
 }
@@ -433,7 +420,7 @@ func TestMcpCmd_JsonOutputWiring(t *testing.T) {
 
 			seedDefaultProfile(t)
 			orig := callMCP
-			callMCP = func(_, _, _, _ string, _ []byte, _ time.Duration) ([]byte, int, error) {
+			callMCP = func(_ string, _ map[string]string, _, _ string, _ []byte, _ time.Duration) ([]byte, int, error) {
 				return []byte(envelope), http.StatusOK, nil
 			}
 			defer func() { callMCP = orig }()
@@ -467,9 +454,9 @@ func TestMcpCmd_HappyPath(t *testing.T) {
 	var capturedURL, capturedToken string
 	var capturedBody []byte
 	orig := callMCP
-	callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+	callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
 		capturedURL = baseURL + "/ai-api/v1/mcp/" + mcp + "/" + fn
-		capturedToken = token
+		capturedToken = auth["Authorization"]
 		capturedBody = body
 		return []byte(`{"integrations":[{"name":"aws-prod"}]}`), http.StatusOK, nil
 	}
@@ -486,8 +473,8 @@ func TestMcpCmd_HappyPath(t *testing.T) {
 	if !strings.Contains(capturedURL, "/ai-api/v1/mcp/cloud_cli/list_cloud_integrations") {
 		t.Errorf("URL = %q", capturedURL)
 	}
-	if capturedToken != "sk_test_T" {
-		t.Errorf("token = %q", capturedToken)
+	if capturedToken != "Bearer sk_test_T" {
+		t.Errorf("auth = %q", capturedToken)
 	}
 	if !strings.Contains(string(capturedBody), `"region"`) {
 		t.Errorf("body missing region: %s", capturedBody)
@@ -548,7 +535,7 @@ func TestMcpCmd_NoArgs_JsonPassthrough(t *testing.T) {
 
 	manifest := []byte(`{"mcps":{"cloud_cli":{}}}`)
 	orig := mcpmanifest.Fetch
-	mcpmanifest.Fetch = func(_, _ string, _ time.Duration) ([]byte, error) {
+	mcpmanifest.Fetch = func(_ string, _ map[string]string, _ time.Duration) ([]byte, error) {
 		return manifest, nil
 	}
 	defer func() { mcpmanifest.Fetch = orig }()

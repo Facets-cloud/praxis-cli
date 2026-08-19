@@ -27,7 +27,7 @@ func resetDutyFlags() {
 func stubAgentResolution(t *testing.T, praxisID string) func() {
 	t.Helper()
 	orig := agentcatalog.FetchIncludingGlobal
-	agentcatalog.FetchIncludingGlobal = func(baseURL, token string) ([]agentcatalog.Agent, error) {
+	agentcatalog.FetchIncludingGlobal = func(baseURL string, token map[string]string) ([]agentcatalog.Agent, error) {
 		return []agentcatalog.Agent{{ID: praxisID, Name: "praxis", Scope: "global", IsActive: true}}, nil
 	}
 	return func() { agentcatalog.FetchIncludingGlobal = orig }
@@ -37,7 +37,7 @@ func stubAgentResolution(t *testing.T, praxisID string) func() {
 func stubScheduleResolution(t *testing.T, name, id string) func() {
 	t.Helper()
 	orig := duties.ListSchedules
-	duties.ListSchedules = func(baseURL, token, agentID, tag string) ([]duties.Schedule, error) {
+	duties.ListSchedules = func(baseURL string, token map[string]string, agentID, tag string) ([]duties.Schedule, error) {
 		return []duties.Schedule{{ID: id, AgentID: agentID, Name: name, DisplayName: "Prod Watch", Status: "active", Enabled: true}}, nil
 	}
 	return func() { duties.ListSchedules = orig }
@@ -65,9 +65,9 @@ func TestDutyList_ResolvesAgentAndEmitsJSON(t *testing.T) {
 	defer restoreAgent()
 
 	orig := duties.ListSchedules
-	duties.ListSchedules = func(baseURL, token, agentID, tag string) ([]duties.Schedule, error) {
-		if baseURL != "https://x.test" || token != "sk_test_T" {
-			t.Errorf("auth threading: url=%q token=%q", baseURL, token)
+	duties.ListSchedules = func(baseURL string, auth map[string]string, agentID, tag string) ([]duties.Schedule, error) {
+		if baseURL != "https://x.test" || auth["Authorization"] != "Bearer sk_test_T" {
+			t.Errorf("auth threading: url=%q auth=%v", baseURL, auth)
 		}
 		if agentID != "agt_praxis" {
 			t.Errorf("agentID = %q; want agt_praxis (resolved from default --agent praxis)", agentID)
@@ -99,7 +99,7 @@ func TestDutyList_EmptyEmitsArray(t *testing.T) {
 	defer stubAgentResolution(t, "agt_praxis")()
 
 	orig := duties.ListSchedules
-	duties.ListSchedules = func(baseURL, token, agentID, tag string) ([]duties.Schedule, error) {
+	duties.ListSchedules = func(baseURL string, token map[string]string, agentID, tag string) ([]duties.Schedule, error) {
 		return nil, nil
 	}
 	defer func() { duties.ListSchedules = orig }()
@@ -132,7 +132,7 @@ func TestDutyRuns_ResolvesDutyNameToScheduleID(t *testing.T) {
 	defer stubScheduleResolution(t, "prod-watch", "sch1")()
 
 	orig := duties.ListRuns
-	duties.ListRuns = func(baseURL, token, agentID, scheduleID string, limit int) ([]duties.Run, error) {
+	duties.ListRuns = func(baseURL string, token map[string]string, agentID, scheduleID string, limit int) ([]duties.Run, error) {
 		if agentID != "agt_praxis" || scheduleID != "sch1" {
 			t.Errorf("resolution wrong: agent=%q schedule=%q", agentID, scheduleID)
 		}
@@ -168,7 +168,7 @@ func TestDutyRun_EmitsRunDetail(t *testing.T) {
 	defer stubAgentResolution(t, "agt_praxis")()
 
 	orig := duties.GetRun
-	duties.GetRun = func(baseURL, token, agentID, runID string) (*duties.Run, error) {
+	duties.GetRun = func(baseURL string, token map[string]string, agentID, runID string) (*duties.Run, error) {
 		if runID != "run9" {
 			t.Errorf("runID = %q", runID)
 		}
@@ -201,14 +201,14 @@ func TestDutyReport_FetchesArtifactContent(t *testing.T) {
 	defer stubAgentResolution(t, "agt_praxis")()
 
 	origRun := duties.GetRun
-	duties.GetRun = func(baseURL, token, agentID, runID string) (*duties.Run, error) {
+	duties.GetRun = func(baseURL string, token map[string]string, agentID, runID string) (*duties.Run, error) {
 		art := "art9"
 		return &duties.Run{ID: runID, ReportArtifactID: &art}, nil
 	}
 	defer func() { duties.GetRun = origRun }()
 
 	origArt := duties.FetchArtifactContent
-	duties.FetchArtifactContent = func(baseURL, token, artifactID string) ([]byte, string, error) {
+	duties.FetchArtifactContent = func(baseURL string, token map[string]string, artifactID string) ([]byte, string, error) {
 		if artifactID != "art9" {
 			t.Errorf("artifactID = %q; want art9 (from run.report_artifact_id)", artifactID)
 		}
@@ -244,7 +244,7 @@ func TestDutyFindings_EmitsJSON(t *testing.T) {
 	defer stubScheduleResolution(t, "prod-watch", "sch1")()
 
 	orig := duties.ListFindings
-	duties.ListFindings = func(baseURL, token, agentID, scheduleID, status string, limit int) ([]duties.Finding, error) {
+	duties.ListFindings = func(baseURL string, token map[string]string, agentID, scheduleID, status string, limit int) ([]duties.Finding, error) {
 		if scheduleID != "sch1" || status != "open" {
 			t.Errorf("schedule=%q status=%q", scheduleID, status)
 		}
@@ -343,7 +343,7 @@ func TestResolveAgentID_NameIDAndPassthrough(t *testing.T) {
 	defer resetDutyFlags()
 
 	orig := agentcatalog.FetchIncludingGlobal
-	agentcatalog.FetchIncludingGlobal = func(baseURL, token string) ([]agentcatalog.Agent, error) {
+	agentcatalog.FetchIncludingGlobal = func(baseURL string, token map[string]string) ([]agentcatalog.Agent, error) {
 		return []agentcatalog.Agent{
 			{ID: "agt_praxis", Name: "praxis", IsActive: true},
 			{ID: "agt_org", Name: "org-bot", IsActive: true},
@@ -374,7 +374,7 @@ func TestResolveScheduleID_NameIDAndPassthrough(t *testing.T) {
 	defer resetDutyFlags()
 
 	orig := duties.ListSchedules
-	duties.ListSchedules = func(baseURL, token, agentID, tag string) ([]duties.Schedule, error) {
+	duties.ListSchedules = func(baseURL string, token map[string]string, agentID, tag string) ([]duties.Schedule, error) {
 		return []duties.Schedule{
 			{ID: "sch1", Name: "prod-watch"},
 			{ID: "sch2", Name: "cost-audit"},

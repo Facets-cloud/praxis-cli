@@ -94,6 +94,61 @@ func TestPutLoadGet_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestAuth(t *testing.T) {
+	cases := []struct {
+		name string
+		prof Profile
+		want map[string]string
+	}{
+		{"bearer default mode", Profile{Username: "u@x", Token: "sk_live_abc"}, map[string]string{"Authorization": "Bearer sk_live_abc"}},
+		{"bearer explicit non-basic mode", Profile{Username: "u@x", Token: "sk_live_abc", AuthMode: "bearer"}, map[string]string{"Authorization": "Bearer sk_live_abc"}},
+		{"facets/basic mode", Profile{Username: "user@corp", Token: "pat123", AuthMode: "basic"}, map[string]string{"Authorization": "Bearer pat123", "X-Facets-Username": "user@corp"}},
+		{"empty token", Profile{Username: "u@x", AuthMode: "basic"}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := c.prof.Auth()
+			if len(got) != len(c.want) {
+				t.Fatalf("Auth() = %v; want %v", got, c.want)
+			}
+			for k, v := range c.want {
+				if got[k] != v {
+					t.Errorf("Auth()[%q] = %q; want %q", k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
+func TestAuthMode_RoundTripsThroughINI(t *testing.T) {
+	withHome(t)
+	want := Profile{URL: "https://cp.test", Username: "user@corp", Token: "pat123", AuthMode: "basic"}
+	if err := Put("facets", want); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := store["facets"]
+	if !ok {
+		t.Fatal("facets profile missing after Put")
+	}
+	if got != want {
+		t.Errorf("round-trip mismatch: got %+v want %+v", got, want)
+	}
+	// A profile with no AuthMode must NOT emit an auth_mode line.
+	_ = Put("bearer", Profile{URL: "https://x.test", Token: "sk"})
+	path, _ := paths.Credentials()
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(string(raw), "auth_mode = \n") || strings.Contains(string(raw), "auth_mode = bearer") {
+		t.Errorf("empty AuthMode should be omitted from INI; got:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "auth_mode = basic") {
+		t.Errorf("basic AuthMode not persisted; got:\n%s", raw)
+	}
+}
+
 func TestPut_AddsSecondProfileWithoutClobberingFirst(t *testing.T) {
 	withHome(t)
 	if err := Put("default", Profile{URL: "https://default.test", Username: "a@x", Token: "t1"}); err != nil {

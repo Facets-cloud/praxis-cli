@@ -6,9 +6,10 @@
 //
 // The package mirrors the layout of internal/duties and internal/memory:
 // typed structs track the server's response models, exported function vars
-// give tests a seam to swap, and every transport call sends
-// Authorization: Bearer <token> (the same bearer these clients already
-// send — the server resolves it via auth_service.validate_user()).
+// give tests a seam to swap, and every transport call sets whatever
+// headers the profile's Auth() returns — always Authorization: Bearer
+// <token>, plus X-Facets-Username for facets-mode control-plane PATs
+// (the server resolves the identity via auth_service.validate_user()).
 //
 // Backend routes (all under /ai-api/ig, org-scoped):
 //
@@ -32,6 +33,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 )
 
 const (
@@ -115,17 +118,17 @@ type claimsResponse struct {
 // --- HTTP seams — tests swap these to avoid the network. ---------------
 
 // ListCatalogs returns every catalog in the org.
-var ListCatalogs = func(baseURL, token string) ([]Catalog, error) {
-	return doJSON[[]Catalog](baseURL, token, http.MethodGet, apiPrefix+"/catalogs", nil)
+var ListCatalogs = func(baseURL string, auth map[string]string) ([]Catalog, error) {
+	return doJSON[[]Catalog](baseURL, auth, http.MethodGet, apiPrefix+"/catalogs", nil)
 }
 
 // GetCatalog returns one catalog's summary. The server 404s when the
 // catalog is absent; that surfaces as an `HTTP 404 …` error.
-var GetCatalog = func(baseURL, token, name string) (*Catalog, error) {
+var GetCatalog = func(baseURL string, auth map[string]string, name string) (*Catalog, error) {
 	if name == "" {
 		return nil, fmt.Errorf("catalog name is required")
 	}
-	c, err := doJSON[Catalog](baseURL, token, http.MethodGet,
+	c, err := doJSON[Catalog](baseURL, auth, http.MethodGet,
 		apiPrefix+"/catalogs/"+url.PathEscape(name), nil)
 	if err != nil {
 		return nil, err
@@ -136,13 +139,13 @@ var GetCatalog = func(baseURL, token, name string) (*Catalog, error) {
 // Claims returns the names of catalogs that have a member whose canonical
 // git URL matches git. Repo CI loops over these to know which catalogs to
 // refresh after a push.
-var Claims = func(baseURL, token, git string) ([]string, error) {
+var Claims = func(baseURL string, auth map[string]string, git string) ([]string, error) {
 	if git == "" {
 		return nil, fmt.Errorf("git url is required")
 	}
 	q := url.Values{}
 	q.Set("git", git)
-	env, err := doJSON[claimsResponse](baseURL, token, http.MethodGet,
+	env, err := doJSON[claimsResponse](baseURL, auth, http.MethodGet,
 		apiPrefix+"/catalogs/claims?"+q.Encode(), nil)
 	if err != nil {
 		return nil, err
@@ -158,7 +161,7 @@ var Claims = func(baseURL, token, git string) ([]string, error) {
 // part named "graph" carrying the gzipped graph.json bytes, plus optional
 // "git"/"sha" form fields. On the server those are Optional[...] = Form(None),
 // so they are written only when non-empty; git/sha are NOT query parameters.
-var PublishMember = func(baseURL, token, catalog, member string, gzGraph []byte, git, sha string) error {
+var PublishMember = func(baseURL string, auth map[string]string, catalog, member string, gzGraph []byte, git, sha string) error {
 	if catalog == "" || member == "" {
 		return fmt.Errorf("catalog and member are required")
 	}
@@ -188,7 +191,7 @@ var PublishMember = func(baseURL, token, catalog, member string, gzGraph []byte,
 
 	// FormDataContentType() carries the boundary — never hand-roll it.
 	path := apiPrefix + "/catalogs/" + url.PathEscape(catalog) + "/members/" + url.PathEscape(member)
-	return sendBytes(baseURL, token, http.MethodPost, path, writer.FormDataContentType(), body.Bytes())
+	return sendBytes(baseURL, auth, http.MethodPost, path, writer.FormDataContentType(), body.Bytes())
 }
 
 // DownloadBundle fetches the assembled catalog as a gzipped tarball.
@@ -196,11 +199,11 @@ var PublishMember = func(baseURL, token, catalog, member string, gzGraph []byte,
 // server's current ETag the server returns 304 and this reports
 // notModified=true with an empty body (a cheap no-op re-sync). On 200 it
 // returns the tarball bytes and the ETag (the new digest).
-var DownloadBundle = func(baseURL, token, catalog, ifNoneMatch string) (body []byte, etag string, notModified bool, err error) {
+var DownloadBundle = func(baseURL string, auth map[string]string, catalog, ifNoneMatch string) (body []byte, etag string, notModified bool, err error) {
 	if baseURL == "" {
 		return nil, "", false, fmt.Errorf("baseURL is required")
 	}
-	if token == "" {
+	if len(auth) == 0 {
 		return nil, "", false, fmt.Errorf("token is required")
 	}
 	if catalog == "" {
@@ -215,12 +218,14 @@ var DownloadBundle = func(baseURL, token, catalog, ifNoneMatch string) (body []b
 	if err != nil {
 		return nil, "", false, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
 	if ifNoneMatch != "" {
 		req.Header.Set("If-None-Match", quoteETag(ifNoneMatch))
 	}
 
-	client := &http.Client{Timeout: bundleTimeout}
+	client := httpclient.New(bundleTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", false, err
@@ -274,7 +279,7 @@ func quoteETag(v string) string {
 // pushed_by/pushed_at itself, so only content and git_sha go on the wire (the
 // server's IgManifestPushRequest) — m.PushedBy/m.PushedAt are ignored here and
 // exist only for the cmd layer's local echo.
-var ManifestPush = func(baseURL, token, catalog string, m Manifest) error {
+var ManifestPush = func(baseURL string, auth map[string]string, catalog string, m Manifest) error {
 	if catalog == "" {
 		return fmt.Errorf("catalog is required")
 	}
@@ -283,16 +288,16 @@ var ManifestPush = func(baseURL, token, catalog string, m Manifest) error {
 		return err
 	}
 	path := apiPrefix + "/catalogs/" + url.PathEscape(catalog) + "/manifest"
-	return sendBytes(baseURL, token, http.MethodPost, path, "application/json", body)
+	return sendBytes(baseURL, auth, http.MethodPost, path, "application/json", body)
 }
 
 // ManifestPull fetches the served manifest (text + stamps) so a builder
 // can diff it against their local copy.
-var ManifestPull = func(baseURL, token, catalog string) (*Manifest, error) {
+var ManifestPull = func(baseURL string, auth map[string]string, catalog string) (*Manifest, error) {
 	if catalog == "" {
 		return nil, fmt.Errorf("catalog is required")
 	}
-	m, err := doJSON[Manifest](baseURL, token, http.MethodGet,
+	m, err := doJSON[Manifest](baseURL, auth, http.MethodGet,
 		apiPrefix+"/catalogs/"+url.PathEscape(catalog)+"/manifest", nil)
 	if err != nil {
 		return nil, err
@@ -307,12 +312,12 @@ var ManifestPull = func(baseURL, token, catalog string) (*Manifest, error) {
 // branch on status (401/403 → auth) without re-parsing the URL. Copied
 // deliberately from internal/duties to keep the clients' error contracts
 // identical.
-func doJSON[T any](baseURL, token, method, path string, body io.Reader) (T, error) {
+func doJSON[T any](baseURL string, auth map[string]string, method, path string, body io.Reader) (T, error) {
 	var zero T
 	if baseURL == "" {
 		return zero, fmt.Errorf("baseURL is required")
 	}
-	if token == "" {
+	if len(auth) == 0 {
 		return zero, fmt.Errorf("token is required")
 	}
 
@@ -324,13 +329,15 @@ func doJSON[T any](baseURL, token, method, path string, body io.Reader) (T, erro
 	if err != nil {
 		return zero, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	client := &http.Client{Timeout: defaultTimeout}
+	client := httpclient.New(defaultTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return zero, err
@@ -356,11 +363,11 @@ func doJSON[T any](baseURL, token, method, path string, body io.Reader) (T, erro
 // body. Used for the two non-JSON-returning uploads: the gzipped member
 // graph and the manifest push. The error contract matches doJSON so the
 // cmd layer's reportHTTPErr dispatch works the same.
-func sendBytes(baseURL, token, method, path, contentType string, body []byte) error {
+func sendBytes(baseURL string, auth map[string]string, method, path, contentType string, body []byte) error {
 	if baseURL == "" {
 		return fmt.Errorf("baseURL is required")
 	}
-	if token == "" {
+	if len(auth) == 0 {
 		return fmt.Errorf("token is required")
 	}
 
@@ -372,12 +379,14 @@ func sendBytes(baseURL, token, method, path, contentType string, body []byte) er
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
 
-	client := &http.Client{Timeout: defaultTimeout}
+	client := httpclient.New(defaultTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

@@ -32,7 +32,7 @@ func seedProfile(t *testing.T, name, url, token string) {
 }
 
 // stubAuthMe swaps fetchAuthMe and restores it at test end.
-func stubAuthMe(t *testing.T, fn func(baseURL, token string) (*authMeResponse, error)) {
+func stubAuthMe(t *testing.T, fn func(baseURL string, auth map[string]string) (*authMeResponse, error)) {
 	t.Helper()
 	orig := fetchAuthMe
 	fetchAuthMe = fn
@@ -44,7 +44,7 @@ func stubPostAuth(t *testing.T) *bool {
 	t.Helper()
 	called := false
 	orig := postAuthSetup
-	postAuthSetup = func(out io.Writer, asJSON bool, baseURL, token string) postAuthState {
+	postAuthSetup = func(out io.Writer, asJSON bool, baseURL string, auth map[string]string) postAuthState {
 		called = true
 		return postAuthState{}
 	}
@@ -229,10 +229,11 @@ func TestTryReuseStoredToken(t *testing.T) {
 			post := stubPostAuth(t)
 			exitCode := stubOsExit(t)
 			authMeCalled := false
-			stubAuthMe(t, func(baseURL, token string) (*authMeResponse, error) {
+			stubAuthMe(t, func(baseURL string, auth map[string]string) (*authMeResponse, error) {
 				authMeCalled = true
-				if baseURL != tt.targetURL || token != tt.storedToken {
-					t.Errorf("fetchAuthMe(%q,%q), want (%q,%q)", baseURL, token, tt.targetURL, tt.storedToken)
+				wantAuth := "Bearer " + tt.storedToken
+				if baseURL != tt.targetURL || auth["Authorization"] != wantAuth {
+					t.Errorf("fetchAuthMe(%q,%v), want (%q,%q)", baseURL, auth, tt.targetURL, wantAuth)
 				}
 				if tt.authMeErr != nil {
 					return nil, tt.authMeErr
@@ -327,7 +328,7 @@ func TestLoginRunE_ValidStoredTokenSkipsBrowser(t *testing.T) {
 	seedProfile(t, "default", "https://stored.test", "tok")
 	browser := stubBrowserLogin(t)
 	stubPostAuth(t)
-	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
+	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x"}, nil
 	})
 	if _, err := runLoginRunE(t); err != nil {
@@ -345,7 +346,7 @@ func TestLoginRunE_TransientErrorDoesNotOpenBrowser(t *testing.T) {
 	browser := stubBrowserLogin(t)
 	stubPostAuth(t)
 	exitCode := stubOsExit(t) // production exits here; stub keeps the test alive
-	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
+	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return nil, context.DeadlineExceeded // server unreachable, not a rejection
 	})
 	_, err := runLoginRunE(t)
@@ -374,7 +375,7 @@ func TestLoginRunE_RejectedTokenOpensBrowser(t *testing.T) {
 	seedProfile(t, "default", "https://stored.test", "expired")
 	browser := stubBrowserLogin(t)
 	stubPostAuth(t)
-	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
+	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return nil, fmt.Errorf("%w (HTTP 401)", errTokenRejected)
 	})
 	if _, err := runLoginRunE(t); err != nil {
@@ -392,7 +393,7 @@ func TestLoginRunE_ForceOpensBrowser(t *testing.T) {
 	loginForce = true
 	browser := stubBrowserLogin(t)
 	stubPostAuth(t)
-	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
+	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		t.Fatal("--force must not verify/reuse the stored token")
 		return nil, nil
 	})
@@ -425,7 +426,7 @@ func TestLoginRunE_URLRetargetOpensBrowser(t *testing.T) {
 	loginURL = "https://other.test" // re-target away from the stored URL
 	browser := stubBrowserLogin(t)
 	stubPostAuth(t)
-	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
+	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		t.Fatal("token must not be reused when --url re-targets the profile")
 		return nil, nil
 	})

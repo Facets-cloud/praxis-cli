@@ -28,7 +28,7 @@ func TestLoginRunE_RaptorProfileFlagStoresPairing(t *testing.T) {
 	seedProfile(t, "default", "https://root.test", "tok")
 	seedRaptorCreds(t, "[root]\ncontrol_plane_url = https://root.test\nusername = u@x\ntoken = pat\n")
 	stubPostAuth(t)
-	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
+	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x"}, nil
 	})
 
@@ -54,7 +54,7 @@ func TestLoginRunE_RaptorPairingPreservedOnRelogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubPostAuth(t)
-	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
+	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x"}, nil
 	})
 

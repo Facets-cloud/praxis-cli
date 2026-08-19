@@ -35,7 +35,7 @@ func TestLoginDryRun_StoredValidToken_ReportsReuse(t *testing.T) {
 	seedProfile(t, "default", "https://stored.test", "tok")
 	browser := stubBrowserLogin(t)
 	setup := stubPostAuth(t)
-	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
+	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x"}, nil
 	})
 
@@ -64,7 +64,7 @@ func TestLoginDryRun_HasNoSideEffects(t *testing.T) {
 	seedProfile(t, "default", "https://stored.test", "tok")
 	stubBrowserLogin(t)
 	stubPostAuth(t)
-	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
+	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x"}, nil
 	})
 
@@ -141,7 +141,7 @@ func TestLoginDryRun_TokenAndReachabilityMatrix(t *testing.T) {
 			stubBrowserLogin(t)
 			stubPostAuth(t)
 			exit := stubOsExit(t)
-			stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
+			stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 				if tt.authErr != nil {
 					return nil, tt.authErr
 				}
@@ -178,7 +178,7 @@ func TestLoginDryRun_ProfileSwitchSkillsEffect(t *testing.T) {
 	}
 	stubBrowserLogin(t)
 	stubPostAuth(t)
-	stubAuthMe(t, func(_, _ string) (*authMeResponse, error) {
+	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x"}, nil
 	})
 

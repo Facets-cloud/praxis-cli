@@ -33,17 +33,20 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		active, _ = credentials.ResolveActiveGlobal()
 	}
 
-	probeToken, tokenSource := "", "none"
-	switch {
+	var probeAuth map[string]string
+	tokenSource := "none"
+	switch c, hasPAT := facetsPATCandidate(profileName, baseURL); {
 	case loginToken != "":
-		probeToken, tokenSource = loginToken, "supplied"
+		probeAuth, tokenSource = credentials.Profile{Token: loginToken}.Auth(), "supplied"
 	case exists && prof.Token != "" && prof.URL == baseURL:
-		probeToken, tokenSource = prof.Token, "stored"
+		probeAuth, tokenSource = prof.Auth(), "stored"
+	case hasPAT && !loginForce:
+		probeAuth, tokenSource = c.asProfile().Auth(), "facets-pat"
 	}
 
 	reachable := true
 	tokenStatus, action := tokenSource, "browser"
-	_, err := fetchAuthMe(baseURL, probeToken)
+	_, err := fetchAuthMe(baseURL, probeAuth)
 	switch {
 	case err == nil:
 		switch tokenSource {
@@ -55,6 +58,8 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 			} else {
 				tokenStatus, action = "stored-valid", "reuse-token (no browser)"
 			}
+		case "facets-pat":
+			tokenStatus, action = "facets-pat-valid", "facets-pat (no browser)"
 		}
 	case errors.Is(err, errTokenRejected):
 		// The server answered — reachable. A 401 on an empty probe token is
@@ -63,7 +68,17 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		case "supplied":
 			tokenStatus, action = "supplied-invalid", "fail (supplied token rejected)"
 		case "stored":
+			// Login doesn't stop at a dead stored token: tryReuseStoredToken
+			// returns handled=false and the PAT gets its turn. Probe it too, or
+			// the report says "browser" where login would use the PAT.
 			tokenStatus, action = "stored-invalid", "browser"
+			if c, hasPAT := facetsPATCandidate(profileName, baseURL); hasPAT && !loginForce {
+				if _, perr := fetchAuthMe(baseURL, c.asProfile().Auth()); perr == nil {
+					tokenStatus, action = "stored-invalid, facets-pat-valid", "facets-pat (no browser)"
+				}
+			}
+		case "facets-pat":
+			tokenStatus, action = "facets-pat-invalid", "browser"
 		}
 	default:
 		reachable = false

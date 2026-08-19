@@ -166,7 +166,7 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 			defer restore()
 		}
 
-		state := runPostAuthSetup(out, asJSON, active.Profile.URL, active.Profile.Token)
+		state := runPostAuthSetup(out, asJSON, active.Profile.URL, active.Profile.Auth())
 
 		// Report the *effective* scope (where files actually landed).
 		scope := "user"

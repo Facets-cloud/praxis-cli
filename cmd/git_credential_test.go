@@ -7,11 +7,17 @@ import (
 	"time"
 )
 
+// bearer builds the Auth() header map a Bearer-mode profile produces.
+// Shared across cmd tests that thread an auth header map through a seam.
+func bearer(tok string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + tok}
+}
+
 func TestGitCredentialGet_EmitsUsernamePassword(t *testing.T) {
 	orig := callMCP
 	defer func() { callMCP = orig }()
 	// mint_repo_credential returns an MCP envelope whose text is JSON.
-	callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+	callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
 		if mcp != "vcs_cli" || fn != "mint_repo_credential" {
 			t.Fatalf("unexpected call %s/%s", mcp, fn)
 		}
@@ -22,7 +28,7 @@ func TestGitCredentialGet_EmitsUsernamePassword(t *testing.T) {
 	in := strings.NewReader("protocol=https\nhost=github.com\npath=owner/x\n\n")
 	var out bytes.Buffer
 	err := runGitCredential(&out, in, "get",
-		func() (string, string, error) { return "https://gw", "tok", nil })
+		func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil })
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -37,7 +43,7 @@ func TestGitCredentialStoreErase_NoOp(t *testing.T) {
 		var out bytes.Buffer
 		in := strings.NewReader("protocol=https\nhost=github.com\n\n")
 		if err := runGitCredential(&out, in, op,
-			func() (string, string, error) { return "https://gw", "tok", nil }); err != nil {
+			func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil }); err != nil {
 			t.Fatalf("%s should be no-op, got %v", op, err)
 		}
 		if out.Len() != 0 {
@@ -50,7 +56,7 @@ func TestGitCredentialGet_ParsesHostAndPath(t *testing.T) {
 	orig := callMCP
 	defer func() { callMCP = orig }()
 	var sentBody []byte
-	callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+	callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
 		sentBody = body
 		env := `{"content":[{"type":"text","text":"{\"username\":\"x-access-token\",\"password\":\"ghs_abc\"}"}]}`
 		return []byte(env), 200, nil
@@ -58,7 +64,7 @@ func TestGitCredentialGet_ParsesHostAndPath(t *testing.T) {
 	in := strings.NewReader("protocol=https\nhost=github.com\npath=owner/x\n\n")
 	var out bytes.Buffer
 	if err := runGitCredential(&out, in, "get",
-		func() (string, string, error) { return "https://gw", "tok", nil }); err != nil {
+		func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil }); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if !strings.Contains(string(sentBody), `"host":"github.com"`) ||
@@ -80,7 +86,7 @@ func assertSilentFallThrough(t *testing.T, protocol, host string) {
 	orig := callMCP
 	defer func() { callMCP = orig }()
 	called := false
-	callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+	callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
 		called = true
 		return nil, 200, nil
 	}
@@ -88,7 +94,7 @@ func assertSilentFallThrough(t *testing.T, protocol, host string) {
 	var out bytes.Buffer
 	in := strings.NewReader("protocol=" + protocol + "\nhost=" + host + "\n\n")
 	if err := runGitCredential(&out, in, "get",
-		func() (string, string, error) { return "https://gw", "tok", nil }); err != nil {
+		func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil }); err != nil {
 		t.Fatalf("expected silent fall-through, got err %v", err)
 	}
 	if called {
@@ -117,14 +123,14 @@ func TestGitCredentialGet_AllowsGitHubHosts(t *testing.T) {
 		t.Run(host, func(t *testing.T) {
 			orig := callMCP
 			defer func() { callMCP = orig }()
-			callMCP = func(baseURL, token, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+			callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
 				env := `{"content":[{"type":"text","text":"{\"username\":\"x-access-token\",\"password\":\"ghs_abc\"}"}]}`
 				return []byte(env), 200, nil
 			}
 			var out bytes.Buffer
 			in := strings.NewReader("protocol=https\nhost=" + host + "\n\n")
 			if err := runGitCredential(&out, in, "get",
-				func() (string, string, error) { return "https://gw", "tok", nil }); err != nil {
+				func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil }); err != nil {
 				t.Fatalf("err: %v", err)
 			}
 			if !strings.Contains(out.String(), "password=ghs_abc") {
@@ -138,7 +144,7 @@ func TestGitCredential_RejectsUnknownOperation(t *testing.T) {
 	var out bytes.Buffer
 	in := strings.NewReader("protocol=https\nhost=github.com\n\n")
 	err := runGitCredential(&out, in, "gte",
-		func() (string, string, error) { return "https://gw", "tok", nil })
+		func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil })
 	if err == nil {
 		t.Fatal("unknown operation must return an error, not silently succeed")
 	}

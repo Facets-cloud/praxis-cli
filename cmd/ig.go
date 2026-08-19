@@ -191,7 +191,7 @@ func syncOne(active credentials.Active, catalog string) (upToDate bool, err erro
 	local, _ := readSyncState(dir)
 
 	body, etag, notModified, err := igcatalog.DownloadBundle(
-		active.Profile.URL, active.Profile.Token, catalog, local.Digest)
+		active.Profile.URL, active.Profile.Auth(), catalog, local.Digest)
 	if err != nil {
 		return false, err
 	}
@@ -419,7 +419,7 @@ func statusOne(active credentials.Active, catalog string) (state, serverVersion,
 		return "", "", "", err
 	}
 	local, synced := readSyncState(catalogDir(home, catalog))
-	c, err := igcatalog.GetCatalog(active.Profile.URL, active.Profile.Token, catalog)
+	c, err := igcatalog.GetCatalog(active.Profile.URL, active.Profile.Auth(), catalog)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -518,7 +518,7 @@ var igListCmd = &cobra.Command{
 		asJSON := render.UseJSON(igJSON, false, out)
 		active := activeOrAuthExitProfile(out, igProfile)
 
-		cats, err := igcatalog.ListCatalogs(active.Profile.URL, active.Profile.Token)
+		cats, err := igcatalog.ListCatalogs(active.Profile.URL, active.Profile.Auth())
 		if err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}
@@ -557,7 +557,7 @@ live tree.`,
 
 		targets := args
 		if igSyncAll {
-			cats, err := igcatalog.ListCatalogs(active.Profile.URL, active.Profile.Token)
+			cats, err := igcatalog.ListCatalogs(active.Profile.URL, active.Profile.Auth())
 			if err != nil {
 				return reportHTTPErr(out, active.Name, err)
 			}
@@ -687,7 +687,7 @@ var igPublishCmd = &cobra.Command{
 		active := activeOrAuthExitProfile(out, igProfile)
 
 		gz := gzipBytes(raw)
-		if err := igcatalog.PublishMember(active.Profile.URL, active.Profile.Token,
+		if err := igcatalog.PublishMember(active.Profile.URL, active.Profile.Auth(),
 			igPublishCatalog, igPublishMember, gz, git, sha); err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}
@@ -736,7 +736,7 @@ var igClaimsCmd = &cobra.Command{
 		}
 		active := activeOrAuthExitProfile(out, igProfile)
 
-		names, err := igcatalog.Claims(active.Profile.URL, active.Profile.Token, igClaimsGit)
+		names, err := igcatalog.Claims(active.Profile.URL, active.Profile.Auth(), igClaimsGit)
 		if err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}
@@ -790,7 +790,7 @@ var igManifestPushCmd = &cobra.Command{
 			PushedAt: nowFn().UTC().Format(time.RFC3339),
 			GitSHA:   gitSHA,
 		}
-		if err := igcatalog.ManifestPush(active.Profile.URL, active.Profile.Token, igManifestCatalog, m); err != nil {
+		if err := igcatalog.ManifestPush(active.Profile.URL, active.Profile.Auth(), igManifestCatalog, m); err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}
 		result := map[string]string{
@@ -813,7 +813,7 @@ var igManifestPullCmd = &cobra.Command{
 		out := cmd.OutOrStdout()
 		active := activeOrAuthExitProfile(out, igProfile)
 
-		m, err := igcatalog.ManifestPull(active.Profile.URL, active.Profile.Token, args[0])
+		m, err := igcatalog.ManifestPull(active.Profile.URL, active.Profile.Auth(), args[0])
 		if err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}

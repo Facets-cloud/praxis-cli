@@ -100,7 +100,7 @@ func serverClaims(canonURL string) ([]string, error) {
 	}
 	ch := make(chan res, 1)
 	go func() {
-		n, e := igcatalog.Claims(act.Profile.URL, act.Profile.Token, canonURL)
+		n, e := igcatalog.Claims(act.Profile.URL, act.Profile.Auth(), canonURL)
 		ch <- res{n, e}
 	}()
 	select {

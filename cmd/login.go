@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
@@ -73,7 +75,7 @@ func init() {
 	// backticked phrase as the flag's value placeholder, which mangled the
 	// help table into `--raptor-profile praxis status`.
 	loginCmd.Flags().StringVar(&loginRaptorProfile, "raptor-profile", "",
-		"pair this praxis profile with a raptor profile (a ~/.facets/credentials section); 'praxis status' then reports raptor via that profile and AI hosts prefix raptor commands with FACETS_PROFILE=<name>")
+		"pair this praxis profile with a raptor profile (a ~/.facets/credentials section); login authenticates with that section's control-plane token, 'praxis status' reports raptor via it, and AI hosts prefix raptor commands with FACETS_PROFILE=<name>")
 	loginCmd.Flags().BoolVar(&loginDryRun, "dry-run", false,
 		"report what login would do (profile, URL reachability, browser-or-reuse, skill effect) and exit — no browser, no API key, no credential or skill changes")
 	rootCmd.AddCommand(loginCmd)
@@ -88,9 +90,10 @@ var loginCmd = &cobra.Command{
      (~/.claude/skills/praxis, plus ~/.agents/skills/praxis — the
       shared alias Codex and Gemini CLI both read) — idempotent.
   2. Reuse the active profile's stored token when it's still valid for
-     this URL (no browser); otherwise open a browser to create a Praxis
-     API key. Use --token to supply a key directly, or --force to always
-     re-authenticate via the browser.
+     this URL (no browser); else authenticate with the control-plane PAT
+     in raptor's ~/.facets/credentials (no browser); else open a browser
+     to create a Praxis API key. Use --token to supply a key directly,
+     or --force to always re-authenticate via the browser.
   3. Save credentials and flip the active profile pointer.
   4. Wipe any praxis-* org skills from the previous profile.
   5. Fetch this profile's skill catalog from the server and install
@@ -120,6 +123,7 @@ installed skills — then exits without changing anything.`,
 		if profileName == "" {
 			profileName = credentials.DefaultProfileName
 		}
+
 		baseURL, err := resolveLoginURL(profileName, loginURL)
 		if err != nil {
 			render.PrintError(out, asJSON, err.Error(),
@@ -148,15 +152,24 @@ installed skills — then exits without changing anything.`,
 			if handled {
 				return rerr
 			}
+			// Nothing to reuse: raptor's control-plane PAT is the primary
+			// credential, the browser/API-key flow the fallback.
+			if handled, ferr := tryFacetsPAT(out, asJSON, profileName, baseURL, loginLocal); handled {
+				return ferr
+			}
 		}
 		return browserLoginFn(out, asJSON, profileName, baseURL, loginTimeout, loginLocal)
 	},
 }
 
 // resolveLoginURL resolves the URL for a NEW or EXISTING profile during
-// login: explicit --url > existing profile's saved URL. A new profile,
-// including "default", must provide --url because the CLI cannot safely
-// infer which organization deployment the user intends to authenticate to.
+// login: explicit --url > existing profile's saved URL > the control plane
+// raptor is logged in to. There is no built-in default: with none of the three
+// the CLI cannot safely infer which organization deployment the user means.
+//
+// Raptor's control plane is not a guess — it's this machine's actual state, and
+// in facets mode the agent server is served under that same host, so it is the
+// deployment a raptor user means by a bare `praxis login`.
 func resolveLoginURL(profileName, flagURL string) (string, error) {
 	if flagURL != "" {
 		return normalizeBaseURL(flagURL), nil
@@ -165,7 +178,10 @@ func resolveLoginURL(profileName, flagURL string) (string, error) {
 	if p, ok := store[profileName]; ok && p.URL != "" {
 		return normalizeBaseURL(p.URL), nil
 	}
-	return "", fmt.Errorf("profile %q has no saved URL; pass --url to create it", profileName)
+	if st := raptorstate.Resolve(raptorPin(profileName)); st.Found && st.ControlPlaneURL != "" {
+		return normalizeBaseURL(st.ControlPlaneURL), nil
+	}
+	return "", fmt.Errorf("profile %q has no saved URL; pass --url to create it (or run `raptor login` first)", profileName)
 }
 
 // normalizeBaseURL strips trailing slashes so path concatenation
@@ -208,7 +224,7 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 		return false, nil
 	}
 
-	user, err := fetchAuthMe(baseURL, prof.Token)
+	user, err := fetchAuthMe(baseURL, prof.Auth())
 	if err != nil {
 		if errors.Is(err, errTokenRejected) {
 			// The server gave a verdict: this token is dead. Falling back to
@@ -235,11 +251,13 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 		return true, err
 	}
 	// Persist the canonical (post-redirect) host so a stale stored URL
-	// self-heals on the next login (issue #19-A).
+	// self-heals on the next login (issue #19-A). Reuse the stored profile
+	// otherwise — notably its Username/AuthMode, so a facets profile's
+	// Basic header keeps working across reuse.
 	if user.canonicalBaseURL != "" {
-		baseURL = user.canonicalBaseURL
+		prof.URL = user.canonicalBaseURL
 	}
-	return true, persistAndSetup(out, asJSON, profileName, baseURL, prof.Token, user.Email, local)
+	return true, persistAndSetup(out, asJSON, profileName, prof, user.Email, local)
 }
 
 // browserSessionPollLogin opens the browser to the api-keys page with a
@@ -303,7 +321,7 @@ func browserSessionPollLogin(out io.Writer, asJSON bool, profileName, baseURL st
 func pollSessionKey(ctx context.Context, baseURL, nonce string, interval time.Duration) (string, error) {
 	endpoint := fmt.Sprintf("%s/ai-api/v1/cli-session/%s/key",
 		strings.TrimRight(baseURL, "/"), nonce)
-	client := &http.Client{Timeout: pollRequestTimeout}
+	client := httpclient.New(pollRequestTimeout)
 
 	for {
 		key, status, err := pollSessionOnce(ctx, client, endpoint)
@@ -398,12 +416,115 @@ func suggestedKeyName() string {
 	return "praxis-cli-" + hex.EncodeToString(b)[:5]
 }
 
+// tryFacetsPAT attempts a no-browser login with the control-plane PAT already
+// in raptor's ~/.facets/credentials, sent as Bearer plus an X-Facets-Username
+// identity header.
+//
+// Like tryReuseStoredToken, handled=false means the caller should fall through
+// to the browser — no usable raptor profile, or the server rejected the PAT.
+// The fallback uses the caller's baseURL, never the candidate's.
+func tryFacetsPAT(out io.Writer, asJSON bool, profileName, baseURL string, local bool) (bool, error) {
+	c, ok := facetsPATCandidate(profileName, baseURL)
+	if !ok {
+		return false, nil
+	}
+
+	prof := c.asProfile()
+	user, err := fetchAuthMe(c.url, prof.Auth())
+	if err != nil {
+		// Only a server verdict means "this PAT is dead". A timeout or 5xx
+		// leaves it unjudged, so say so rather than blaming the credential.
+		// Stderr in both output modes, like resolveRaptorPairing's warnings:
+		// it can't corrupt --json, and a silent fallback to the browser is
+		// the one thing an AI host can't diagnose.
+		verdict := "could not be verified"
+		if errors.Is(err, errTokenRejected) {
+			verdict = "was not accepted"
+		}
+		fmt.Fprintf(os.Stderr,
+			"Control-plane PAT for %s (~/.facets/credentials profile %q) %s at %s (%v); opening browser…\n",
+			c.username, c.section, verdict, c.url, err)
+		return false, nil
+	}
+	if user.canonicalBaseURL != "" {
+		prof.URL = user.canonicalBaseURL
+	}
+	display := user.Email
+	if display == "" {
+		display = c.username
+	}
+	return true, persistAndSetup(out, asJSON, profileName, prof, display, local)
+}
+
+// facetsPAT is a control-plane credential a login can try: the
+// ~/.facets/credentials section it came from, the pair, and where to send it.
+type facetsPAT struct {
+	section  string
+	username string
+	token    string
+	url      string
+}
+
+// asProfile is the praxis profile this credential would be saved and
+// authenticated as — the one place a facets-mode Profile is built.
+func (c facetsPAT) asProfile() credentials.Profile {
+	return credentials.Profile{
+		URL:      c.url,
+		Username: c.username,
+		Token:    c.token,
+		AuthMode: credentials.AuthModeBasic,
+	}
+}
+
+// facetsPATCandidate returns the control-plane PAT praxis would authenticate
+// this login with, or ok=false when there is none. Shared by the login path and
+// --dry-run so the report can't disagree with what login does. The section is
+// chosen by raptor's own rules (pin > FACETS_PROFILE > [default] > sole), so
+// praxis picks the PAT raptor commands in the same shell would use.
+//
+// A candidate is only produced for an https URL that IS that control plane: in
+// facets mode the agent server is served under the control-plane host itself (it
+// derives its CP URL from its own X-Forwarded-Host), so a host mismatch could
+// never validate — and a control-plane PAT must never be offered to a host that
+// was merely typed after --url. Loopback is exempt: a developer's own agent
+// server running against a remote CP.
+func facetsPATCandidate(profileName, baseURL string) (facetsPAT, bool) {
+	st := raptorstate.Resolve(raptorPin(profileName))
+	if !st.Found {
+		return facetsPAT{}, false
+	}
+	// The PAT only ever travels to its own control plane, and only over TLS.
+	// Loopback is exempt from both: that's a developer's own agent server,
+	// where http:// is normal and there is no network to eavesdrop.
+	if !isLoopbackURL(baseURL) &&
+		(!raptorstate.MatchesHost(baseURL, st.ControlPlaneURL) || !strings.HasPrefix(baseURL, "https://")) {
+		return facetsPAT{}, false
+	}
+	username, token, ok := raptorstate.PAT(st.Profile)
+	if !ok {
+		return facetsPAT{}, false
+	}
+	return facetsPAT{section: st.Profile, username: username, token: token, url: baseURL}, true
+}
+
+// isLoopbackURL reports whether a URL points at this machine.
+func isLoopbackURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	return h == "localhost" || net.ParseIP(h).IsLoopback()
+}
+
 // saveAndVerifyToken verifies a freshly-obtained token (from --token or
 // the browser flow) and persists it. A verification failure here is fatal
 // — the user explicitly supplied this key, so there's no graceful
 // fallback to attempt.
 func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token string, local bool) error {
-	user, err := fetchAuthMe(baseURL, token)
+	// --token / browser flow always yields a Praxis API key → Bearer.
+	// Route through Auth() so "Bearer " is built in exactly one place.
+	user, err := fetchAuthMe(baseURL, credentials.Profile{Token: token}.Auth())
 	if err != nil {
 		render.PrintError(out, asJSON,
 			fmt.Sprintf("token validation failed: %v", err),
@@ -417,7 +538,8 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 	if user.canonicalBaseURL != "" {
 		baseURL = user.canonicalBaseURL
 	}
-	return persistAndSetup(out, asJSON, profileName, baseURL, token, user.Email, local)
+	prof := credentials.Profile{URL: baseURL, Username: user.Email, Token: token}
+	return persistAndSetup(out, asJSON, profileName, prof, user.Email, local)
 }
 
 // persistAndSetup saves the verified token under profileName, sets the
@@ -435,14 +557,14 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 //     accidentally scope the install.
 //   - local: write <cwd>/.praxis/config.json and install project-scoped,
 //     leaving the global pointer untouched.
-func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, email string, local bool) error {
-	raptorProfile := resolveRaptorPairing(profileName, baseURL)
-	prof := credentials.Profile{
-		URL:           baseURL,
-		Username:      email,
-		Token:         token,
-		RaptorProfile: raptorProfile,
-	}
+//
+// persistAndSetup takes the fully-built profile to save (its URL/Username/
+// Token/AuthMode are authoritative — e.g. a facets profile keeps its
+// control-plane username so Auth() can rebuild the X-Facets-Username header
+// on reuse) and a displayName used only for the human/JSON "logged in as" line.
+func persistAndSetup(out io.Writer, asJSON bool, profileName string, prof credentials.Profile, displayName string, local bool) error {
+	baseURL := prof.URL
+	prof.RaptorProfile = resolveRaptorPairing(profileName, baseURL)
 	if err := credentials.Put(profileName, prof); err != nil {
 		return fmt.Errorf("save credentials: %w", err)
 	}
@@ -474,14 +596,15 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, em
 	}
 
 	// Post-auth: install meta-skill, wipe previous org skills, install
-	// this profile's catalog, refresh the MCP tools snapshot.
-	state := postAuthSetup(out, asJSON, baseURL, token)
+	// this profile's catalog, refresh the MCP tools snapshot. The HTTP
+	// calls use the profile's full auth headers (Bearer + X-Facets-Username).
+	state := postAuthSetup(out, asJSON, baseURL, prof.Auth())
 
 	if asJSON {
 		payload := map[string]any{
 			"ok":               true,
 			"profile":          profileName,
-			"username":         email,
+			"username":         displayName,
 			"url":              baseURL,
 			"scope":            scopeLabel(local),
 			"meta_skill":       state.metaSkill,
@@ -495,16 +618,16 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, em
 		if projectRoot != "" {
 			payload["project_root"] = projectRoot
 		}
-		if raptorProfile != "" {
-			payload["raptor_profile"] = raptorProfile
+		if prof.RaptorProfile != "" {
+			payload["raptor_profile"] = prof.RaptorProfile
 		}
 		return render.JSON(out, payload)
 	}
 	if local {
-		fmt.Fprintf(out, "\n✓ Logged in as %s and pinned profile %q to %s\n", email, profileName, projectRoot)
+		fmt.Fprintf(out, "\n✓ Logged in as %s and pinned profile %q to %s\n", displayName, profileName, projectRoot)
 		return nil
 	}
-	fmt.Fprintf(out, "\n✓ Logged in as %s (profile: %s, url: %s)\n", email, profileName, baseURL)
+	fmt.Fprintf(out, "\n✓ Logged in as %s (profile: %s, url: %s)\n", displayName, profileName, baseURL)
 	return nil
 }
 
@@ -515,11 +638,7 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName, baseURL, token, em
 // both output modes so they never corrupt --json output.
 func resolveRaptorPairing(profileName, baseURL string) string {
 	if loginRaptorProfile == "" {
-		store, err := credentials.Load()
-		if err != nil {
-			return ""
-		}
-		return store[profileName].RaptorProfile
+		return raptorPin(profileName)
 	}
 	// Validation is advisory: raptor's credentials are the user's to manage,
 	// and they may run `raptor login` after this.
@@ -535,6 +654,21 @@ func resolveRaptorPairing(profileName, baseURL string) string {
 			loginRaptorProfile, cpURL, baseURL)
 	}
 	return loginRaptorProfile
+}
+
+// raptorPin returns the raptor profile this login is paired with: the
+// --raptor-profile flag when given, else whatever the profile already stored.
+// The PAT lookup and the persisted pairing share it, so `--raptor-profile X` on
+// a first login can't authenticate as one profile and save a pairing to another.
+func raptorPin(profileName string) string {
+	if loginRaptorProfile != "" {
+		return loginRaptorProfile
+	}
+	store, err := credentials.Load()
+	if err != nil {
+		return ""
+	}
+	return store[profileName].RaptorProfile
 }
 
 type authMeResponse struct {
@@ -561,13 +695,15 @@ type authMeResponse struct {
 var errTokenRejected = errors.New("token rejected by server")
 
 // fetchAuthMe is the seam: tests swap it to avoid hitting a real server.
-var fetchAuthMe = func(baseURL, token string) (*authMeResponse, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+var fetchAuthMe = func(baseURL string, auth map[string]string) (*authMeResponse, error) {
+	client := httpclient.New(10 * time.Second)
 	req, err := http.NewRequest("GET", baseURL+"/ai-api/auth/me", nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
