@@ -89,11 +89,15 @@ that does everything you need:
    (`~/.claude/skills/praxis/`, `~/.agents/skills/praxis/`,
    `~/.gemini/skills/praxis/`). The meta-skill teaches your AI how to
    drive the rest of the CLI.
-2. **Authenticates.** If `raptor` is already logged in, login reuses
-   that control-plane token (and its control plane) — nothing to click.
-   Otherwise it opens your browser to **create an API key** (you click
-   "Create" once; the CLI polls the deployment for the new key and picks
-   it up).
+2. **Authenticates** with a control-plane token wherever it can get one:
+   - If `raptor` is already logged in, login reuses that control-plane
+     token (and its control plane) — nothing to click.
+   - Otherwise it opens the control plane's **personal access token**
+     page — the same page `raptor login` opens — and you paste the token
+     you create there.
+   - Failing both, it opens your browser to create a **Praxis API key**
+     (you click "Create" once; the CLI polls the deployment for the new
+     key and picks it up).
 3. **Wipes any leftover org skills** from a previous profile.
 4. **Fetches your org's catalog of skills** from the Praxis server
    and installs each one as `praxis-<name>` across every AI host.
@@ -105,9 +109,10 @@ that does everything you need:
 
 If `raptor` is logged in on this machine, `praxis login` targets that
 control plane and authenticates with the token already there — no
-`--url`, no browser. Otherwise pass your organization's Praxis
-deployment URL the first time you log in. Ask your Praxis administrator
-if you don't know it.
+`--url`, no browser. Otherwise pass your organization's control plane
+URL the first time you log in; login opens its personal-access-token
+page so you can create a token. Ask your Praxis administrator if you
+don't know the URL.
 
 ```bash
 praxis login --url https://<account-id>.console.facets.cloud
@@ -447,8 +452,10 @@ praxis surfaces this instead of ignoring it:
   warning but never fails login. Re-logins without the flag preserve
   the pairing.
 
-praxis never writes `~/.facets/credentials` or uses raptor's tokens —
-the pairing is metadata on the praxis side only.
+praxis never *writes* `~/.facets/credentials` — the pairing is metadata
+on the praxis side only. It does *read* that file: a control-plane token
+raptor already holds is the first credential `praxis login` tries (step 2
+above).
 
 ## Files
 

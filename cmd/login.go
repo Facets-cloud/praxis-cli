@@ -53,8 +53,9 @@ var (
 // exercise login's path selection (reuse vs. browser) and persistence
 // without opening a browser, hitting the network, or installing skills.
 var (
-	browserLoginFn = browserSessionPollLogin
-	postAuthSetup  = runPostAuthSetup
+	browserLoginFn   = browserSessionPollLogin
+	interactivePATFn = tryInteractivePAT
+	postAuthSetup    = runPostAuthSetup
 )
 
 // osExit is a seam over os.Exit so tests can exercise the fatal-exit paths
@@ -66,7 +67,7 @@ func init() {
 	loginCmd.Flags().StringVar(&loginProfile, "profile", "", "save under this profile name (default: \"default\")")
 	loginCmd.Flags().StringVar(&loginURL, "url", "", "Praxis deployment URL (required for a new profile; existing profiles reuse their saved URL)")
 	loginCmd.Flags().StringVar(&loginToken, "token", "", "skip browser flow; save and verify the given API key directly")
-	loginCmd.Flags().BoolVar(&loginForce, "force", false, "skip reusing a stored token; always open the browser")
+	loginCmd.Flags().BoolVar(&loginForce, "force", false, "skip the stored token and re-authenticate from the start of the chain")
 	loginCmd.Flags().BoolVar(&loginLocal, "local", false,
 		"pin this profile to the current directory tree (writes <cwd>/.praxis) and install its skills project-scoped, instead of switching the global profile")
 	loginCmd.Flags().BoolVar(&loginJSON, "json", false, "JSON output")
@@ -89,11 +90,17 @@ var loginCmd = &cobra.Command{
   1. Install the praxis meta-skill into every detected AI host
      (~/.claude/skills/praxis, plus ~/.agents/skills/praxis — the
       shared alias Codex and Gemini CLI both read) — idempotent.
-  2. Reuse the active profile's stored token when it's still valid for
-     this URL (no browser); else authenticate with the control-plane PAT
-     in raptor's ~/.facets/credentials (no browser); else open a browser
-     to create a Praxis API key. Use --token to supply a key directly,
-     or --force to always re-authenticate via the browser.
+  2. Authenticate, preferring a control-plane PAT at every step:
+       a. the active profile's stored token, if still valid for this URL
+          (no browser)
+       b. the control-plane PAT in raptor's ~/.facets/credentials
+          (no browser)
+       c. the control plane's personal-access-token page — the same page
+          "raptor login" opens; create a token, paste it back
+       d. a Praxis API key, created in the browser
+     Login walks the chain until one works. Use --token to supply a
+     Praxis API key directly, or --force to skip (a) and
+     re-authenticate.
   3. Save credentials and flip the active profile pointer.
   4. Wipe any praxis-* org skills from the previous profile.
   5. Fetch this profile's skill catalog from the server and install
@@ -146,17 +153,21 @@ installed skills — then exits without changing anything.`,
 
 		// Smart default: if the active profile already has a token valid
 		// for this URL, refresh skills + manifest without a browser hop.
-		// --force opts out and always re-authenticates via the browser.
+		// --force skips only this step and re-enters the chain below it.
 		if !loginForce {
 			handled, rerr := tryReuseStoredToken(out, asJSON, profileName, baseURL, loginLocal)
 			if handled {
 				return rerr
 			}
-			// Nothing to reuse: raptor's control-plane PAT is the primary
-			// credential, the browser/API-key flow the fallback.
+			// Nothing to reuse: a control-plane PAT already on this machine
+			// is the best credential — no browser at all.
 			if handled, ferr := tryFacetsPAT(out, asJSON, profileName, baseURL, loginLocal); handled {
 				return ferr
 			}
+		}
+		// A control-plane PAT beats a Praxis API key even when raptor left none.
+		if handled, perr := interactivePATFn(out, asJSON, profileName, baseURL, loginLocal); handled {
+			return perr
 		}
 		return browserLoginFn(out, asJSON, profileName, baseURL, loginTimeout, loginLocal)
 	},
@@ -250,14 +261,9 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 		// the process has already exited.
 		return true, err
 	}
-	// Persist the canonical (post-redirect) host so a stale stored URL
-	// self-heals on the next login (issue #19-A). Reuse the stored profile
-	// otherwise — notably its Username/AuthMode, so a facets profile's
-	// Basic header keeps working across reuse.
-	if user.canonicalBaseURL != "" {
-		prof.URL = user.canonicalBaseURL
-	}
-	return true, persistAndSetup(out, asJSON, profileName, prof, user.Email, local)
+	// Reuse the stored profile as-is otherwise — notably its Username/AuthMode,
+	// so a facets profile's identity header keeps working across reuse.
+	return true, persistAndSetup(out, asJSON, profileName, applyCanonical(prof, user), user.Email, local)
 }
 
 // browserSessionPollLogin opens the browser to the api-keys page with a
@@ -446,14 +452,19 @@ func tryFacetsPAT(out io.Writer, asJSON bool, profileName, baseURL string, local
 			c.username, c.section, verdict, c.url, err)
 		return false, nil
 	}
-	if user.canonicalBaseURL != "" {
-		prof.URL = user.canonicalBaseURL
-	}
+	return true, persistVerified(out, asJSON, profileName, prof, user, c.username, local)
+}
+
+// persistVerified is the tail both PAT paths share: canonicalize the URL, then
+// name the login after the server's email, falling back to the username that
+// authenticated when the server doesn't return one.
+func persistVerified(out io.Writer, asJSON bool, profileName string, prof credentials.Profile,
+	user *authMeResponse, fallbackName string, local bool) error {
 	display := user.Email
 	if display == "" {
-		display = c.username
+		display = fallbackName
 	}
-	return true, persistAndSetup(out, asJSON, profileName, prof, display, local)
+	return persistAndSetup(out, asJSON, profileName, applyCanonical(prof, user), display, local)
 }
 
 // facetsPAT is a control-plane credential a login can try: the
@@ -466,14 +477,9 @@ type facetsPAT struct {
 }
 
 // asProfile is the praxis profile this credential would be saved and
-// authenticated as — the one place a facets-mode Profile is built.
+// authenticated as.
 func (c facetsPAT) asProfile() credentials.Profile {
-	return credentials.Profile{
-		URL:      c.url,
-		Username: c.username,
-		Token:    c.token,
-		AuthMode: credentials.AuthModeBasic,
-	}
+	return credentials.FacetsProfile(c.url, c.username, c.token)
 }
 
 // facetsPATCandidate returns the control-plane PAT praxis would authenticate
@@ -493,11 +499,10 @@ func facetsPATCandidate(profileName, baseURL string) (facetsPAT, bool) {
 	if !st.Found {
 		return facetsPAT{}, false
 	}
-	// The PAT only ever travels to its own control plane, and only over TLS.
-	// Loopback is exempt from both: that's a developer's own agent server,
-	// where http:// is normal and there is no network to eavesdrop.
-	if !isLoopbackURL(baseURL) &&
-		(!raptorstate.MatchesHost(baseURL, st.ControlPlaneURL) || !strings.HasPrefix(baseURL, "https://")) {
+	// A stored PAT additionally may only travel to the control plane it came
+	// from — never to a host merely typed after --url.
+	if !patTransportOK(baseURL) ||
+		(!isLoopbackURL(baseURL) && !raptorstate.MatchesHost(baseURL, st.ControlPlaneURL)) {
 		return facetsPAT{}, false
 	}
 	username, token, ok := raptorstate.PAT(st.Profile)
@@ -505,6 +510,15 @@ func facetsPATCandidate(profileName, baseURL string) (facetsPAT, bool) {
 		return facetsPAT{}, false
 	}
 	return facetsPAT{section: st.Profile, username: username, token: token, url: baseURL}, true
+}
+
+// patTransportOK reports whether a control-plane PAT may be sent to this URL at
+// all. A PAT never travels in cleartext; loopback is exempt because that is a
+// developer's own agent server, with no network to eavesdrop. Shared by every
+// PAT path (stored, pasted, and the --dry-run report) so a trust-boundary rule
+// has exactly one expression.
+func patTransportOK(baseURL string) bool {
+	return strings.HasPrefix(baseURL, "https://") || isLoopbackURL(baseURL)
 }
 
 // isLoopbackURL reports whether a URL points at this machine.
@@ -683,6 +697,17 @@ type authMeResponse struct {
 	// Empty when a test stub doesn't set it — callers fall back to the
 	// URL they already have.
 	canonicalBaseURL string
+}
+
+// applyCanonical persists the deployment base /auth/me actually landed on after
+// redirects, so a stale stored URL self-heals on the next login (issue #19-A)
+// instead of making every later MCP invoke pay the hop. Every verify path calls
+// it; a test stub that leaves canonicalBaseURL empty keeps the URL it had.
+func applyCanonical(prof credentials.Profile, user *authMeResponse) credentials.Profile {
+	if user.canonicalBaseURL != "" {
+		prof.URL = user.canonicalBaseURL
+	}
+	return prof
 }
 
 // errTokenRejected signals that the server actively rejected the stored
