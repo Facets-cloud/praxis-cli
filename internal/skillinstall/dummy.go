@@ -92,16 +92,81 @@ ones the org has published. Login is idempotent.
 ## Switching between Praxis deployments
 
 If the user has multiple deployments (e.g. internal support engineers),
-each one is its own profile. Switch by re-running login with --profile X.
-Login wipes the previous profile's org skills (praxis-* prefix) before
-installing the new one's, so there's never a mixed state on disk.
+each one is its own profile. ` + "`praxis profiles`" + ` lists them; the one
+marked ` + "`active`" + ` is what every other command uses.
+
+**Switch with ` + "`praxis profiles use <name>`" + ` — you can run this yourself, no
+browser.** It reuses the profile's stored token, so it only needs the user
+when that token is dead. It verifies the token BEFORE changing anything and
+then wipes the previous profile's org skills (praxis-* prefix) and installs
+the new one's, so there's never a mixed state on disk.
 
 ` + "```bash" + `
-praxis login --profile acme        # active profile becomes acme
-praxis login --profile bigcorp     # wipes acme skills, installs bigcorp
+praxis profiles --json             # who's available, who's active
+praxis profiles use acme --json    # active profile becomes acme
+praxis profiles use bigcorp --json # wipes acme skills, installs bigcorp
 ` + "```" + `
 
+Read the result: ` + "`profile`" + ` is the new active one, ` + "`previous_profile`" + ` the
+old one. If ` + "`shadowed_by_project_root`" + ` is present the switch was global but
+this directory is pinned to ` + "`effective_profile`" + ` by a ` + "`.praxis`" + ` marker —
+commands run here still use that profile; add ` + "`--local`" + ` to repin the tree.
+
+Exit 3 means the stored token is dead: fall back to
+` + "`praxis login --profile <name>`" + `, which needs the user to click once.
+A rejected or unreachable switch changes NOTHING, so it's safe to retry.
+
 This meta-skill survives every switch. Only the catalog skills cycle.
+
+### Scope yourself instead of switching
+
+` + "`profiles use`" + ` is MACHINE-GLOBAL. It rewrites the active-profile pointer
+AND replaces the installed praxis-* skills, so it changes every other shell
+and agent session on this machine — including skill files a concurrent session
+has already read. **If you might not be the only session running, don't
+switch — scope yourself.** Two ways, both write nothing:
+
+` + "```bash" + `
+# one command
+praxis -p bigcorp duty list --json
+praxis -p bigcorp mcp cloud_cli run --arg cmd='aws s3 ls'
+
+# every command for the rest of THIS session
+export PRAXIS_PROFILE=bigcorp
+praxis duty list --json                 # profile_source is "env"
+` + "```" + `
+
+` + "`PRAXIS_PROFILE`" + ` lives in your process environment, so another session
+can't see it and can't move you — and your switch can't move them. Set it via
+your shell tool's env, or ` + "`export`" + ` it if your shell state persists.
+
+**Choose deliberately:**
+
+| Situation | Use |
+| --- | --- |
+| one command, or comparing two deployments | ` + "`-p <name>`" + ` |
+| this whole session works in one deployment | ` + "`PRAXIS_PROFILE=<name>`" + ` |
+| the USER asked to switch and owns the machine | ` + "`profiles use <name>`" + ` |
+
+Precedence: ` + "`-p`" + ` > ` + "`PRAXIS_PROFILE`" + ` > a repo's ` + "`.praxis`" + ` pointer >
+the global pointer. The flag works before or after the command name
+(` + "`praxis -p x status`" + ` == ` + "`praxis status -p x`" + `).
+
+**Limitation worth knowing:** ` + "`-p`" + ` and ` + "`PRAXIS_PROFILE`" + ` route commands
+to the right deployment, but the praxis-* SKILL FILES on disk always belong to
+the globally-active profile. So cross-profile work gets the right gateway with
+the active profile's skill text. If you need another org's custom skills
+loaded, a real ` + "`profiles use`" + ` is the only way — then tell the user it
+affects their other sessions.
+
+Commands that REFUSE a profile selection with exit 2 (nothing changed),
+because they act on whatever is globally active:
+
+- ` + "`logout`" + ` and ` + "`refresh-skills`" + ` — refuse BOTH ` + "`-p`" + ` and
+  ` + "`PRAXIS_PROFILE`" + `; they delete or reinstall the active profile's skills.
+- ` + "`profiles use`" + ` — refuses ` + "`-p`" + ` only (its target is the argument). With
+  ` + "`PRAXIS_PROFILE`" + ` set it still switches, and reports ` + "`shadowed_by_env`" + `
+  plus ` + "`effective_profile`" + ` because YOUR session keeps using the variable.
 
 ## Per-directory profiles (local mode)
 
@@ -111,7 +176,8 @@ state:
 
 ` + "```bash" + `
 cd ~/work/acme
-praxis login --profile acme --local     # pins acme to this tree
+praxis login --profile acme --local     # first time: authenticate + pin
+praxis profiles use acme --local        # already authenticated: just pin
 praxis refresh-skills --project         # same scope, no re-auth
 ` + "```" + `
 
@@ -155,6 +221,13 @@ AI-callable (always pass --json):
   - ` + "`praxis list-skills [--json]`" + ` — list every skill file the CLI
     has installed on this host, with per-harness paths. Read-only,
     no network call.
+  - ` + "`praxis profiles [--refresh]`" + ` — list every profile with its URL,
+    username, and login state; ` + "`active_profile`" + ` names the one in use.
+    Local-only unless ` + "`--refresh`" + ` live-verifies each token.
+  - ` + "`praxis profiles use <name>`" + ` — make that profile active and re-sync
+    its skills + MCP snapshot. No browser: reuses the stored token, exits 3
+    if it's dead (then use ` + "`praxis login --profile <name>`" + `). ` + "`--local`" + `
+    pins it to the current directory tree instead of switching globally.
   - ` + "`praxis refresh-skills`" + ` — re-fetch this profile's catalog and
     rewrite skill files + MCP snapshot, without re-authenticating. Use
     when the org has published new skills or after ` + "`brew upgrade praxis`" + `.

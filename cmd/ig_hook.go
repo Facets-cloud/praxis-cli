@@ -87,7 +87,7 @@ func runIgHook(event, session, tmpDir, canonURL string, claims claimsFunc) (stri
 // gateway, or a slow response all return an error so the hook stays silent and a
 // session start never hangs on the network.
 func serverClaims(canonURL string) ([]string, error) {
-	act, err := credentials.ResolveActive(igProfile)
+	act, err := credentials.ResolveActive(rootProfile)
 	if err != nil {
 		return nil, err
 	}

@@ -144,3 +144,91 @@ func TestPraxisMetaSkill_RaptorSetupIsActionable(t *testing.T) {
 		}
 	}
 }
+
+// Switching profiles used to require `praxis login --profile X`, which needs a
+// human to click "Create Key" in a browser — so an agent asked to work against
+// another deployment had no unattended path and would stall. `profiles use`
+// reuses the stored token, so the meta-skill must name it (and the exit-3
+// fallback) or hosts keep reaching for the browser flow.
+func TestPraxisMetaSkill_TeachesProfileSwitching(t *testing.T) {
+	body, err := ContentFor("praxis")
+	if err != nil {
+		t.Fatalf("ContentFor(praxis): %v", err)
+	}
+
+	for _, want := range []string{
+		"praxis profiles use",         // the command itself
+		"praxis profiles [--refresh]", // how to find out what's available
+		"previous_profile",            // fields to read back
+		"shadowed_by_project_root",
+		"--local", // the per-repo alternative
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("meta-skill should mention %q so a host can switch profiles without a browser", want)
+		}
+	}
+
+	// The old advice, as the ONLY way to switch, sends the host to a browser
+	// flow it can't complete alone. It may appear solely as the exit-3 fallback.
+	if strings.Contains(body, "active profile becomes acme") && !strings.Contains(body, "praxis profiles use acme") {
+		t.Error("meta-skill still teaches login --profile as the way to switch profiles")
+	}
+}
+
+// A one-off read against another deployment should cost nothing: -p resolves
+// for that invocation only. Without this in the meta-skill a host reaches for
+// `profiles use` — wiping and reinstalling ~90 skill files — just to answer
+// one question, and then leaves the user on the wrong profile.
+func TestPraxisMetaSkill_TeachesOneOffProfileFlag(t *testing.T) {
+	body, err := ContentFor("praxis")
+	if err != nil {
+		t.Fatalf("ContentFor(praxis): %v", err)
+	}
+
+	for _, want := range []string{
+		"-p <name>",  // the flag
+		"praxis -p ", // at least one runnable example
+		"exit 2",     // and where it doesn't work
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("meta-skill should mention %q so a host uses the cheap path for one-off reads", want)
+		}
+	}
+
+	// All three refusing commands must be named, or a host will burn an
+	// invocation discovering the exit code.
+	for _, refuses := range []string{"logout", "refresh-skills", "profiles use"} {
+		if !strings.Contains(body, refuses) {
+			t.Errorf("meta-skill should name %q as refusing --profile", refuses)
+		}
+	}
+}
+
+// Several agent sessions on one machine is the normal case, and `profiles use`
+// is machine-global: it repoints every session AND rewrites skill files those
+// sessions have already read. A host that doesn't know to scope itself with
+// PRAXIS_PROFILE will silently break its siblings.
+func TestPraxisMetaSkill_TeachesSessionScopingForConcurrency(t *testing.T) {
+	body, err := ContentFor("praxis")
+	if err != nil {
+		t.Fatalf("ContentFor(praxis): %v", err)
+	}
+
+	for _, want := range []string{
+		"PRAXIS_PROFILE",         // the mechanism
+		"export PRAXIS_PROFILE=", // how to actually set it
+		"MACHINE-GLOBAL",         // what profiles use really does
+		"agent session",          // who gets hurt
+		"scope yourself",         // the instruction itself
+		"shadowed_by_env",        // how to read the result
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("meta-skill should mention %q so concurrent sessions don't clobber each other", want)
+		}
+	}
+
+	// The honest caveat: routing follows the flag/env, skill FILES do not.
+	if !strings.Contains(body, "SKILL FILES on disk always belong to") {
+		t.Error("meta-skill must disclose that -p/env route commands but don't swap skill files")
+	}
+}

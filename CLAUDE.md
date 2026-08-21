@@ -88,9 +88,9 @@ Makefile              build (with ldflags), install, test, lint, clean
 **Don't add stub commands.** A cobra command that prints "not yet
 implemented" is worse than no command — it lies to users and to
 `--help`. Skill sourcing and the server gateway are now live:
-`login`, `logout`, `status`, `profiles`, `mcp`, `list-skills`, and
-`refresh-skills` are all implemented (skills install automatically as
-part of `login`/`refresh-skills`). Skills are
+`login`, `logout`, `status`, `profiles`, `profiles use`, `mcp`,
+`list-skills`, and `refresh-skills` are all implemented (skills install
+automatically as part of `login`/`profiles use`/`refresh-skills`). Skills are
 fetched from the server, name-prefixed (`praxis-*`), and have the
 `render.ExecutionPreamble` inserted after their frontmatter so any
 in-process MCP reference (`run_cloud_cli(...)`) is rewritten to a
@@ -126,16 +126,55 @@ Invariants to preserve when touching this area:
   `ActiveRoot()`, so the unconditional "wipe previous profile" step
   (`UninstallByPrefix`) only ever touches the active root. Callers set the
   scope up front by pinning via `paths.OverrideActiveRoot` (login --local /
-  refresh --project) or by being in an active local tree; never make a
-  scope decision that diverges receipt from install.
-- **`login` (global) and `logout` are global by design.** They pin the
-  active root to home (`paths.OverrideActiveRoot(home)` / logout) and
-  resolve the global profile (`credentials.ResolveActiveGlobal`), so being
-  inside a project tree never redirects them.
+  `profiles use --local` / refresh --project) or by being in an active local
+  tree; never make a scope decision that diverges receipt from install.
+- **Moving the pointer and re-installing skills is one operation.** Both
+  callers that change the active profile (`praxis login`, `praxis profiles
+  use`) go through `cmd.activateProfile`, which flips the pointer AND pins
+  the matching `ActiveRoot` in the same step, then run `postAuthSetup`.
+  Never flip a pointer without the re-sync: that's how you get profile A
+  active with profile B's `praxis-*` skills on disk. `profiles use`
+  additionally verifies the stored token via `/auth/me` BEFORE any write,
+  so a dead token or an unreachable server changes nothing (exit 3 / 5).
+- **`login` (global), `logout`, and `profiles use` (no --local) are global
+  by design.** They pin the active root to home
+  (`paths.OverrideActiveRoot(home)`) and — for login/logout — resolve the
+  global profile (`credentials.ResolveActiveGlobal`), so being inside a
+  project tree never redirects them. A global `profiles use` run inside a
+  local-mode tree reports `shadowed_by_project_root` +
+  `effective_profile`, since the project pointer still wins there.
 - **Active-profile resolution** (`credentials.resolveName`): `--profile`
-  flag → project pointer → global pointer → `"default"`.
-  `SourceProject` marks the project case; a project pointer to an unknown
-  profile falls back to the global resolution.
+  flag → `$PRAXIS_PROFILE` → project pointer → global pointer →
+  `"default"`. `SourceProject` marks the project case; a project pointer to
+  an unknown profile falls back to the global resolution, but an unknown
+  flag/env profile does NOT — an explicit choice must fail loudly (exit 3)
+  rather than silently route to a different org.
+- **`$PRAXIS_PROFILE` is the concurrency-safe scope**
+  (`credentials.EnvProfile`). Both the active-profile pointer and the
+  installed `praxis-*` skills are machine-global, so `profiles use` repoints
+  every other shell/agent session on the box AND rewrites skill files those
+  sessions have already read. The env var lives in the process environment:
+  it writes nothing and is unobservable from another session. It MUST
+  outrank the project pointer, or a pinned repo couldn't be scoped per
+  session. Residual limitation — documented, not fixed: skill FILES still
+  belong to the globally-active profile, so `-p`/env give the right gateway
+  with the active profile's skill text.
+- **`--profile` is ONE flag on `rootCmd`**, persistent, shorthand `-p`,
+  bound to `cmd.rootProfile` (root.go). Never define a local `--profile` on
+  a subcommand: cobra lets the local flag shadow the inherited one, so
+  `praxis login -p x` and `praxis -p x login` would land in different
+  variables and one of them would be silently ignored. Commands read it via
+  `activeOrAuthExit` (memory/duty/ig/agents) or by passing `rootProfile` to
+  `credentials.ResolveActive`. Tests MUST reset `rootProfile` — it's package
+  state shared by every command (`resetLoginFlags`, `resetIgFlags`,
+  `setRootProfile` all do).
+- **A command that can't honor `--profile` must REFUSE it**, never ignore
+  it: `refusedProfileFlag` (root.go) prints a usage error and exits 2.
+  Today that's `logout` and `refresh-skills` (both rewrite the ACTIVE
+  profile's org skills, so honoring the flag would split pointer from
+  skills) and `profiles use` (target is positional). For `logout` the check
+  MUST come before the `--all` branch — `-p X --all` is a contradiction, and
+  ignoring `-p` there wipes every profile for a user who named one.
 - Discovery is **home-subtree only** — matches the intended use case and
   keeps tests deterministic under a faked `$HOME`. Tests drive discovery
   via `paths.SetGetwdForTest` and pin via `paths.OverrideActiveRoot`.

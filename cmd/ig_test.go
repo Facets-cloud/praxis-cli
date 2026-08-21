@@ -24,7 +24,7 @@ import (
 // between tests — cobra holds these globals across RunE calls.
 func resetIgFlags() {
 	igJSON = false
-	igProfile = ""
+	rootProfile = "" // the global --profile flag ig now reads (root.go)
 	igSyncAll = false
 	igPublishCatalog = ""
 	igPublishMember = ""

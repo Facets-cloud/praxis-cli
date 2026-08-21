@@ -42,8 +42,10 @@ are no-ops because the token is ephemeral — nothing is persisted on the laptop
 }
 
 // resolveGateway returns the active profile's gateway URL + auth headers.
+// Honors the global --profile flag, so a repo can pin a helper to one profile
+// with `helper = praxis --profile acme git-credential`.
 func resolveGateway() (string, map[string]string, error) {
-	active, err := credentials.ResolveActive("")
+	active, err := credentials.ResolveActive(rootProfile)
 	if err != nil {
 		return "", nil, err
 	}

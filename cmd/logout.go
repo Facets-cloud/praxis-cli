@@ -37,13 +37,26 @@ still knows how to log back in.
   praxis logout --all   every profile's creds + every host's org skills
 
 To remove a non-active profile's credentials specifically, switch to it
-first with ` + "`praxis login --profile X`" + ` and then run logout. With v0.7's
-invariant that at most one profile's org skills are on disk at a time,
-there's no way (and no need) to target a non-active profile directly.`,
+first with ` + "`praxis profiles use X`" + ` and then run logout. Because at most
+one profile's org skills are on disk at a time, logout REFUSES the global
+` + "`--profile`" + ` flag (exit 2, nothing removed) rather than delete one
+profile's credentials while wiping another's skills.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(logoutJSON, false, out)
+
+		// Refuse BEFORE anything destructive, --all included: --profile with
+		// --all is a contradiction ("that one" vs "every one"), and honoring
+		// --all while ignoring --profile would wipe every profile for a user
+		// who named exactly one. logout also removes the org skills belonging
+		// to whichever profile is ACTIVE, so it can't delete a different
+		// profile's credentials without leaving the two out of step — which is
+		// why $PRAXIS_PROFILE is refused here too, not only the flag.
+		if refusedExplicitProfile(out, asJSON, "logout",
+			"switch to it first (`praxis profiles use %s`), then run logout") {
+			return nil
+		}
 
 		// logout is a GLOBAL lifecycle operation, mirroring login: pin the
 		// active root to home so the org-skill wipe and snapshot removal
@@ -111,9 +124,7 @@ there's no way (and no need) to target a non-active profile directly.`,
 
 		// Target the GLOBAL active profile only — logout is global (see the
 		// home pin above), so it removes the globally-active profile's
-		// credentials regardless of any project pointer in the cwd. v0.7
-		// dropped --profile from logout (see Long). To remove a non-active
-		// profile, login to it first.
+		// credentials regardless of any project pointer in the cwd.
 		active, _ := credentials.ResolveActiveGlobal()
 		store, _ := credentials.Load()
 		credsPresent := false

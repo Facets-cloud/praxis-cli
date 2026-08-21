@@ -75,7 +75,7 @@ func TestLoginDryRun_HasNoSideEffects(t *testing.T) {
 	}
 
 	// Aim at a DIFFERENT profile+URL — the most side-effect-prone shape.
-	loginProfile, loginURL = "probe", "https://probe.test"
+	rootProfile, loginURL = "probe", "https://probe.test"
 	runDryRunJSON(t)
 
 	after, err := os.ReadFile(credsPath)
@@ -182,7 +182,7 @@ func TestLoginDryRun_ProfileSwitchSkillsEffect(t *testing.T) {
 		return &authMeResponse{Email: "u@x"}, nil
 	})
 
-	loginProfile = "acme"
+	rootProfile = "acme"
 	report := runDryRunJSON(t)
 	effect, _ := report["skills_effect"].(string)
 	if effect == "" || report["active_profile"] != "default" {

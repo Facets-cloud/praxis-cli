@@ -38,7 +38,7 @@ func TestLogin_Local_PinsProjectAndLeavesGlobalAlone(t *testing.T) {
 	}
 	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return repo, nil }))
 
-	loginProfile = "aurva"
+	rootProfile = "aurva"
 	loginLocal = true
 	if _, err := runLoginRunE(t); err != nil {
 		t.Fatalf("login --local err = %v", err)
@@ -74,7 +74,7 @@ func TestLogin_Local_OutsideHome_Errors(t *testing.T) {
 	outside := t.TempDir()
 	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return outside, nil }))
 
-	loginProfile = "aurva"
+	rootProfile = "aurva"
 	loginLocal = true
 	_, err := runLoginRunE(t)
 	if err == nil {

@@ -46,7 +46,7 @@ current staleness.`,
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(statusJSON, false, out)
 
-		active, _ := credentials.ResolveActive("")
+		active, _ := credentials.ResolveActive(rootProfile)
 		skills, _ := skillinstall.List()
 		agents, _ := agentinstall.List()
 		loggedIn := active.Loaded && active.Profile.Token != ""

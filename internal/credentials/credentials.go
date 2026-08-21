@@ -117,10 +117,23 @@ type Source string
 
 const (
 	SourceFlag    Source = "flag"
+	SourceEnv     Source = "env"
 	SourceProject Source = "project"
 	SourceConfig  Source = "config"
 	SourceDefault Source = "default"
 )
+
+// EnvProfile selects the active profile for one PROCESS TREE — i.e. one shell
+// or one agent session.
+//
+// This is the concurrency-safe way to work in a profile. The active-profile
+// pointer (~/.praxis/config.json) and the installed org skills are BOTH
+// machine-global, so `praxis profiles use X` changes what every other session
+// on the machine resolves to, and rewrites skill files those sessions have
+// already read. Exporting PRAXIS_PROFILE instead writes nothing: it can't be
+// observed by another session, and another session's switch can't be observed
+// by you.
+const EnvProfile = "PRAXIS_PROFILE"
 
 // Active is the resolved active profile + provenance.
 type Active struct {
@@ -179,16 +192,30 @@ func resolveName(flagProfile string) (string, Source) {
 	if flagProfile != "" {
 		return flagProfile, SourceFlag
 	}
+	// Env outranks both pointers: it is this session's explicit choice, and a
+	// repo pinned via .praxis must still be overridable per session.
+	if name := EnvProfileName(); name != "" {
+		return name, SourceEnv
+	}
 	if name := projectProfile(); name != "" {
 		return name, SourceProject
 	}
 	return resolveGlobalName(flagProfile)
 }
 
+// EnvProfileName returns the profile named by $PRAXIS_PROFILE, or "" when it
+// is unset or blank. Read live on every resolution so a session can change it.
+func EnvProfileName() string {
+	return strings.TrimSpace(os.Getenv(EnvProfile))
+}
+
 // resolveGlobalName is resolveName without the project-pointer step.
 func resolveGlobalName(flagProfile string) (string, Source) {
 	if flagProfile != "" {
 		return flagProfile, SourceFlag
+	}
+	if name := EnvProfileName(); name != "" {
+		return name, SourceEnv
 	}
 	if cfg, _ := loadConfig(); cfg.Profile != "" {
 		return cfg.Profile, SourceConfig

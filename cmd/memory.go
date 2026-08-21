@@ -123,10 +123,11 @@ func usageExit(out io.Writer, msg, hint string) {
 	os.Exit(exitcode.Usage)
 }
 
-// activeOrAuthExit resolves the current credentials profile or exits
-// with the auth code. Mirrors cmd/mcp.go.
+// activeOrAuthExit resolves the credentials profile this invocation should use
+// — honoring the global --profile flag — or exits with the auth code.
+// Mirrors cmd/mcp.go.
 func activeOrAuthExit(out io.Writer) credentials.Active {
-	active, err := credentials.ResolveActive("")
+	active, err := credentials.ResolveActive(rootProfile)
 	if err != nil {
 		render.PrintError(out, true, err.Error(), "could not load credentials", exitcode.Error)
 		os.Exit(exitcode.Error)

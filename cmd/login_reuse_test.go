@@ -79,11 +79,14 @@ func stubOsExit(t *testing.T) *int {
 
 func resetLoginFlags(t *testing.T) {
 	t.Helper()
-	loginProfile, loginURL, loginToken, loginRaptorProfile = "", "", "", ""
+	// rootProfile is the global --profile flag (root.go); login reads it as the
+	// profile to create or update. It's package state shared with every other
+	// command, so it MUST be cleared or it leaks into later tests.
+	rootProfile, loginURL, loginToken, loginRaptorProfile = "", "", "", ""
 	loginForce, loginLocal, loginJSON, loginDryRun = false, false, false, false
 	loginTimeout = 90 * time.Second
 	t.Cleanup(func() {
-		loginProfile, loginURL, loginToken, loginRaptorProfile = "", "", "", ""
+		rootProfile, loginURL, loginToken, loginRaptorProfile = "", "", "", ""
 		loginForce, loginLocal, loginJSON, loginDryRun = false, false, false, false
 		loginTimeout = 90 * time.Second
 	})
@@ -441,7 +444,7 @@ func TestLoginRunE_URLRetargetOpensBrowser(t *testing.T) {
 func TestLoginRunE_NewNamedProfileWithoutURLErrors(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
-	loginProfile = "acme" // does not exist, no --url
+	rootProfile = "acme" // does not exist, no --url
 	browser := stubBrowserLogin(t)
 	stubPostAuth(t)
 	_, err := runLoginRunE(t)

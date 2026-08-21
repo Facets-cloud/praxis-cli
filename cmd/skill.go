@@ -130,11 +130,26 @@ Praxis skills active inside one repository and not globally.
 Requires an existing valid login. Exits 3 if not logged in — run
 ` + "`praxis login`" + ` first.
 
+This always re-syncs the ACTIVE profile, so the global ` + "`--profile`" + ` flag
+is REFUSED (exit 2, nothing changed): installing one profile's skills
+while the pointer names another is the exact state this flow prevents.
+To change profiles, use ` + "`praxis profiles use X`" + ` — it switches and
+re-syncs in one step.
+
 For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(refreshSkillsJSON, false, out)
+
+		// Installing profile X's skills while the pointer still names Y is the
+		// one state the post-auth flow exists to prevent, so refresh-skills
+		// only ever re-syncs the ACTIVE profile — by flag or by environment.
+		// Switching is a switch.
+		if refusedExplicitProfile(out, asJSON, "refresh-skills",
+			"run `praxis profiles use %s` — it switches AND re-syncs the skills in one step") {
+			return nil
+		}
 
 		active, err := credentials.ResolveActive("")
 		if err != nil {

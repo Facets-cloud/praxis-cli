@@ -3,9 +3,12 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"time"
 
+	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
 )
@@ -29,6 +32,77 @@ Run 'praxis <command> --help' for details on any command.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	Version:       version,
+}
+
+// rootProfile is the global --profile flag: the credentials profile this one
+// invocation should use. It sits at the top of the resolution chain in
+// credentials.resolveName (flag → project pointer → global pointer →
+// "default"), so it overrides a local-mode tree without touching any pointer
+// on disk — nothing is persisted and the next invocation resolves normally.
+// Empty means "resolve normally". Commands consume it via activeOrAuthExit or
+// by passing it to credentials.ResolveActive.
+var rootProfile string
+
+func init() {
+	// Persistent, so it works in both positions an AI host might emit it:
+	// `praxis --profile acme mcp ...` and `praxis mcp ... --profile acme`.
+	rootCmd.PersistentFlags().StringVarP(&rootProfile, "profile", "p", "",
+		"credentials profile to use for this invocation (overrides $"+credentials.EnvProfile+"; default: the active profile)")
+}
+
+// explicitProfile returns the profile this invocation explicitly selected and
+// the mechanism that named it, or ("", "") when neither is present. The flag
+// wins over the environment, matching credentials.resolveName's chain.
+func explicitProfile() (string, string) {
+	if rootProfile != "" {
+		return rootProfile, "--profile"
+	}
+	if name := credentials.EnvProfileName(); name != "" {
+		return name, credentials.EnvProfile
+	}
+	return "", ""
+}
+
+// refusedProfileFlag refuses an explicit -p/--profile only, leaving
+// $PRAXIS_PROFILE alone. Use it where the environment is a legitimate ambient
+// session setting but the flag would be ambiguous: `profiles use` names its
+// target positionally, so a flag beside it is two answers to one question,
+// whereas an exported variable is just the session the user is working in.
+func refusedProfileFlag(out io.Writer, asJSON bool, what, hintFmt string) bool {
+	if rootProfile == "" {
+		return false
+	}
+	return refuseSelection(out, asJSON, what, hintFmt, rootProfile, "--profile")
+}
+
+// refusedExplicitProfile refuses BOTH -p/--profile and $PRAXIS_PROFILE.
+//
+// Use it where the command rewrites state belonging to the ACTIVE profile:
+// `logout` deletes credentials and wipes org skills, `refresh-skills`
+// reinstalls them. Acting on any other profile would leave the pointer and the
+// skills on disk out of step. Ignoring the selection is the dangerous option,
+// not the polite one — `praxis --profile acme logout` would delete the ACTIVE
+// profile's credentials while the user believed they had named acme.
+func refusedExplicitProfile(out io.Writer, asJSON bool, what, hintFmt string) bool {
+	name, how := explicitProfile()
+	if name == "" {
+		return false
+	}
+	return refuseSelection(out, asJSON, what, hintFmt, name, how)
+}
+
+// refuseSelection prints the usage error and exits. hintFmt takes one %s: the
+// selected profile name.
+func refuseSelection(out io.Writer, asJSON bool, what, hintFmt, name, how string) bool {
+	hint := fmt.Sprintf(hintFmt, name)
+	if how == credentials.EnvProfile {
+		hint = "unset " + credentials.EnvProfile + " for this command, or " + hint
+	}
+	render.PrintError(out, asJSON,
+		fmt.Sprintf("%s can't be pointed at another profile (%s=%s)", what, how, name),
+		hint, exitcode.Usage)
+	osExit(exitcode.Usage)
+	return true
 }
 
 // Execute runs the root command. Called from main.

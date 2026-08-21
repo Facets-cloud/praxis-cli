@@ -66,7 +66,7 @@ Examples:
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(mcpJSON, false, out)
 
-		active, err := credentials.ResolveActive("")
+		active, err := credentials.ResolveActive(rootProfile)
 		if err != nil {
 			return err
 		}
