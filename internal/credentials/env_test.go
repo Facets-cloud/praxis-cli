@@ -10,7 +10,7 @@ import (
 // now outranks both pointers — so leaking it into the suite would make results
 // depend on the shell that launched `go test`. Clear it once for the package.
 func TestMain(m *testing.M) {
-	os.Unsetenv(EnvProfile)
+	_ = os.Unsetenv(EnvProfile)
 	os.Exit(m.Run())
 }
 

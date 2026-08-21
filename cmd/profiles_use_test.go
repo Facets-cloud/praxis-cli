@@ -21,8 +21,15 @@ import (
 
 func resetProfilesUseFlags(t *testing.T) {
 	t.Helper()
+	// rootProfile too: `profiles use` REFUSES an explicitly selected profile,
+	// so a value leaked from another test would push every case here down the
+	// exit-2 path and fail for a reason that has nothing to do with the test.
+	rootProfile = ""
 	profilesUseJSON, profilesUseLocal = false, false
-	t.Cleanup(func() { profilesUseJSON, profilesUseLocal = false, false })
+	t.Cleanup(func() {
+		rootProfile = ""
+		profilesUseJSON, profilesUseLocal = false, false
+	})
 }
 
 // postAuthCall records what postAuthSetup was invoked with — including the
@@ -434,7 +441,14 @@ func TestProfilesUse_JSONEnvelopeMatchesLogin(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	resetProfilesUseFlags(t)
 
-	seedProfile(t, "acme", "https://acme.test", "ta")
+	// Seed a raptor pairing: raptor_profile is an OPTIONAL key, so parity
+	// against an unpaired profile would compare two envelopes that both omit
+	// it and prove nothing about the field login actually emits.
+	if err := credentials.Put("acme", credentials.Profile{
+		URL: "https://acme.test", Username: "u@x", Token: "ta", RaptorProfile: "acme-rap",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	okAuthMe(t, "u@x")
 	stubPostAuthCapture(t)
 
@@ -443,7 +457,10 @@ func TestProfilesUse_JSONEnvelopeMatchesLogin(t *testing.T) {
 		t.Fatalf("RunE err = %v", err)
 	}
 	got := decodeMap(t, out)
-	for key := range setupPayload("acme", "u@x", "https://acme.test", "", "", false, postAuthState{}) {
+	if got["raptor_profile"] != "acme-rap" {
+		t.Errorf("raptor_profile = %v, want the paired profile login reports", got["raptor_profile"])
+	}
+	for key := range setupPayload("acme", "u@x", "https://acme.test", "", "acme-rap", false, postAuthState{}) {
 		if _, ok := got[key]; !ok {
 			t.Errorf("key %q from login's envelope missing from `profiles use` output", key)
 		}

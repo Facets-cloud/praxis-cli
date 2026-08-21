@@ -57,7 +57,13 @@ func TestRootProfileFlag_IsPersistentWithShorthand(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Find(%q): %v", c, err)
 		}
-		if sub.LocalFlags().Lookup("profile") != nil && sub.PersistentFlags().Lookup("profile") != nil {
+		// LocalFlags() alone is the check that works. Cobra excludes parent
+		// persistent flags from it (via parentsPflags), so the root --profile
+		// does NOT show up here -- but a subcommand's own `Flags().StringVar`
+		// does, which is exactly how loginProfile/igProfile used to be
+		// declared. Also requiring PersistentFlags() would make this
+		// unfalsifiable: a locally-declared flag never lands there.
+		if sub.LocalFlags().Lookup("profile") != nil {
 			t.Errorf("%s defines its own --profile; it must use the root flag", c)
 		}
 	}

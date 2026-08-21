@@ -156,8 +156,10 @@ the global pointer. The flag works before or after the command name
 to the right deployment, but the praxis-* SKILL FILES on disk always belong to
 the globally-active profile. So cross-profile work gets the right gateway with
 the active profile's skill text. If you need another org's custom skills
-loaded, a real ` + "`profiles use`" + ` is the only way — then tell the user it
-affects their other sessions.
+loaded, prefer ` + "`praxis profiles use <name> --local`" + ` in that project's
+directory: it installs them project-scoped and leaves every other session
+alone. A global ` + "`profiles use`" + ` also works, but it swaps the skill files
+for the whole machine — so say so before doing it.
 
 Commands that REFUSE a profile selection with exit 2 (nothing changed),
 because they act on whatever is globally active:
@@ -233,9 +235,6 @@ AI-callable (always pass --json):
     when the org has published new skills or after ` + "`brew upgrade praxis`" + `.
   - ` + "`praxis logout`" + ` — drop creds + org skills for active profile.
     ` + "`--all`" + ` wipes everything except this meta-skill.
-  - ` + "`praxis profiles`" + ` — list every profile with URL, username, active
-    marker, and login state (no tokens printed). ` + "`--refresh`" + ` live-verifies
-    each stored token.
   - ` + "`praxis profiles rename OLD NEW`" + ` / ` + "`praxis profiles rm NAME`" + ` —
     credentials-only profile management; no browser, no skill changes.
     ` + "`rm`" + ` refuses the active profile (that's ` + "`praxis logout`" + `).

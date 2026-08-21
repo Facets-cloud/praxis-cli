@@ -36,11 +36,14 @@ still knows how to log back in.
   praxis logout         active profile: creds + org skills + manifest
   praxis logout --all   every profile's creds + every host's org skills
 
-To remove a non-active profile's credentials specifically, switch to it
-first with ` + "`praxis profiles use X`" + ` and then run logout. Because at most
-one profile's org skills are on disk at a time, logout REFUSES the global
-` + "`--profile`" + ` flag (exit 2, nothing removed) rather than delete one
-profile's credentials while wiping another's skills.`,
+To remove a NON-active profile, use ` + "`praxis profiles rm NAME`" + ` — it
+touches credentials only, and skips the double skill-cycle of switching just
+to delete. Because at most one profile's org skills are on disk at a time,
+logout REFUSES an explicitly selected profile (exit 2, nothing removed)
+rather than delete one profile's credentials while wiping another's: that
+covers the global ` + "`--profile`" + ` flag AND ` + "`$PRAXIS_PROFILE`" + `, so
+unset the variable if it's exported and you mean to log out of the active
+profile.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()

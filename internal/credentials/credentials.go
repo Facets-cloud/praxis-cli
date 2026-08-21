@@ -209,6 +209,21 @@ func EnvProfileName() string {
 	return strings.TrimSpace(os.Getenv(EnvProfile))
 }
 
+// PersistedActiveName returns the profile named by the persisted global
+// pointer (~/.praxis/config.json), ignoring --profile and $PRAXIS_PROFILE.
+//
+// Destructive credentials operations MUST use this rather than
+// ResolveActiveGlobal. An override picks which deployment a SESSION talks to;
+// the pointer is what owns the org skills installed on disk. Resolving through
+// an override would let `PRAXIS_PROFILE=B praxis profiles rm A` delete the very
+// profile the pointer and those skills still belong to, leaving both dangling.
+func PersistedActiveName() string {
+	if cfg, _ := loadConfig(); cfg.Profile != "" {
+		return cfg.Profile
+	}
+	return DefaultProfileName
+}
+
 // resolveGlobalName is resolveName without the project-pointer step.
 func resolveGlobalName(flagProfile string) (string, Source) {
 	if flagProfile != "" {

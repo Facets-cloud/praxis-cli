@@ -191,6 +191,15 @@ praxis profiles [--refresh] [--json]
    List every profile with URL, username, active marker, and login
    state (never prints tokens). --refresh live-verifies each token.
 
+praxis profiles use <profile> [--local] [--json]
+   Switch the active profile WITHOUT re-authenticating, and re-sync
+   its skills + MCP snapshot (the same post-auth flow as login), so
+   the pointer and the installed skills never disagree. Verifies the
+   stored token first: exits 3 (dead token — run `praxis login
+   --profile X`) or 5 (unreachable) having changed nothing.
+   --local pins the profile to the CURRENT directory tree instead of
+   switching globally. See "Local mode" below.
+
 praxis profiles rename OLD NEW [--json]
    Rename a credentials section in place, keeping URL/username/token/
    raptor pairing. The global active-profile pointer follows if it
@@ -213,20 +222,6 @@ praxis status [--refresh] [--json]
    hit (its profile resolution mirrored read-only) and whether that
    host matches the active praxis profile's URL.
    --refresh adds a live /auth/me check (catches expired tokens).
-
-praxis profiles [--refresh] [--json]
-   List every profile with its URL, username, and login state; "*"
-   marks the active one. Local-only unless --refresh live-verifies
-   each stored token.
-
-praxis profiles use <profile> [--local] [--json]
-   Switch the active profile WITHOUT re-authenticating, and re-sync
-   its skills + MCP snapshot (the same post-auth flow as login), so
-   the pointer and the installed skills never disagree. Verifies the
-   stored token first: exits 3 (dead token — run `praxis login
-   --profile X`) or 5 (unreachable) having changed nothing.
-   --local pins the profile to the CURRENT directory tree instead of
-   switching globally. See "Local mode" below.
 
 praxis mcp [<mcp> <fn>] [--json] [--arg k=v ...] [--body '<json>']
    No args     → list every MCP namespace + function the gateway
@@ -273,7 +268,7 @@ praxis help               cobra help
 > **Whatever moves the active-profile pointer also re-installs the
 > skills.** The CLI's on-disk state always matches the active profile.
 
-Only two commands move that pointer — `praxis login --profile X` and
+Only two commands move that pointer — `praxis login [--profile X]` and
 `praxis profiles use X` — and both wipe the previous profile's org
 skills and install X's in the same step. At the **user (global) level**
 there's never a mixed-profile state on disk. `refresh-skills` runs the

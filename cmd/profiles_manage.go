@@ -87,14 +87,14 @@ so there is no double skill-cycle from switching just to delete.`,
 		asJSON := render.UseJSON(profilesRmJSON, false, out)
 		name := args[0]
 
-		// Resolve the active profile GLOBALLY, mirroring `praxis logout`: a
-		// stray project-local pointer must not decide what "active" means
-		// for a destructive credentials operation.
-		active, err := credentials.ResolveActiveGlobal()
-		if err != nil {
-			return err
-		}
-		if name == active.Name {
+		// The PERSISTED pointer decides what "active" means here -- not
+		// ResolveActiveGlobal, and not the project pointer. --profile and
+		// $PRAXIS_PROFILE select which deployment a session TALKS to, while the
+		// pointer is what owns the org skills on disk, so it alone decides which
+		// profile can't be deleted out from under them. Resolving through an
+		// override would make `PRAXIS_PROFILE=B praxis profiles rm A` delete the
+		// profile the pointer and the installed skills still refer to.
+		if name == credentials.PersistedActiveName() {
 			msg := fmt.Sprintf("%q is the active profile", name)
 			render.PrintError(out, asJSON, msg,
 				"use `praxis logout` to remove the active profile (it also removes its installed org skills)",
