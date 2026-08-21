@@ -87,6 +87,13 @@ type Profile struct {
 // Shared so the writer (login) and reader (Auth) can't drift on the spelling.
 const AuthModeBasic = "basic"
 
+// FacetsProfile builds the profile for a control-plane PAT. Every login path
+// that obtains one (raptor's credentials file, the interactive paste) goes
+// through here, so the Username/AuthMode pair Auth() keys off is asserted once.
+func FacetsProfile(url, username, token string) Profile {
+	return Profile{URL: url, Username: username, Token: token, AuthMode: AuthModeBasic}
+}
+
 // Auth returns the headers that authenticate a request for this profile:
 // always Authorization (Bearer <token>), plus X-Facets-Username for facets
 // (AuthModeBasic) profiles — a control-plane PAT the server validates against

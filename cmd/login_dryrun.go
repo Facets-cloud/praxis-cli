@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
@@ -14,7 +15,9 @@ import (
 // without opening a browser, minting an API key, writing credentials, or
 // touching installed skills (issue #66: login is not a safe probe).
 //
-// The only network traffic is a single read-only GET to /ai-api/auth/me: with
+// Network traffic is read-only GETs only: /ai-api/auth/me, plus the public
+// /ai-api/auth/status probe that decides whether login would ask for a
+// control-plane PAT. With
 // a stored (or --token supplied) key it doubles as the token-reuse check;
 // without one, an HTTP 401/403 answer still proves the deployment is
 // reachable. Exit code 0 means the report is complete; exitcode.Network means
@@ -86,6 +89,13 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 			tokenStatus = tokenSource + "-unverified"
 		}
 		action = "unknown (server unreachable)"
+	}
+
+	// Every path that lands on the API-key browser now passes through the
+	// control-plane PAT prompt first, so the report has to say so or it claims
+	// a browser where login would ask for a token.
+	if strings.HasPrefix(action, "browser") && interactivePATEligible(baseURL, asJSON) {
+		action = "control-plane PAT prompt, else " + action
 	}
 
 	skillsEffect := fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)

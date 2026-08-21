@@ -44,9 +44,11 @@ praxis login           ← AI runs this on first contact (or when token expires)
 ` + "```" + `
 
 That's the entire setup. Login does everything: installs this
-meta-skill into your AI host's skill directory, opens the user's
-browser to create an API key, fetches this org's skill catalog, and
-writes the MCP tool manifest snapshot to ~/.praxis/mcp-tools.json.
+meta-skill into your AI host's skill directory, authenticates (reusing
+the control-plane token raptor already holds, else opening the control
+plane's personal-access-token page for the user to paste one), fetches
+this org's skill catalog, and writes the MCP tool manifest snapshot to
+~/.praxis/mcp-tools.json.
 
 ## First thing to do every conversation
 
