@@ -397,7 +397,15 @@ func TestEnsureProjectRoot_SymlinkedHomeItself_Rejected(t *testing.T) {
 func TestAlignUnder(t *testing.T) {
 	link, phys := symlinkedHome(t)
 	outs := t.TempDir()
-	// Resolution needs the paths to exist — see the "unresolvable" case below.
+	// The canonical spelling of phys. The cases below that mix a resolvable
+	// base with an unresolvable path MUST anchor on this: $TMPDIR is itself
+	// symlinked on macOS (/var -> /private/var) but canonical on Linux, so a
+	// case built on the raw phys would assert one thing locally and the
+	// opposite in CI.
+	physCanon, err := filepath.EvalSymlinks(phys)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(phys, "repo"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -420,11 +428,15 @@ func TestAlignUnder(t *testing.T) {
 		{name: "physical base, logical path", base: phys, path: filepath.Join(link, "repo"), wantOK: true, wantResolved: true},
 		{name: "genuinely outside", base: phys, path: outs, wantOK: false},
 		{name: "sibling prefix is not a descendant", base: phys, path: phys + "-other", wantOK: false},
-		// A path that doesn't exist can't be resolved, so only the literal
-		// comparison applies and this stays a miss. Every caller passes the
-		// working directory, which exists by definition; the conservative
-		// answer ("not under home") is the safe one if it ever doesn't.
-		{name: "unresolvable path falls back to the literal compare", base: link, path: filepath.Join(phys, "ghost"), wantOK: false},
+		// A missing leaf still aligns: the base resolves, and the path sits
+		// literally beneath the resolved base. Containment is asked BEFORE
+		// mkdir (see TestResolved_MissingPathIsUnchanged), so reporting
+		// "outside" for a directory about to be created would resurrect a
+		// variant of the bug this function exists to fix.
+		{name: "missing leaf under a symlinked base still aligns", base: link, path: filepath.Join(physCanon, "ghost"), wantOK: true, wantResolved: true},
+		// With nothing resolvable on either side the literal compare is all
+		// there is — and it must still reject a genuine outsider.
+		{name: "unresolvable and outside stays a miss", base: filepath.Join(outs, "nope"), path: filepath.Join(physCanon, "ghost"), wantOK: false},
 	}
 
 	for _, tc := range tests {
