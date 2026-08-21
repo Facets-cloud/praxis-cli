@@ -139,6 +139,16 @@ Invariants to preserve when touching this area:
 - Discovery is **home-subtree only** — matches the intended use case and
   keeps tests deterministic under a faked `$HOME`. Tests drive discovery
   via `paths.SetGetwdForTest` and pin via `paths.OverrideActiveRoot`.
+- **Compare `$HOME` and the cwd in one namespace.** `$HOME` can be logical
+  while `os.Getwd()` reports the physical path (macOS `/tmp` is a symlink to
+  `/private/tmp`), so a plain prefix test wrongly calls the cwd "outside
+  home" and silently disables local mode everywhere. `paths.alignUnder`
+  handles it: literal compare first (no syscalls, keeps the user's
+  spelling), then both sides `EvalSymlinks`'d, returning the pair from
+  whichever namespace matched — the walk-up bound only stops at home when
+  both come from the same one. Resolution only ADDS matches, so a symlink
+  pointing out of home keeps working. Don't reintroduce a bare
+  `isUnder(home, cwd)` on those two.
 
 ## Build & run
 
