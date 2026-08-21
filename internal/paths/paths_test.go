@@ -458,11 +458,24 @@ func TestAlignUnder(t *testing.T) {
 			if !isUnder(gotBase, gotPath) {
 				t.Errorf("returned pair (%q, %q) is not self-consistent", gotBase, gotPath)
 			}
-			if tc.wantResolved && gotBase != resolved(tc.base) {
-				t.Errorf("base = %q, want the resolved %q", gotBase, resolved(tc.base))
-			}
-			if !tc.wantResolved && gotBase != filepath.Clean(tc.base) {
-				t.Errorf("base = %q, want the input as given %q (no needless resolution)", gotBase, filepath.Clean(tc.base))
+			// Assert BOTH halves of the pair, not just the base: alignUnder
+			// returns the path too, callers walk up from it, and a base-only
+			// assertion would pass even if the path came back from the other
+			// namespace.
+			if tc.wantResolved {
+				if gotBase != resolved(tc.base) {
+					t.Errorf("base = %q, want the resolved %q", gotBase, resolved(tc.base))
+				}
+				if gotPath != resolved(tc.path) {
+					t.Errorf("path = %q, want the resolved %q", gotPath, resolved(tc.path))
+				}
+			} else {
+				if gotBase != filepath.Clean(tc.base) {
+					t.Errorf("base = %q, want the input as given %q (no needless resolution)", gotBase, filepath.Clean(tc.base))
+				}
+				if gotPath != filepath.Clean(tc.path) {
+					t.Errorf("path = %q, want the input as given %q (no needless resolution)", gotPath, filepath.Clean(tc.path))
+				}
 			}
 		})
 	}
