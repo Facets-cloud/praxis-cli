@@ -163,7 +163,13 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 			return nil
 		}
 
-		active, err := credentials.ResolveActive("")
+		// ResolveActive(acts), not ResolveActive("") — act on the name the guard
+		// approved. With "" this re-read the full chain including the environment,
+		// so `-p default refresh-skills` under PRAXIS_PROFILE=acme passed the check
+		// and then installed acme's catalog into default's root: exactly the mixed
+		// state the comment above says this flow exists to prevent. Passing `acts`
+		// makes the guard and the action the same decision.
+		active, err := credentials.ResolveActive(acts)
 		if err != nil {
 			return err
 		}

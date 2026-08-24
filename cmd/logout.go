@@ -61,10 +61,16 @@ exactly what a bare logout does.`,
 		// pointer is what owns the org skills on disk, and resolving through the
 		// environment would compare $PRAXIS_PROFILE with itself. Naming the
 		// profile logout would remove anyway is not a redirect, so it proceeds.
+		//
+		// Resolved ONCE, here, and used as the deletion target below. Letting the
+		// action re-resolve was a destructive bug: the guard compared the pointer
+		// while the deletion read the full chain, so `-p default logout` under
+		// PRAXIS_PROFILE=acme passed the check and deleted acme.
+		target := credentials.PersistedActiveName()
 		if refusedExplicitProfile(out, asJSON, "logout",
 			"run `praxis profiles rm %s` to remove that profile's credentials "+
 				"(no skill cycle) — logout only ever removes the active profile",
-			credentials.PersistedActiveName()) {
+			target) {
 			return nil
 		}
 
@@ -132,18 +138,19 @@ exactly what a bare logout does.`,
 			return nil
 		}
 
-		// Target the GLOBAL active profile only — logout is global (see the
-		// home pin above), so it removes the globally-active profile's
-		// credentials regardless of any project pointer in the cwd.
-		active, _ := credentials.ResolveActiveGlobal()
+		// `target` is the persisted global pointer, resolved above alongside the
+		// guard — the same name, by construction. logout is global (see the home
+		// pin above), so a project pointer in the cwd can't redirect it, and
+		// neither can $PRAXIS_PROFILE: the pointer is what owns the credentials
+		// and the org skills this removes, together.
 		store, _ := credentials.Load()
 		credsPresent := false
-		if _, ok := store[active.Name]; ok {
+		if _, ok := store[target]; ok {
 			credsPresent = true
 		}
 
 		if credsPresent {
-			if err := credentials.Delete(active.Name); err != nil {
+			if err := credentials.Delete(target); err != nil {
 				return err
 			}
 		}
@@ -180,7 +187,7 @@ exactly what a bare logout does.`,
 
 		if asJSON {
 			envelope := map[string]any{
-				"removed":        ifTrue(credsPresent, active.Name),
+				"removed":        ifTrue(credsPresent, target),
 				"removed_skills": liteResults(removed),
 				"removed_agents": agentLogoutLite(removedAgents),
 			}
@@ -190,9 +197,9 @@ exactly what a bare logout does.`,
 			return render.JSON(out, envelope)
 		}
 		if credsPresent {
-			fmt.Fprintf(out, "✓ Removed profile %q.\n", active.Name)
+			fmt.Fprintf(out, "✓ Removed profile %q.\n", target)
 		} else {
-			fmt.Fprintf(out, "No credentials to remove for profile %q.\n", active.Name)
+			fmt.Fprintf(out, "No credentials to remove for profile %q.\n", target)
 		}
 		if len(removed) > 0 {
 			fmt.Fprintf(out, "✓ Removed %d org skill(s) from %d host(s).\n",

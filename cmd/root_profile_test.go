@@ -496,6 +496,157 @@ func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
 	}
 }
 
+// A guard and its action must be the same decision. Divergence-only refusal
+// opened a hole the blanket refusal had made unreachable: the guard compared
+// the POINTER (correctly ignoring flag and env), while the action downstream
+// re-resolved the FULL CHAIN. So `-p default` satisfied the guard and
+// $PRAXIS_PROFILE=acme still won the action — logout deleted acme, the one
+// profile the user had not named, while wiping default's org skills.
+//
+// Two independent defenses, both asserted here: the guard now checks the flag
+// and the environment separately rather than only the flag-wins winner, and the
+// action reuses the name the guard approved.
+func TestProfileSelection_MatchingFlagCannotSmuggleADivergingEnv(t *testing.T) {
+	tests := []struct {
+		name   string
+		run    func(t *testing.T, out *bytes.Buffer) error
+		verify func(t *testing.T, call *postAuthCall)
+	}{
+		{
+			name: "logout",
+			run: func(t *testing.T, out *bytes.Buffer) error {
+				logoutCmd.SetOut(out)
+				t.Cleanup(func() { logoutCmd.SetOut(nil) })
+				return logoutCmd.RunE(logoutCmd, nil)
+			},
+			verify: func(t *testing.T, _ *postAuthCall) {
+				// The refusal must be total: nothing removed, either profile.
+				store, _ := credentials.Load()
+				for _, want := range []string{"default", "acme"} {
+					if _, ok := store[want]; !ok {
+						t.Errorf("profile %q was deleted; the refusal must change nothing", want)
+					}
+				}
+			},
+		},
+		{
+			name: "refresh-skills",
+			run: func(t *testing.T, out *bytes.Buffer) error {
+				refreshSkillsCmd.SetOut(out)
+				t.Cleanup(func() { refreshSkillsCmd.SetOut(nil) })
+				return refreshSkillsCmd.RunE(refreshSkillsCmd, nil)
+			},
+			verify: func(t *testing.T, call *postAuthCall) {
+				if call.count != 0 {
+					t.Errorf("synced %d time(s) against %q; the refusal must install nothing",
+						call.count, call.baseURL)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			call := stubPostAuthCapture(t)
+			code := stubOsExit(t)
+			seedProfile(t, "default", "https://d.test", "td")
+			seedProfile(t, "acme", "https://acme.test", "ta")
+			if err := credentials.SetActive("default"); err != nil {
+				t.Fatal(err)
+			}
+
+			// The flag agrees with the pointer, so the old guard waved it
+			// through; the env names something else and used to win downstream.
+			setRootProfile(t, "default")
+			t.Setenv(credentials.EnvProfile, "acme")
+
+			var buf bytes.Buffer
+			if err := tc.run(t, &buf); err != nil {
+				t.Fatalf("RunE err = %v", err)
+			}
+			if *code != exitcode.Usage {
+				t.Fatalf("exit = %d, want %d (usage) — a diverging env must be refused even beside a matching flag; output:\n%s",
+					*code, exitcode.Usage, buf.String())
+			}
+			// The message must name the mechanism that actually diverged, or it
+			// sends the user to look at the flag they got right.
+			if !strings.Contains(buf.String(), credentials.EnvProfile) {
+				t.Errorf("refusal doesn't name %s as the diverging selection:\n%s", credentials.EnvProfile, buf.String())
+			}
+			tc.verify(t, call)
+		})
+	}
+}
+
+// The allowed half of the same scenario: an environment that AGREES with the
+// pointer gets through the guard, so the action really runs, and it must land on
+// that profile and no other.
+//
+// This does not isolate the action-side fix. Once the guard checks both
+// mechanisms, no cobra-reachable input reaches the action with a diverging env,
+// so acting on the pointer is defense-in-depth and only mutation testing can
+// observe it alone (verified that way: with the guard reverted to the flag-wins
+// winner, the action-side fix still deletes default and still syncs default's
+// URL). What this test does pin is that neither fix broke the case that must
+// keep working — a session scoped to the profile it is acting on.
+func TestLogoutAndRefresh_ActOnThePointerUnderAMatchingEnv(t *testing.T) {
+	t.Run("logout deletes the pointer's profile", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		stubPostAuthCapture(t)
+		code := stubOsExit(t)
+		seedProfile(t, "default", "https://d.test", "td")
+		seedProfile(t, "acme", "https://acme.test", "ta")
+		if err := credentials.SetActive("default"); err != nil {
+			t.Fatal(err)
+		}
+		// Env matches the pointer, so the guard allows it and the action runs.
+		t.Setenv(credentials.EnvProfile, "default")
+
+		var buf bytes.Buffer
+		logoutCmd.SetOut(&buf)
+		t.Cleanup(func() { logoutCmd.SetOut(nil) })
+		if err := logoutCmd.RunE(logoutCmd, nil); err != nil {
+			t.Fatalf("RunE err = %v", err)
+		}
+		if *code != -1 {
+			t.Fatalf("exit = %d, want no exit; output:\n%s", *code, buf.String())
+		}
+		store, _ := credentials.Load()
+		if _, gone := store["default"]; gone {
+			t.Error("logout did not remove default, the profile the pointer names")
+		}
+		if _, kept := store["acme"]; !kept {
+			t.Error("logout removed acme; it must only ever touch the pointer's profile")
+		}
+	})
+
+	t.Run("refresh-skills syncs the pointer's URL", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		call := stubPostAuthCapture(t)
+		code := stubOsExit(t)
+		seedProfile(t, "default", "https://d.test", "td")
+		seedProfile(t, "acme", "https://acme.test", "ta")
+		if err := credentials.SetActive("default"); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(credentials.EnvProfile, "default")
+
+		var buf bytes.Buffer
+		refreshSkillsCmd.SetOut(&buf)
+		t.Cleanup(func() { refreshSkillsCmd.SetOut(nil) })
+		if err := refreshSkillsCmd.RunE(refreshSkillsCmd, nil); err != nil {
+			t.Fatalf("RunE err = %v", err)
+		}
+		if *code != -1 {
+			t.Fatalf("exit = %d, want no exit; output:\n%s", *code, buf.String())
+		}
+		if call.count != 1 || call.baseURL != "https://d.test" {
+			t.Errorf("synced %d time(s) against %q, want 1 against default's URL", call.count, call.baseURL)
+		}
+	})
+}
+
 // ─── per-session scoping via $PRAXIS_PROFILE ───────────────────────────
 
 // The whole point: two concurrent agent sessions must not be able to move each

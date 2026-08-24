@@ -99,13 +99,25 @@ func refusedProfileFlag(out io.Writer, asJSON bool, what, hintFmt, acts string) 
 //
 // `acts` must be resolved WITHOUT the flag and the environment (see
 // credentials.PersistedActiveName / PointerActiveName), or the comparison is
-// against the selection itself and always matches.
+// against the selection itself and always matches. The CALLER must then act on
+// that same name — a guard checked against the pointer while the action
+// re-resolves the full chain is two different answers to "which profile?", and
+// the action's one wins.
+//
+// Both mechanisms are checked INDEPENDENTLY, not collapsed the way
+// explicitProfile / resolveName collapse them. A guard that only inspects the
+// winner is satisfied by `-p <active>` while $PRAXIS_PROFILE still names
+// something else, so the loser reaches the action anyway: `praxis -p default
+// logout` under PRAXIS_PROFILE=acme passed the check and deleted acme — the one
+// profile the user had not named.
 func refusedExplicitProfile(out io.Writer, asJSON bool, what, hintFmt, acts string) bool {
-	name, how := explicitProfile()
-	if name == "" || name == acts {
-		return false
+	if rootProfile != "" && rootProfile != acts {
+		return refuseSelection(out, asJSON, what, hintFmt, rootProfile, "--profile", acts)
 	}
-	return refuseSelection(out, asJSON, what, hintFmt, name, how, acts)
+	if env := credentials.EnvProfileName(); env != "" && env != acts {
+		return refuseSelection(out, asJSON, what, hintFmt, env, credentials.EnvProfile, acts)
+	}
+	return false
 }
 
 // refuseSelection prints the usage error and exits. hintFmt takes one %s: the

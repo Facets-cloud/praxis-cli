@@ -184,6 +184,20 @@ Invariants to preserve when touching this area:
   `credentials.PersistedActiveName()` for `logout` (global by design) and
   `credentials.PointerActiveName()` for `refresh-skills` (project pointer
   first, matching the root it installs into).
+- **A guard and its action MUST be one decision.** Resolve the target once and
+  have the action use that same name; never let the action re-resolve through
+  `ResolveActive*`, or the two disagree about "which profile?" and the action's
+  answer wins. This shipped as a destructive bug: the guard compared the
+  pointer while `logout` deleted `ResolveActiveGlobal()`, so `-p default
+  logout` under `PRAXIS_PROFILE=acme` passed the check and deleted **acme**.
+  Two defenses, keep both — `refusedExplicitProfile` checks the flag and the
+  environment INDEPENDENTLY (not the flag-wins winner, which a matching `-p`
+  satisfies while the env still diverges), and the action reuses the approved
+  name (`target` in logout, `ResolveActive(acts)` in refresh-skills).
+- **Divergence-only refusal made previously-unreachable states reachable.**
+  The blanket refusal masked every guard/action mismatch behind it. When
+  loosening a guard, audit what the action does with a selection the guard now
+  admits — the bug arrives with the fix, not before it.
 - **Multi-profile guidance is gated on the profile count.** The single-profile
   customer gets no precedence chain, no machine-global warnings and no
   refusal table — in the meta-skill (`skillinstall.MultiProfileMachine`, a
