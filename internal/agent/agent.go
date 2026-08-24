@@ -201,12 +201,15 @@ func RunSkillsReport(ctx context.Context, args []string, stdout, stderr *os.File
 // those outright ("unknown shorthand flag"), so process isolation would fail with
 // a parse error instead of running.
 //
-// Both markers are required, because both are structural to that call site: the
-// child registers only the sandbox tool set (-sandbox-child) and the parent
-// parses its single JSON object back (-result-json) — see the harness's
-// praxis/native_process_sandbox.go childArgs. Matching the shape rather than one
-// flag keeps an ordinary mistyped invocation on the cobra path, where it gets a
-// real error message.
+// Recognition matches the SHAPE of that call site, not the presence of a magic
+// flag. The child command line is bare flags from the first argument onward, and
+// carries both -sandbox-child (the child registers only the sandbox tool set)
+// and -result-json (the parent parses its single JSON object back) — see the
+// harness's praxis/native_process_sandbox.go childArgs. A praxis command line, by
+// contrast, always starts with a subcommand, so anchoring on argv[1] keeps
+// `praxis run … -- -sandbox-child -result-json` — those flags arriving through the
+// passthrough escape hatch — on the cobra path where the gate applies, and keeps
+// a mistyped flag there too, where it gets a real error message.
 //
 // The experimental gate deliberately does not apply here, and cannot: the
 // harness builds the child's environment from scratch — PATH, LANG and the
@@ -216,7 +219,7 @@ func RunSkillsReport(ctx context.Context, args []string, stdout, stderr *os.File
 // nothing that PRAXIS_EXPERIMENTAL=1 would not, and the child still needs a
 // provider credential in that scrubbed environment to do any work.
 func NativeDialectArgs(argv []string) ([]string, bool) {
-	if len(argv) < 3 {
+	if len(argv) < 3 || !strings.HasPrefix(argv[1], "-") {
 		return nil, false
 	}
 	var sandboxChild, resultJSON bool

@@ -295,6 +295,12 @@ func TestNativeDialectArgs(t *testing.T) {
 		// Half the shape is not the shape: one marker alone must not route.
 		{"praxis", "-sandbox-child"},
 		{"praxis", "run", "--result-json"},
+		// Both markers arriving through the passthrough escape hatch must stay on
+		// the cobra path: that is a user command line, subject to the gate, not a
+		// re-exec. This is the case a marker-only check would silently reroute.
+		{"praxis", "run", "--prompt", "hi", "--", "-sandbox-child", "-result-json"},
+		{"praxis", "chat", "--", "-sandbox-child", "-result-json"},
+		{"praxis", "agent", "sdk", "-sandbox-child", "-result-json"},
 	} {
 		if _, ok := NativeDialectArgs(argv); ok {
 			t.Errorf("NativeDialectArgs(%v) = true, want false: cobra must keep handling normal invocations", argv)
