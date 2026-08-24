@@ -94,6 +94,81 @@ func TestResolveName_Precedence(t *testing.T) {
 	}
 }
 
+// PointerActiveName answers "what would this command act on if the invocation
+// named nothing?", so it must ignore the two things an invocation CAN name.
+// Comparing a selection against a resolution that honors it always matches, and
+// a refusal that always matches is a refusal that never fires.
+func TestPointerActiveName_IgnoresFlagAndEnvButFollowsPointers(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     string
+		project string // profile named by <cwd>/.praxis, "" for none
+		global  string // profile named by ~/.praxis, "" for none
+		want    string
+	}{
+		{name: "nothing set", want: "default"},
+		{name: "global pointer", global: "g", want: "g"},
+		{name: "project pointer beats global", project: "p", global: "g", want: "p"},
+		// The divergence that matters: ResolveActive would answer "e" here.
+		{name: "env is ignored", env: "e", project: "p", global: "g", want: "p"},
+		{name: "env is ignored with no project", env: "e", global: "g", want: "g"},
+		// A .praxis a teammate committed, or one left behind by logout, names a
+		// profile this machine doesn't have. It's inert everywhere else, so it
+		// must be inert here too.
+		{name: "unknown project pointer falls through", project: "gone", global: "g", want: "g"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := withHome(t)
+			for _, n := range []string{"e", "p", "g"} {
+				if err := Put(n, Profile{URL: "https://" + n + ".test", Token: "t" + n}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.global != "" {
+				if err := SetActive(tc.global); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.project != "" {
+				repo := filepath.Join(home, "repo")
+				if err := os.MkdirAll(repo, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				setCwd(t, repo)
+				// SetActiveLocal validates the name, so write the pointer to an
+				// absent profile the way a stale checkout would: via a real pin
+				// that is then removed.
+				if tc.project == "gone" {
+					if err := Put("gone", Profile{URL: "https://gone.test", Token: "tg"}); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := SetActiveLocal("gone"); err != nil {
+						t.Fatal(err)
+					}
+					if err := Delete("gone"); err != nil {
+						t.Fatal(err)
+					}
+				} else if _, err := SetActiveLocal(tc.project); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv(EnvProfile, tc.env)
+
+			// The flag is a caller-side argument, not state: PointerActiveName
+			// takes none, which is the property being asserted.
+			got, err := PointerActiveName()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Errorf("PointerActiveName() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // Whitespace is not a profile name. A shell that exports PRAXIS_PROFILE="" (or
 // with a stray space) must resolve normally rather than look up "".
 func TestResolveActive_BlankEnvIsIgnored(t *testing.T) {

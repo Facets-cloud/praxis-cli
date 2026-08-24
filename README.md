@@ -154,10 +154,12 @@ One global flag and one environment variable apply everywhere:
    Works before or after the command name:
      praxis -p acme duty list
      praxis duty list -p acme
-   `logout` and `refresh-skills` refuse it (exit 2, nothing changed) —
-   they act on whichever profile is active. `profiles use` refuses it too
-   (its target is the argument). For `login` it names the profile to
-   create or update.
+   `logout` and `refresh-skills` refuse it (exit 2, nothing changed) when
+   it names a DIFFERENT profile than the active one — they act on
+   whichever profile is active. `profiles use` refuses one that
+   contradicts its argument. Naming the profile the command would act on
+   anyway is allowed: it's the no-op it looks like. For `login` it names
+   the profile to create or update.
 
 PRAXIS_PROFILE=<name>
    Same thing, for every command in ONE shell or agent session. Lives in
@@ -165,9 +167,10 @@ PRAXIS_PROFILE=<name>
    see it — this is the concurrency-safe way to work in a profile.
      export PRAXIS_PROFILE=acme
      praxis duty list          # profile_source: env
-   `logout` and `refresh-skills` refuse this too. `profiles use` still
-   works and reports `shadowed_by_env`, since your session keeps using
-   the variable.
+   `logout` and `refresh-skills` refuse this too when it diverges from the
+   active profile; a session already scoped to the profile they act on is
+   fine. `profiles use` still works and reports `shadowed_by_env`, since
+   your session keeps using the variable.
 ```
 
 ```text

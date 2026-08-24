@@ -10,6 +10,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
+	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"github.com/spf13/cobra"
 )
 
@@ -48,6 +49,16 @@ func init() {
 	// `praxis --profile acme mcp ...` and `praxis mcp ... --profile acme`.
 	rootCmd.PersistentFlags().StringVarP(&rootProfile, "profile", "p", "",
 		"credentials profile to use for this invocation (overrides $"+credentials.EnvProfile+"; default: the active profile)")
+
+	// cmd is the composition root: skillinstall must not import credentials (its
+	// tests would then read the developer's real ~/.praxis), so the meta-skill's
+	// multi-profile gate is wired here. A closure, not a value — the store is
+	// read only when a meta-skill body is actually rendered, so `praxis version`
+	// pays nothing.
+	skillinstall.MultiProfileMachine = func() bool {
+		names, err := credentials.List()
+		return err == nil && len(names) > 1
+	}
 }
 
 // explicitProfile returns the profile this invocation explicitly selected and
@@ -63,43 +74,56 @@ func explicitProfile() (string, string) {
 	return "", ""
 }
 
-// refusedProfileFlag refuses an explicit -p/--profile only, leaving
+// refusedProfileFlag refuses a diverging -p/--profile only, leaving
 // $PRAXIS_PROFILE alone. Use it where the environment is a legitimate ambient
 // session setting but the flag would be ambiguous: `profiles use` names its
-// target positionally, so a flag beside it is two answers to one question,
-// whereas an exported variable is just the session the user is working in.
-func refusedProfileFlag(out io.Writer, asJSON bool, what, hintFmt string) bool {
-	if rootProfile == "" {
+// target positionally, so a flag naming a DIFFERENT profile beside it is two
+// answers to one question, whereas an exported variable is just the session the
+// user is working in.
+func refusedProfileFlag(out io.Writer, asJSON bool, what, hintFmt, acts string) bool {
+	if rootProfile == "" || rootProfile == acts {
 		return false
 	}
-	return refuseSelection(out, asJSON, what, hintFmt, rootProfile, "--profile")
+	return refuseSelection(out, asJSON, what, hintFmt, rootProfile, "--profile", acts)
 }
 
-// refusedExplicitProfile refuses BOTH -p/--profile and $PRAXIS_PROFILE.
+// refusedExplicitProfile refuses BOTH -p/--profile and $PRAXIS_PROFILE when
+// they diverge from `acts`.
 //
 // Use it where the command rewrites state belonging to the ACTIVE profile:
 // `logout` deletes credentials and wipes org skills, `refresh-skills`
 // reinstalls them. Acting on any other profile would leave the pointer and the
-// skills on disk out of step. Ignoring the selection is the dangerous option,
-// not the polite one — `praxis --profile acme logout` would delete the ACTIVE
-// profile's credentials while the user believed they had named acme.
-func refusedExplicitProfile(out io.Writer, asJSON bool, what, hintFmt string) bool {
+// skills on disk out of step. Ignoring a diverging selection is the dangerous
+// option, not the polite one — `praxis --profile acme logout` would delete the
+// ACTIVE profile's credentials while the user believed they had named acme.
+//
+// `acts` must be resolved WITHOUT the flag and the environment (see
+// credentials.PersistedActiveName / PointerActiveName), or the comparison is
+// against the selection itself and always matches.
+func refusedExplicitProfile(out io.Writer, asJSON bool, what, hintFmt, acts string) bool {
 	name, how := explicitProfile()
-	if name == "" {
+	if name == "" || name == acts {
 		return false
 	}
-	return refuseSelection(out, asJSON, what, hintFmt, name, how)
+	return refuseSelection(out, asJSON, what, hintFmt, name, how, acts)
 }
 
 // refuseSelection prints the usage error and exits. hintFmt takes one %s: the
 // selected profile name.
-func refuseSelection(out io.Writer, asJSON bool, what, hintFmt, name, how string) bool {
+//
+// Reached only when the selection DIVERGES from `acts`, which is the whole
+// property these refusals defend: a selection naming the profile the command
+// would act on anyway asks for exactly the no-flag behaviour, so it is allowed
+// through. Refusing on mere presence instead told the typical customer — one
+// profile, named `default` — that `default` was "another profile", and hinted
+// that they switch to the profile they were already on.
+func refuseSelection(out io.Writer, asJSON bool, what, hintFmt, name, how, acts string) bool {
 	hint := fmt.Sprintf(hintFmt, name)
 	if how == credentials.EnvProfile {
 		hint = "unset " + credentials.EnvProfile + " for this command, or " + hint
 	}
 	render.PrintError(out, asJSON,
-		fmt.Sprintf("%s can't be pointed at another profile (%s=%s)", what, how, name),
+		fmt.Sprintf("%s can't be pointed at another profile (%s=%s); it acts on %q", what, how, name, acts),
 		hint, exitcode.Usage)
 	osExit(exitcode.Usage)
 	return true

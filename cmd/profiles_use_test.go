@@ -525,10 +525,21 @@ func TestRenderProfileSwitchText(t *testing.T) {
 		absent   []string
 	}{
 		{
-			name:     "global switch",
-			in:       switchSummary{Profile: "acme", Previous: "default", URL: "https://acme.test"},
-			contains: []string{`Switched to profile "acme"`, `from "default"`, "https://acme.test"},
-			absent:   []string{"Note:"},
+			name: "global switch",
+			in:   switchSummary{Profile: "acme", Previous: "default", URL: "https://acme.test", MultiProfile: true},
+			contains: []string{`Switched to profile "acme"`, `from "default"`, "https://acme.test",
+				"machine-global", "agent session", "export " + credentials.EnvProfile},
+			absent: []string{"Note:"},
+		},
+		{
+			// The single-profile customer re-pointing at their only profile has no
+			// other session to disturb: everything resolved to this profile before
+			// and after. Warning them anyway is noise that teaches PRAXIS_PROFILE
+			// for a problem they don't have.
+			name:     "global switch on a single-profile machine",
+			in:       switchSummary{Profile: "default", Previous: "default", URL: "https://d.test"},
+			contains: []string{`Profile "default" is active`},
+			absent:   []string{"machine-global", "agent session", credentials.EnvProfile},
 		},
 		{
 			name:     "re-sync of the active profile",
@@ -538,15 +549,17 @@ func TestRenderProfileSwitchText(t *testing.T) {
 		},
 		{
 			name:     "local pin",
-			in:       switchSummary{Profile: "acme", Previous: "default", URL: "https://acme.test", ProjectRoot: "/h/repo/.praxis"},
+			in:       switchSummary{Profile: "acme", Previous: "default", URL: "https://acme.test", ProjectRoot: "/h/repo/.praxis", MultiProfile: true},
 			contains: []string{`Pinned profile "acme"`, "/h/repo/.praxis"},
-			absent:   []string{"Switched", "Note:"},
+			// A pin is scoped to this tree by construction, so the machine-global
+			// warning must stay out even on a multi-profile machine.
+			absent: []string{"Switched", "Note:", "machine-global"},
 		},
 		{
 			name: "shadowed global switch",
 			in: switchSummary{
 				Profile: "vymo", Previous: "acme", URL: "https://vymo.test",
-				ShadowedRoot: "/h/repo/.praxis",
+				ShadowedRoot: "/h/repo/.praxis", MultiProfile: true,
 			},
 			contains: []string{`Switched to profile "vymo"`, "Note:", "/h/repo/.praxis", `still use "acme"`, "--local"},
 		},

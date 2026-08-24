@@ -65,7 +65,8 @@ instead — writing nothing, invisible to other sessions — use:
 Run with $PRAXIS_PROFILE set and the switch still applies to everyone
 else, but the output reports ` + "`shadowed_by_env`" + ` and
 ` + "`effective_profile`" + ` because your own session keeps using the variable.
-The ` + "`-p`" + ` flag is refused here: this command's target is its argument.
+A ` + "`-p`" + ` flag naming a different profile is refused here: this command's
+target is its argument.
 
 Credentials are never moved: every profile stays in ~/.praxis/credentials.`,
 	Args: cobra.ExactArgs(1),
@@ -86,10 +87,11 @@ Credentials are never moved: every profile stays in ~/.praxis/credentials.`,
 		asJSON := render.UseJSON(profilesUseJSON, false, out)
 		name := args[0]
 
-		// The target is the positional argument; a global --profile alongside it
-		// is two answers to the same question.
+		// The target is the positional argument; a global --profile naming a
+		// DIFFERENT profile is two answers to the same question. `-p acme
+		// profiles use acme` gives one answer twice, so it just proceeds.
 		if refusedProfileFlag(out, asJSON, "profiles use",
-			"name the profile as the argument instead: `praxis profiles use %s`") {
+			"name the profile as the argument instead: `praxis profiles use %s`", name) {
 			return nil
 		}
 
@@ -181,6 +183,9 @@ Credentials are never moved: every profile stays in ~/.praxis/credentials.`,
 			Previous:    prior.Name,
 			URL:         baseURL,
 			ProjectRoot: projectRoot,
+			// store is the credentials file this command already loaded, so the
+			// count is free.
+			MultiProfile: len(store) > 1,
 		}
 		// The switch is real but can be invisible where it was run, by two
 		// different shadows. Report whichever actually wins — env outranks the
@@ -208,7 +213,7 @@ Credentials are never moved: every profile stays in ~/.praxis/credentials.`,
 			// session on this machine now resolves to it, and the org skills on
 			// disk were just replaced under them. Say so, so a caller can pick
 			// $PRAXIS_PROFILE instead when it only meant to scope itself.
-			if !profilesUseLocal {
+			if !profilesUseLocal && summary.MultiProfile {
 				payload["scope_note"] = "machine-global: affects every shell and agent session on this machine; use " +
 					credentials.EnvProfile + "=" + name + " to scope one session instead"
 			}
@@ -234,6 +239,12 @@ Credentials are never moved: every profile stays in ~/.praxis/credentials.`,
 // profile to a directory tree. At most one Shadowed* field is set, naming what
 // still outranks the switch where it was run: a project pointer in this tree,
 // or $PRAXIS_PROFILE in this session.
+//
+// MultiProfile gates the machine-global warning. With one profile in the store
+// there is nothing for a global switch to disturb — every session resolves to
+// the same profile before and after — so telling a re-syncing single-profile
+// user that other sessions just had their skills replaced is noise, and the
+// PRAXIS_PROFILE habit it teaches is what several commands then refuse.
 type switchSummary struct {
 	Profile       string
 	Previous      string
@@ -241,6 +252,7 @@ type switchSummary struct {
 	ProjectRoot   string
 	ShadowedRoot  string
 	ShadowedByEnv string
+	MultiProfile  bool
 }
 
 func renderProfileSwitchText(out io.Writer, s switchSummary) {
@@ -266,7 +278,7 @@ func renderProfileSwitchText(out io.Writer, s switchSummary) {
 	}
 	// A global switch is machine-wide. Anyone running several agent sessions
 	// needs to know their skills just changed underneath them.
-	if s.ShadowedByEnv == "" {
+	if s.ShadowedByEnv == "" && s.MultiProfile {
 		fmt.Fprintf(out, "\nThis is machine-global: every other shell and agent session now resolves to\n"+
 			"%q, and the installed praxis-* skills were replaced. To scope just one\n"+
 			"session instead, leave the active profile alone and export %s=%s.\n",

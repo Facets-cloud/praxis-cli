@@ -169,12 +169,28 @@ Invariants to preserve when touching this area:
   state shared by every command (`resetLoginFlags`, `resetIgFlags`,
   `setRootProfile` all do).
 - **A command that can't honor `--profile` must REFUSE it**, never ignore
-  it: `refusedProfileFlag` (root.go) prints a usage error and exits 2.
-  Today that's `logout` and `refresh-skills` (both rewrite the ACTIVE
-  profile's org skills, so honoring the flag would split pointer from
-  skills) and `profiles use` (target is positional). For `logout` the check
-  MUST come before the `--all` branch — `-p X --all` is a contradiction, and
-  ignoring `-p` there wipes every profile for a user who named one.
+  it: `refusedProfileFlag` / `refusedExplicitProfile` (root.go) print a usage
+  error and exit 2. Today that's `logout` and `refresh-skills` (both rewrite
+  the ACTIVE profile's org skills, so honoring the flag would split pointer
+  from skills) and `profiles use` (target is positional). For `logout` the
+  check MUST come before the `--all` branch — `-p X --all` is a
+  contradiction, and ignoring `-p` there wipes every profile for a user who
+  named one.
+- **Refuse on DIVERGENCE, not on presence.** Both helpers take the profile
+  the command acts on and stay silent when the selection names it: `praxis -p
+  default logout` on a single-profile machine asks for exactly what a bare
+  `logout` does. The comparison target MUST be resolved without the flag and
+  the environment, or it compares the selection with itself and never fires —
+  `credentials.PersistedActiveName()` for `logout` (global by design) and
+  `credentials.PointerActiveName()` for `refresh-skills` (project pointer
+  first, matching the root it installs into).
+- **Multi-profile guidance is gated on the profile count.** The single-profile
+  customer gets no precedence chain, no machine-global warnings and no
+  refusal table — in the meta-skill (`skillinstall.MultiProfileMachine`, a
+  seam wired in `cmd.init` because skillinstall must not read the credentials
+  store) or in `profiles use` output (`switchSummary.MultiProfile`, from the
+  store the command already loaded). It describes a choice they don't have,
+  and it's what teaches a host to pass `-p` at the only profile there is.
 - Discovery is **home-subtree only** — matches the intended use case and
   keeps tests deterministic under a faked `$HOME`. Tests drive discovery
   via `paths.SetGetwdForTest` and pin via `paths.OverrideActiveRoot`.

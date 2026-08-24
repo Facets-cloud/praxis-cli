@@ -224,6 +224,33 @@ func PersistedActiveName() string {
 	return DefaultProfileName
 }
 
+// PointerActiveName returns the profile named by whichever on-disk pointer
+// applies here — the project pointer when this tree is pinned to a profile that
+// exists, else the persisted global one, else "default". Like
+// PersistedActiveName it ignores --profile and $PRAXIS_PROFILE, so it answers
+// "what would this command act on if the invocation named nothing?".
+//
+// That is what an explicit selection has to be measured against. A command that
+// refuses a redirect is protecting against DIVERGENCE between the named profile
+// and the one whose skills are on disk; `-p X` where X is already the answer is
+// a no-op, not a conflict, and refusing it turns the single-profile user's only
+// profile name into an error.
+func PointerActiveName() (string, error) {
+	if name := projectProfile(); name != "" {
+		store, err := Load()
+		if err != nil {
+			return "", err
+		}
+		// Same guard as ResolveActive: a pointer naming a profile this machine
+		// doesn't have (a teammate-committed .praxis, a stale post-logout
+		// pointer) is inert and falls through to the global resolution.
+		if _, ok := store[name]; ok {
+			return name, nil
+		}
+	}
+	return PersistedActiveName(), nil
+}
+
 // resolveGlobalName is resolveName without the project-pointer step.
 func resolveGlobalName(flagProfile string) (string, Source) {
 	if flagProfile != "" {

@@ -175,11 +175,23 @@ func TestPraxisMetaSkill_TeachesProfileSwitching(t *testing.T) {
 	}
 }
 
+// multiProfileMachine renders the meta-skill the way a user who has actually
+// authenticated more than one profile sees it. Without this the doctrine is
+// gated out, which is the point of the gate — so every assertion about it has
+// to say which machine it is talking about.
+func multiProfileMachine(t *testing.T) {
+	t.Helper()
+	prev := MultiProfileMachine
+	MultiProfileMachine = func() bool { return true }
+	t.Cleanup(func() { MultiProfileMachine = prev })
+}
+
 // A one-off read against another deployment should cost nothing: -p resolves
 // for that invocation only. Without this in the meta-skill a host reaches for
 // `profiles use` — wiping and reinstalling ~90 skill files — just to answer
 // one question, and then leaves the user on the wrong profile.
 func TestPraxisMetaSkill_TeachesOneOffProfileFlag(t *testing.T) {
+	multiProfileMachine(t)
 	body, err := ContentFor("praxis")
 	if err != nil {
 		t.Fatalf("ContentFor(praxis): %v", err)
@@ -209,6 +221,7 @@ func TestPraxisMetaSkill_TeachesOneOffProfileFlag(t *testing.T) {
 // sessions have already read. A host that doesn't know to scope itself with
 // PRAXIS_PROFILE will silently break its siblings.
 func TestPraxisMetaSkill_TeachesSessionScopingForConcurrency(t *testing.T) {
+	multiProfileMachine(t)
 	body, err := ContentFor("praxis")
 	if err != nil {
 		t.Fatalf("ContentFor(praxis): %v", err)
@@ -230,5 +243,86 @@ func TestPraxisMetaSkill_TeachesSessionScopingForConcurrency(t *testing.T) {
 	// The honest caveat: routing follows the flag/env, skill FILES do not.
 	if !strings.Contains(body, "SKILL FILES on disk always belong to") {
 		t.Error("meta-skill must disclose that -p/env route commands but don't swap skill files")
+	}
+}
+
+// All of the above is doctrine for a machine with several profiles. The typical
+// customer has exactly one, so none of it describes a choice they can make —
+// and shipping it anyway is what teaches their host to pass `-p` at the single
+// profile it already resolves to. Gate it on the profile count.
+func TestPraxisMetaSkill_MultiProfileDoctrineGatedOnProfileCount(t *testing.T) {
+	single, err := ContentFor("praxis")
+	if err != nil {
+		t.Fatalf("ContentFor(praxis) single-profile: %v", err)
+	}
+	multiProfileMachine(t)
+	multi, err := ContentFor("praxis")
+	if err != nil {
+		t.Fatalf("ContentFor(praxis) multi-profile: %v", err)
+	}
+
+	// Present for a multi-profile user, absent for a single-profile one. These
+	// are the load-bearing lines of each gated subsection, so a future edit that
+	// moves prose out of the gate trips here.
+	for _, gated := range []string{
+		"### Scope yourself instead of switching",
+		"MACHINE-GLOBAL",
+		"export PRAXIS_PROFILE=",
+		"-p <name>",
+		"SKILL FILES on disk always belong to",
+		"exit 2",
+	} {
+		if strings.Contains(single, gated) {
+			t.Errorf("single-profile meta-skill ships multi-profile doctrine %q", gated)
+		}
+		if !strings.Contains(multi, gated) {
+			t.Errorf("multi-profile meta-skill lost %q", gated)
+		}
+	}
+
+	// Everything a single-profile user still needs has to survive the cut —
+	// including the local-mode section that sits AFTER the gated block, which is
+	// what a bad cut would swallow.
+	for _, always := range []string{
+		"praxis profiles use",
+		"praxis profiles rm NAME",
+		"## Per-directory profiles (local mode)",
+		"praxis profiles use acme --local",
+	} {
+		if !strings.Contains(single, always) {
+			t.Errorf("single-profile meta-skill lost %q", always)
+		}
+		if !strings.Contains(multi, always) {
+			t.Errorf("multi-profile meta-skill lost %q", always)
+		}
+	}
+
+	// The cut is a const boundary, not a string search, but the two halves still
+	// have to join into valid markdown: one blank line, no welded headings.
+	const seam = "Only the catalog skills cycle.\n\n## Per-directory profiles (local mode)\n"
+	if !strings.Contains(single, seam) {
+		t.Error("single-profile body joins its two halves without a clean paragraph break")
+	}
+	if strings.Contains(single, "\n\n\n") || strings.Contains(multi, "\n\n\n") {
+		t.Error("meta-skill body has a doubled blank line at a const boundary")
+	}
+}
+
+// A name with no body errors at install time; a body with no name is never
+// installed at all. Both are silent, so pin the pairing.
+func TestSingleFileMetaSkills_EveryNameResolves(t *testing.T) {
+	multiProfileMachine(t)
+	for _, name := range singleFileMetaSkills {
+		body, ok := metaSkillBody(name)
+		if !ok {
+			t.Errorf("%s is named in singleFileMetaSkills but has no body", name)
+			continue
+		}
+		if !strings.HasPrefix(body, "---\nname: ") {
+			t.Errorf("%s body doesn't open with skill frontmatter", name)
+		}
+		if !IsMetaSkill(name) {
+			t.Errorf("%s resolves a body but IsMetaSkill says no — logout would wipe it", name)
+		}
 	}
 }

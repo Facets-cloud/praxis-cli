@@ -39,25 +39,32 @@ still knows how to log back in.
 To remove a NON-active profile, use ` + "`praxis profiles rm NAME`" + ` — it
 touches credentials only, and skips the double skill-cycle of switching just
 to delete. Because at most one profile's org skills are on disk at a time,
-logout REFUSES an explicitly selected profile (exit 2, nothing removed)
-rather than delete one profile's credentials while wiping another's: that
-covers the global ` + "`--profile`" + ` flag AND ` + "`$PRAXIS_PROFILE`" + `, so
-unset the variable if it's exported and you mean to log out of the active
-profile.`,
+logout REFUSES a profile selection that names a DIFFERENT profile than the
+active one (exit 2, nothing removed) rather than delete one profile's
+credentials while wiping another's: that covers the global ` + "`--profile`" + ` flag
+AND ` + "`$PRAXIS_PROFILE`" + `. Naming the active profile is allowed — it asks for
+exactly what a bare logout does.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(logoutJSON, false, out)
 
-		// Refuse BEFORE anything destructive, --all included: --profile with
-		// --all is a contradiction ("that one" vs "every one"), and honoring
-		// --all while ignoring --profile would wipe every profile for a user
-		// who named exactly one. logout also removes the org skills belonging
-		// to whichever profile is ACTIVE, so it can't delete a different
-		// profile's credentials without leaving the two out of step — which is
-		// why $PRAXIS_PROFILE is refused here too, not only the flag.
+		// Refuse BEFORE anything destructive, --all included: a diverging
+		// --profile with --all is a contradiction ("that one" vs "every one"),
+		// and honoring --all while ignoring --profile would wipe every profile
+		// for a user who named exactly one. logout also removes the org skills
+		// belonging to whichever profile is ACTIVE, so it can't delete a
+		// different profile's credentials without leaving the two out of step —
+		// which is why $PRAXIS_PROFILE is refused here too, not only the flag.
+		//
+		// Compared against the PERSISTED pointer, not ResolveActiveGlobal: the
+		// pointer is what owns the org skills on disk, and resolving through the
+		// environment would compare $PRAXIS_PROFILE with itself. Naming the
+		// profile logout would remove anyway is not a redirect, so it proceeds.
 		if refusedExplicitProfile(out, asJSON, "logout",
-			"switch to it first (`praxis profiles use %s`), then run logout") {
+			"run `praxis profiles rm %s` to remove that profile's credentials "+
+				"(no skill cycle) — logout only ever removes the active profile",
+			credentials.PersistedActiveName()) {
 			return nil
 		}
 

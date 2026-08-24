@@ -14,17 +14,26 @@ import (
 //go:embed getting-started.md
 var gettingStartedSkill string
 
-// dummySkills is the binary-embedded catalog of meta-skills. Two
-// entries today — "praxis" (drives the CLI surface) and
-// "praxis-memory" (drives the org-memory recall/list/add flow).
-// Both are installed by `praxis login`. Org skills come from the
-// server's /v1/skills/bundle endpoint and live alongside these,
-// prefixed `praxis-<name>`; the IsMetaSkill exclusion on
-// UninstallByPrefix keeps the prefix-shaped "praxis-memory" from
-// being wiped during profile switches.
-var dummySkills = map[string]string{
-	"praxis-getting-started": gettingStartedSkill,
-	"praxis": `---
+// The binary-embedded single-file meta-skills, resolved by metaSkillBody:
+// "praxis-getting-started" (the pre-login GTM surface), "praxis" (drives the
+// CLI surface) and "praxis-memory" (the org-memory recall/list/add flow). All
+// are installed by `praxis login`. Org skills come from the server's
+// /v1/skills/bundle endpoint and live alongside these, prefixed
+// `praxis-<name>`; the IsMetaSkill exclusion on UninstallByPrefix keeps the
+// prefix-shaped "praxis-memory" from being wiped during profile switches.
+const (
+	gettingStartedSkillName = "praxis-getting-started"
+	praxisSkillName         = "praxis"
+	memorySkillName         = "praxis-memory"
+)
+
+// The "praxis" body is three consts rather than one string because its middle
+// third is multi-profile doctrine that only ships to a machine which actually
+// has several profiles — see MultiProfileMachine.
+//
+// praxisSkillHead is everything before that doctrine: what every user needs,
+// single- and multi-profile alike.
+const praxisSkillHead = `---
 name: praxis
 description: Praxis CLI is installed locally. Use whenever the user asks about Praxis, Facets infrastructure, or wants infra/cloud/release operations done. Run praxis commands directly — don't ask the user to run them.
 ---
@@ -118,7 +127,14 @@ A rejected or unreachable switch changes NOTHING, so it's safe to retry.
 
 This meta-skill survives every switch. Only the catalog skills cycle.
 
-### Scope yourself instead of switching
+`
+
+// praxisSkillMultiProfile is doctrine for a machine holding SEVERAL profiles:
+// how to scope yourself instead of switching, the precedence chain, and which
+// commands refuse a selection. Omitted entirely on a single-profile machine,
+// where there is no profile question to answer and this text would only teach
+// the host to pass `-p` at the one profile it already resolves to.
+const praxisSkillMultiProfile = `### Scope yourself instead of switching
 
 ` + "`profiles use`" + ` is MACHINE-GLOBAL. It rewrites the active-profile pointer
 AND replaces the installed praxis-* skills, so it changes every other shell
@@ -161,16 +177,22 @@ directory: it installs them project-scoped and leaves every other session
 alone. A global ` + "`profiles use`" + ` also works, but it swaps the skill files
 for the whole machine — so say so before doing it.
 
-Commands that REFUSE a profile selection with exit 2 (nothing changed),
-because they act on whatever is globally active:
+Commands that REFUSE a selection naming a DIFFERENT profile than the one they
+act on, with exit 2 (nothing changed). Naming the profile they'd act on anyway
+is fine — it's the no-op it looks like:
 
-- ` + "`logout`" + ` and ` + "`refresh-skills`" + ` — refuse BOTH ` + "`-p`" + ` and
-  ` + "`PRAXIS_PROFILE`" + `; they delete or reinstall the active profile's skills.
-- ` + "`profiles use`" + ` — refuses ` + "`-p`" + ` only (its target is the argument). With
-  ` + "`PRAXIS_PROFILE`" + ` set it still switches, and reports ` + "`shadowed_by_env`" + `
-  plus ` + "`effective_profile`" + ` because YOUR session keeps using the variable.
+- ` + "`logout`" + ` and ` + "`refresh-skills`" + ` — refuse both ` + "`-p`" + ` and
+  ` + "`PRAXIS_PROFILE`" + ` when they diverge from the active profile; they delete
+  or reinstall ITS skills, so pointing them elsewhere would split the two.
+- ` + "`profiles use`" + ` — refuses only a ` + "`-p`" + ` that contradicts its argument.
+  With ` + "`PRAXIS_PROFILE`" + ` set it still switches, and reports
+  ` + "`shadowed_by_env`" + ` plus ` + "`effective_profile`" + ` because YOUR session
+  keeps using the variable.
 
-## Per-directory profiles (local mode)
+`
+
+// praxisSkillTail is everything after the multi-profile doctrine.
+const praxisSkillTail = `## Per-directory profiles (local mode)
 
 For users working several orgs at once (one directory per customer), a
 profile can be pinned to a directory tree instead of switching global
@@ -386,8 +408,10 @@ rewrite rule as skills. No new credentials live on the laptop.
     not how it works. ` + "`praxis login`" + ` handles the browser+callback.
   - **Don't** ask the user to run praxis commands. Run them yourself.
   - **Don't** parse human-readable text output. Always use ` + "`--json`" + `.
-`,
-	"praxis-memory": `---
+`
+
+// praxisMemorySkill drives the org-memory recall/list/add flow.
+const praxisMemorySkill = `---
 name: praxis-memory
 description: This Praxis deployment has a server-side memory of durable org facts (conventions, decisions, people, products, processes). Whenever the user's question may depend on org context, consult memories BEFORE answering — start with ` + "`praxis memory recall \"<terms>\" --json`" + `; if that misses or returns nothing, fall back to ` + "`praxis memory list --json`" + ` and grep the full dump yourself. Also use ` + "`praxis memory add`" + ` (after user consent) to persist a new fact the user has just shared.
 ---
@@ -538,14 +562,63 @@ accepted for praxis-skill convention compatibility but is a no-op.
   - **Don't** route personal preferences into praxis. "I prefer X"
     goes to your native auto-memory. Praxis is for facts that travel
     with the organization.
-`,
+`
+
+// MultiProfileMachine reports whether this machine holds more than one
+// credentials profile, gating the multi-profile doctrine in the "praxis"
+// meta-skill.
+//
+// The typical customer has exactly one profile and so no profile question to
+// answer: for them the precedence chain, the machine-global warnings and the
+// refusal table are pure context cost, and worse, they are the mechanism that
+// teaches the host to start passing `-p` at the single profile it already
+// resolves to.
+//
+// A seam, like paths.LocalModeActive: this package must not read the
+// credentials store itself (its tests would then depend on the developer's real
+// ~/.praxis), so cmd wires it to credentials.List and tests set it directly.
+// Unwired it reports false, so the doctrine ships only once something has
+// established that there really are several profiles.
+var MultiProfileMachine = func() bool { return false }
+
+// singleFileMetaSkills names every meta-skill metaSkillBody can resolve, in the
+// order they were introduced. Kept beside it: a body with no name here is
+// invisible to login, and a name with no body errors at install time.
+var singleFileMetaSkills = []string{gettingStartedSkillName, praxisSkillName, memorySkillName}
+
+// metaSkillBody returns the body of a single-file binary-embedded meta-skill.
+// Multi-file tree meta-skills are resolved by treeSkills instead.
+func metaSkillBody(name string) (string, bool) {
+	switch name {
+	case gettingStartedSkillName:
+		return gettingStartedSkill, true
+	case praxisSkillName:
+		if MultiProfileMachine() {
+			return praxisSkillHead + praxisSkillMultiProfile + praxisSkillTail, true
+		}
+		return praxisSkillHead + praxisSkillTail, true
+	case memorySkillName:
+		return praxisMemorySkill, true
+	}
+	return "", false
+}
+
+// isSingleFileMetaSkill answers the name question without building a body —
+// IsMetaSkill is called once per receipt entry during a wipe.
+func isSingleFileMetaSkill(name string) bool {
+	for _, n := range singleFileMetaSkills {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // ContentFor returns the SKILL.md content for the given skill name.
 // Binary-embedded meta-skills only; org catalog skills come from the
 // server's /v1/skills/bundle endpoint.
 func ContentFor(name string) (string, error) {
-	body, ok := dummySkills[name]
+	body, ok := metaSkillBody(name)
 	if !ok {
 		return "", fmt.Errorf(
 			"unknown skill %q (only binary-embedded meta-skills are resolvable via ContentFor; org skills come from the server)",
@@ -556,15 +629,12 @@ func ContentFor(name string) (string, error) {
 }
 
 // IsMetaSkill reports whether `name` is a binary-embedded meta-skill —
-// either a single-file skill (dummySkills) or a multi-file tree skill
+// either a single-file skill (singleFileMetaSkills) or a multi-file tree skill
 // (treeSkills). Used by UninstallByPrefix / RemoveOrphanedByPrefix to
 // preserve meta-skills when wiping the "praxis-" prefix during login
 // profile-switches and logout.
 func IsMetaSkill(name string) bool {
-	if _, ok := dummySkills[name]; ok {
-		return true
-	}
-	return isTreeSkill(name)
+	return isSingleFileMetaSkill(name) || isTreeSkill(name)
 }
 
 // MetaSkillNames returns the names of every binary-embedded meta-skill —
@@ -573,8 +643,8 @@ func IsMetaSkill(name string) bool {
 // install-log output stable across runs and prevents tests from being flaky
 // on map iteration randomness.
 func MetaSkillNames() []string {
-	set := make(map[string]struct{}, len(dummySkills))
-	for k := range dummySkills {
+	set := make(map[string]struct{}, len(singleFileMetaSkills))
+	for _, k := range singleFileMetaSkills {
 		set[k] = struct{}{}
 	}
 	for k := range treeSkills() {
@@ -593,7 +663,7 @@ func MetaSkillNames() []string {
 // (no network, no credentials) so `praxis init` / the cask hook / first-run can
 // land them the moment praxis is installed. Every entry MUST also be a
 // meta-skill (so login refreshes it and logout preserves it).
-var bootstrapSkills = []string{"praxis-getting-started"}
+var bootstrapSkills = []string{gettingStartedSkillName}
 
 // BootstrapSkillNames returns the no-auth-installable meta-skills, sorted.
 func BootstrapSkillNames() []string {

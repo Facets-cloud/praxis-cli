@@ -10,6 +10,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
+	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
 
 // $PRAXIS_PROFILE now outranks both on-disk pointers, so a developer with it
@@ -206,9 +207,10 @@ func TestActiveOrAuthExit_HonorsRootProfileFlag(t *testing.T) {
 	}
 }
 
-// Three commands cannot honor --profile. Silently ignoring it is the dangerous
-// option: `praxis --profile acme logout` would delete the ACTIVE profile's
-// credentials while the user believed they had named acme.
+// Three commands cannot honor a --profile that names a DIFFERENT profile than
+// the one they act on. Silently ignoring it is the dangerous option: `praxis
+// --profile acme logout` would delete the ACTIVE profile's credentials while
+// the user believed they had named acme.
 func TestRootProfileFlag_RefusedWhereItCannotBeHonored(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -224,7 +226,10 @@ func TestRootProfileFlag_RefusedWhereItCannotBeHonored(t *testing.T) {
 				return logoutCmd.RunE(logoutCmd, nil)
 			},
 			wantWhat: "logout",
-			wantHint: "profiles use acme",
+			// Not "switch to acme first": that's the double skill-cycle this
+			// command's own help tells you to skip. `profiles rm` is the verb for
+			// a profile you aren't on.
+			wantHint: "profiles rm acme",
 		},
 		{
 			name: "refresh-skills",
@@ -292,6 +297,201 @@ func TestRootProfileFlag_RefusedWhereItCannotBeHonored(t *testing.T) {
 			if store, _ := credentials.Load(); len(store) != 3 {
 				t.Errorf("credential store has %d profiles, want 3 untouched", len(store))
 			}
+		})
+	}
+}
+
+// The meta-skill's multi-profile gate is a seam skillinstall cannot fill
+// itself (it must not read the credentials store, or its own tests would
+// depend on the developer's ~/.praxis). cmd wires it — and if that wiring is
+// ever dropped, the doctrine silently stops shipping to the users who need it
+// while every skillinstall test keeps passing, because those set the seam
+// directly.
+func TestMultiProfileMachine_WiredToCredentialsStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if skillinstall.MultiProfileMachine() {
+		t.Error("empty store reports multi-profile")
+	}
+	seedProfile(t, "default", "https://d.test", "td")
+	if skillinstall.MultiProfileMachine() {
+		t.Error("one profile reports multi-profile — the typical customer would get doctrine they can't act on")
+	}
+	seedProfile(t, "acme", "https://acme.test", "ta")
+	if !skillinstall.MultiProfileMachine() {
+		t.Error("two profiles report single-profile — the meta-skill would omit the doctrine that matters")
+	}
+}
+
+// The refusal exists to stop DIVERGENCE, not to police the flag's presence.
+// `praxis -p default logout` on the single-profile machine that every customer
+// has asks for precisely what a bare `logout` does, so refusing it — with
+// "default is not another profile" and a hint to switch to the profile you are
+// already on — was an error message about nothing.
+func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
+	tests := []struct {
+		name string
+		// env selects via $PRAXIS_PROFILE instead of -p; both are refused on
+		// divergence, so both have to be allowed on agreement.
+		env    bool
+		setup  func(t *testing.T) (selection string)
+		run    func(t *testing.T, out *bytes.Buffer) error
+		verify func(t *testing.T, call *postAuthCall)
+	}{
+		{
+			// The single-profile customer: one profile, and it's `default`.
+			name: "logout names the only profile there is",
+			setup: func(t *testing.T) string {
+				seedProfile(t, "default", "https://d.test", "td")
+				return "default"
+			},
+			run: func(t *testing.T, out *bytes.Buffer) error {
+				logoutCmd.SetOut(out)
+				t.Cleanup(func() { logoutCmd.SetOut(nil) })
+				return logoutCmd.RunE(logoutCmd, nil)
+			},
+			verify: func(t *testing.T, _ *postAuthCall) {
+				if store, _ := credentials.Load(); len(store) != 0 {
+					t.Errorf("logout left %d profile(s); it should have removed the one it named", len(store))
+				}
+			},
+		},
+		{
+			// An exported PRAXIS_PROFILE is the normal state for a session
+			// scoped to one deployment; it must not make logout unusable there.
+			name: "logout under a matching $PRAXIS_PROFILE",
+			env:  true,
+			setup: func(t *testing.T) string {
+				seedProfile(t, "default", "https://d.test", "td")
+				seedProfile(t, "acme", "https://acme.test", "ta")
+				if err := credentials.SetActive("acme"); err != nil {
+					t.Fatal(err)
+				}
+				return "acme"
+			},
+			run: func(t *testing.T, out *bytes.Buffer) error {
+				logoutCmd.SetOut(out)
+				t.Cleanup(func() { logoutCmd.SetOut(nil) })
+				return logoutCmd.RunE(logoutCmd, nil)
+			},
+			verify: func(t *testing.T, _ *postAuthCall) {
+				store, _ := credentials.Load()
+				if _, still := store["acme"]; still {
+					t.Error("logout kept acme, the profile the environment named")
+				}
+				if _, gone := store["default"]; !gone {
+					t.Error("logout removed default; it must only touch the active profile")
+				}
+			},
+		},
+		{
+			name: "refresh-skills names the active profile",
+			setup: func(t *testing.T) string {
+				seedProfile(t, "default", "https://d.test", "td")
+				seedProfile(t, "acme", "https://acme.test", "ta")
+				if err := credentials.SetActive("acme"); err != nil {
+					t.Fatal(err)
+				}
+				return "acme"
+			},
+			run: func(t *testing.T, out *bytes.Buffer) error {
+				refreshSkillsCmd.SetOut(out)
+				t.Cleanup(func() { refreshSkillsCmd.SetOut(nil) })
+				return refreshSkillsCmd.RunE(refreshSkillsCmd, nil)
+			},
+			verify: func(t *testing.T, call *postAuthCall) {
+				if call.count != 1 {
+					t.Fatalf("postAuthSetup ran %d times, want 1 — the re-sync must happen", call.count)
+				}
+				if call.baseURL != "https://acme.test" {
+					t.Errorf("re-synced against %q, want the named profile's URL", call.baseURL)
+				}
+			},
+		},
+		{
+			// refresh-skills installs into the ACTIVE ROOT, so inside a pinned
+			// tree the profile it acts on is the project pointer's — not the
+			// global one. Comparing against the global pointer here would refuse
+			// a flag that names exactly what the command was about to do.
+			name: "refresh-skills names the project-pinned profile",
+			setup: func(t *testing.T) string {
+				seedProfile(t, "default", "https://d.test", "td")
+				seedProfile(t, "pinned", "https://pinned.test", "tp")
+				if err := credentials.SetActive("default"); err != nil {
+					t.Fatal(err)
+				}
+				repoUnderHome(t, os.Getenv("HOME"))
+				if _, err := credentials.SetActiveLocal("pinned"); err != nil {
+					t.Fatal(err)
+				}
+				return "pinned"
+			},
+			run: func(t *testing.T, out *bytes.Buffer) error {
+				refreshSkillsCmd.SetOut(out)
+				t.Cleanup(func() { refreshSkillsCmd.SetOut(nil) })
+				return refreshSkillsCmd.RunE(refreshSkillsCmd, nil)
+			},
+			verify: func(t *testing.T, call *postAuthCall) {
+				if call.count != 1 {
+					t.Fatalf("postAuthSetup ran %d times, want 1", call.count)
+				}
+				if call.baseURL != "https://pinned.test" {
+					t.Errorf("re-synced against %q, want the pinned profile's URL", call.baseURL)
+				}
+			},
+		},
+		{
+			// One answer given twice is not two answers.
+			name: "profiles use with -p naming the same target",
+			setup: func(t *testing.T) string {
+				seedProfile(t, "default", "https://d.test", "td")
+				seedProfile(t, "acme", "https://acme.test", "ta")
+				if err := credentials.SetActive("default"); err != nil {
+					t.Fatal(err)
+				}
+				okAuthMe(t, "u@acme.test")
+				return "acme"
+			},
+			run: func(t *testing.T, out *bytes.Buffer) error {
+				profilesUseCmd.SetOut(out)
+				t.Cleanup(func() { profilesUseCmd.SetOut(nil) })
+				return profilesUseCmd.RunE(profilesUseCmd, []string{"acme"})
+			},
+			verify: func(t *testing.T, call *postAuthCall) {
+				if g, _ := credentials.ResolveActiveGlobal(); g.Name != "acme" {
+					t.Errorf("active profile = %q, want the switch to have happened", g.Name)
+				}
+				if call.count != 1 {
+					t.Errorf("postAuthSetup ran %d times, want 1", call.count)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			resetProfilesUseFlags(t)
+			call := stubPostAuthCapture(t)
+			code := stubOsExit(t)
+
+			selection := tc.setup(t)
+			if tc.env {
+				t.Setenv(credentials.EnvProfile, selection)
+			} else {
+				setRootProfile(t, selection)
+			}
+
+			var buf bytes.Buffer
+			if err := tc.run(t, &buf); err != nil {
+				t.Fatalf("RunE err = %v", err)
+			}
+			if *code == exitcode.Usage {
+				t.Fatalf("refused a selection that named the profile acted on; output:\n%s", buf.String())
+			}
+			if *code != -1 {
+				t.Fatalf("exited %d; output:\n%s", *code, buf.String())
+			}
+			tc.verify(t, call)
 		})
 	}
 }
@@ -481,6 +681,39 @@ func TestProfilesUse_GlobalSwitchAnnouncesMachineWideScope(t *testing.T) {
 		if !strings.Contains(note, want) {
 			t.Errorf("scope_note = %q, want it to mention %q", note, want)
 		}
+	}
+}
+
+// … and must NOT say so when there is only one profile. Nothing was disrupted:
+// every session resolved to this profile before the command and still does. The
+// note would be a warning about a hazard the user cannot have, and it teaches
+// PRAXIS_PROFILE — whose only effect on a one-profile machine is to name the
+// same profile a second time.
+func TestProfilesUse_SingleProfileReSyncOmitsMachineWideScope(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	resetProfilesUseFlags(t)
+	seedProfile(t, "default", "https://d.test", "td")
+	if err := credentials.SetActive("default"); err != nil {
+		t.Fatal(err)
+	}
+	okAuthMe(t, "u@x")
+	call := stubPostAuthCapture(t)
+
+	out, err := runProfilesUse(t, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeMap(t, out)
+	if _, present := got["scope_note"]; present {
+		t.Errorf("scope_note = %v on a single-profile machine; there is no other session to disturb", got["scope_note"])
+	}
+	// The re-sync itself still has to happen — gating the note must not gate the
+	// work.
+	if call.count != 1 {
+		t.Errorf("postAuthSetup ran %d times, want 1", call.count)
+	}
+	if got["profile"] != "default" {
+		t.Errorf("profile = %v, want default", got["profile"])
 	}
 }
 
