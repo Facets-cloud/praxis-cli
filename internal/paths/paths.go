@@ -88,6 +88,10 @@ func Dir() (string, error) {
 // can't be mistaken for a project root. Restricting discovery to the home
 // subtree also keeps it deterministic under tests (which fake $HOME): a test
 // whose working directory is outside the faked home sees no project root.
+//
+// Home and the working directory are aligned into one namespace first (see
+// alignUnder) so a symlinked home — macOS $HOME=/tmp/x, where /tmp is a link
+// to /private/tmp — doesn't read as "outside home".
 func ProjectRoot() (string, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -97,11 +101,12 @@ func ProjectRoot() (string, bool, error) {
 	if err != nil {
 		return "", false, nil
 	}
-	home = filepath.Clean(home)
-	dir := filepath.Clean(cwd)
-	if !isUnder(home, dir) {
+	home, dir, ok := alignUnder(home, cwd)
+	if !ok {
 		return "", false, nil
 	}
+	// Both are in the same namespace now, so this bound really does stop at
+	// home instead of walking past it to / and finding a stray .praxis.
 	for dir != home {
 		candidate := filepath.Join(dir, dirName)
 		if fi, statErr := os.Stat(candidate); statErr == nil && fi.IsDir() {
@@ -143,6 +148,9 @@ func ActiveRoot() (string, error) {
 // home directory itself): local mode is discovered by walking up to home, so
 // a marker outside that subtree could never be found again. Returns an error
 // otherwise.
+//
+// It aligns home and the working directory the same way ProjectRoot does, so
+// whatever this creates is discoverable afterwards.
 func EnsureProjectRoot() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -152,10 +160,12 @@ func EnsureProjectRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	home = filepath.Clean(home)
-	cwd = filepath.Clean(cwd)
-	if cwd == home || !isUnder(home, cwd) {
+	home, cwd, ok := alignUnder(home, cwd)
+	if !ok {
 		return "", fmt.Errorf("local mode requires a directory under your home directory (%s); %s is outside it", home, cwd)
+	}
+	if cwd == home {
+		return "", fmt.Errorf("local mode requires a directory under your home directory (%s), not the home directory itself", home)
 	}
 	root := filepath.Join(cwd, dirName)
 	if err := os.MkdirAll(root, 0o700); err != nil {
@@ -211,6 +221,49 @@ func Installed() (string, error) {
 func MCPTools() (string, error) {
 	d, err := ActiveRoot()
 	return filepath.Join(d, "mcp-tools.json"), err
+}
+
+// alignUnder expresses base and path in a single namespace and reports whether
+// path is base or a descendant of it. Both returned values come from whichever
+// namespace matched, so a caller can walk from path up to base knowing the two
+// will actually meet.
+//
+// The paths as given are tried first: that costs no syscalls, keeps the
+// spelling the user typed, and is what nearly every call hits. Only when that
+// fails are the symlink-resolved forms compared — which is the case a plain
+// prefix test gets wrong. $HOME may be logical while os.Getwd() reports the
+// physical path (macOS: HOME=/tmp/x, cwd=/private/tmp/x/repo, since /tmp is a
+// symlink to /private/tmp), or the reverse when $PWD carries a logical path
+// into a physical home. Either way the two strings name the same directory and
+// must compare equal.
+//
+// Resolution only ever ADDS matches. A directory reached through a symlink that
+// points out of home still matches on the first attempt and keeps working, so
+// this can't newly reject a layout that works today.
+func alignUnder(base, path string) (string, string, bool) {
+	base, path = filepath.Clean(base), filepath.Clean(path)
+	if isUnder(base, path) {
+		return base, path, true
+	}
+	if rBase, rPath := resolved(base), resolved(path); isUnder(rBase, rPath) {
+		return rBase, rPath, true
+	}
+	// Not under base in either namespace. Report the paths as given — they're
+	// what the user typed, so they're what an error message should name.
+	return base, path, false
+}
+
+// resolved returns path with symlinks resolved, or path unchanged when it
+// can't be: EvalSymlinks fails on a path that doesn't exist, and callers that
+// check containment before creating a directory still need an answer. Every
+// caller resolves the working directory (which exists) and $HOME, so the
+// fallback only fires for a misconfigured or deleted one — where leaving the
+// path as-is yields the conservative "not under home" answer.
+func resolved(path string) string {
+	if r, err := filepath.EvalSymlinks(path); err == nil {
+		return r
+	}
+	return path
 }
 
 // isUnder reports whether path is base or a descendant of base.

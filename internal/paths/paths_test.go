@@ -242,6 +242,254 @@ func TestEnsureProjectRoot_RejectsHomeItself(t *testing.T) {
 	}
 }
 
+// symlinkedHome builds the macOS /tmp layout in a temp dir:
+//
+//	<base>/phys/         the real directory
+//	<base>/link -> phys  a symlink to it, like /tmp -> /private/tmp
+//
+// It returns (link, phys) — two spellings of one directory.
+func symlinkedHome(t *testing.T) (string, string) {
+	t.Helper()
+	base := t.TempDir()
+	phys := filepath.Join(base, "phys")
+	if err := os.MkdirAll(phys, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(phys, link); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+	return link, phys
+}
+
+// $HOME is logical (macOS /tmp/x) while os.Getwd() reports the physical path.
+// A plain prefix test calls that "outside home" and silently disables local
+// mode for every command.
+func TestProjectRoot_LogicalHomePhysicalCwd(t *testing.T) {
+	link, phys := symlinkedHome(t)
+	t.Setenv("HOME", link)
+	repo := filepath.Join(phys, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mkProjectRoot(t, repo)
+	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
+
+	got, ok, err := ProjectRoot()
+	if err != nil || !ok {
+		t.Fatalf("ProjectRoot() = %q, ok=%v, err=%v; want found through the symlinked home", got, ok, err)
+	}
+	if want := filepath.Join(resolved(repo), dirName); got != want {
+		t.Errorf("ProjectRoot() = %q, want %q", got, want)
+	}
+}
+
+// The mirror image: $PWD carries a logical path into a physical $HOME.
+func TestProjectRoot_PhysicalHomeLogicalCwd(t *testing.T) {
+	link, phys := symlinkedHome(t)
+	t.Setenv("HOME", phys)
+	if err := os.MkdirAll(filepath.Join(phys, "repo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mkProjectRoot(t, filepath.Join(phys, "repo"))
+	logicalRepo := filepath.Join(link, "repo")
+	t.Cleanup(SetGetwdForTest(func() (string, error) { return logicalRepo, nil }))
+
+	got, ok, err := ProjectRoot()
+	if err != nil || !ok {
+		t.Fatalf("ProjectRoot() = %q, ok=%v, err=%v; want found", got, ok, err)
+	}
+	if want := filepath.Join(resolved(logicalRepo), dirName); got != want {
+		t.Errorf("ProjectRoot() = %q, want %q", got, want)
+	}
+}
+
+// The trap in a naive fix: resolve the cwd but keep comparing it to the
+// unresolved home and the `dir != home` bound never matches, so the walk
+// climbs past home to / and can adopt any stray .praxis it passes. Aligning
+// BOTH sides is what keeps the bound real.
+func TestProjectRoot_SymlinkedHome_WalkStillStopsAtHome(t *testing.T) {
+	link, phys := symlinkedHome(t)
+	t.Setenv("HOME", link)
+	stray := mkProjectRoot(t, filepath.Dir(phys)) // ABOVE home
+	repo := filepath.Join(phys, "work", "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
+
+	if got, ok, _ := ProjectRoot(); ok {
+		t.Errorf("ProjectRoot() = %q, ok=true; want not-found — the walk escaped home and picked up %q", got, stray)
+	}
+}
+
+// Resolution must only ever ADD matches: a directory reached through a symlink
+// that points OUT of home worked before (plain prefix on the logical path) and
+// must keep working, with the spelling the user typed.
+func TestProjectRoot_SymlinkOutOfHome_StillDiscovered(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	outside := filepath.Join(base, "elsewhere")
+	if err := os.MkdirAll(filepath.Join(outside, "repo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(home, "linked")); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+	mkProjectRoot(t, filepath.Join(outside, "repo"))
+	t.Setenv("HOME", home)
+	logical := filepath.Join(home, "linked", "repo")
+	t.Cleanup(SetGetwdForTest(func() (string, error) { return logical, nil }))
+
+	got, ok, err := ProjectRoot()
+	if err != nil || !ok {
+		t.Fatalf("ProjectRoot() = %q, ok=%v, err=%v; want found (no new rejection)", got, ok, err)
+	}
+	if want := filepath.Join(logical, dirName); got != want {
+		t.Errorf("ProjectRoot() = %q, want %q — a match on the paths as given keeps their spelling", got, want)
+	}
+}
+
+// What EnsureProjectRoot creates must be what ProjectRoot later finds;
+// otherwise `--local` writes a pointer that discovery can't see.
+func TestEnsureProjectRoot_SymlinkedHome_RoundTripsWithDiscovery(t *testing.T) {
+	link, phys := symlinkedHome(t)
+	t.Setenv("HOME", link)
+	repo := filepath.Join(phys, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
+
+	created, err := EnsureProjectRoot()
+	if err != nil {
+		t.Fatalf("EnsureProjectRoot() err = %v; want success under a symlinked home", err)
+	}
+	if fi, statErr := os.Stat(created); statErr != nil || !fi.IsDir() {
+		t.Fatalf("EnsureProjectRoot() = %q but it's not a directory: %v", created, statErr)
+	}
+	found, ok, _ := ProjectRoot()
+	if !ok || found != created {
+		t.Errorf("ProjectRoot() = %q, ok=%v; want the just-created %q", found, ok, created)
+	}
+}
+
+// cwd is home itself, spelled physically while $HOME is the symlink. Aligning
+// makes them compare equal, so the refusal names the real reason instead of
+// claiming the home directory is outside the home directory.
+func TestEnsureProjectRoot_SymlinkedHomeItself_Rejected(t *testing.T) {
+	link, phys := symlinkedHome(t)
+	t.Setenv("HOME", link)
+	t.Cleanup(SetGetwdForTest(func() (string, error) { return phys, nil }))
+
+	_, err := EnsureProjectRoot()
+	if err == nil {
+		t.Fatal("EnsureProjectRoot() should refuse the home directory itself, got nil")
+	}
+	if !strings.Contains(err.Error(), "not the home directory itself") {
+		t.Errorf("error should say cwd IS home, not that it's outside it; got %q", err.Error())
+	}
+}
+
+func TestAlignUnder(t *testing.T) {
+	link, phys := symlinkedHome(t)
+	outs := t.TempDir()
+	// The canonical spelling of phys. The cases below that mix a resolvable
+	// base with an unresolvable path MUST anchor on this: $TMPDIR is itself
+	// symlinked on macOS (/var -> /private/var) but canonical on Linux, so a
+	// case built on the raw phys would assert one thing locally and the
+	// opposite in CI.
+	physCanon, err := filepath.EvalSymlinks(phys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(phys, "repo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(phys, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		base, path string
+		wantOK     bool
+		// wantResolved: the returned pair must be symlink-resolved (the second
+		// attempt matched) rather than the strings as given.
+		wantResolved bool
+	}{
+		{name: "same path", base: phys, path: phys, wantOK: true},
+		{name: "plain descendant", base: phys, path: filepath.Join(phys, "a", "b"), wantOK: true},
+		{name: "trailing slash and dots", base: phys + "/", path: filepath.Join(phys, "a", "..", "a"), wantOK: true},
+		{name: "logical base, physical path", base: link, path: filepath.Join(phys, "repo"), wantOK: true, wantResolved: true},
+		{name: "physical base, logical path", base: phys, path: filepath.Join(link, "repo"), wantOK: true, wantResolved: true},
+		{name: "genuinely outside", base: phys, path: outs, wantOK: false},
+		{name: "sibling prefix is not a descendant", base: phys, path: phys + "-other", wantOK: false},
+		// A missing leaf still aligns: the base resolves, and the path sits
+		// literally beneath the resolved base. Containment is asked BEFORE
+		// mkdir (see TestResolved_MissingPathIsUnchanged), so reporting
+		// "outside" for a directory about to be created would resurrect a
+		// variant of the bug this function exists to fix.
+		{name: "missing leaf under a symlinked base still aligns", base: link, path: filepath.Join(physCanon, "ghost"), wantOK: true, wantResolved: true},
+		// With nothing resolvable on either side the literal compare is all
+		// there is — and it must still reject a genuine outsider.
+		{name: "unresolvable and outside stays a miss", base: filepath.Join(outs, "nope"), path: filepath.Join(physCanon, "ghost"), wantOK: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotBase, gotPath, ok := alignUnder(tc.base, tc.path)
+			if ok != tc.wantOK {
+				t.Fatalf("alignUnder(%q, %q) ok = %v, want %v", tc.base, tc.path, ok, tc.wantOK)
+			}
+			if !ok {
+				// Failure reports the paths as given, so error messages name
+				// what the user typed.
+				if gotBase != filepath.Clean(tc.base) || gotPath != filepath.Clean(tc.path) {
+					t.Errorf("on failure got (%q, %q), want the inputs as given", gotBase, gotPath)
+				}
+				return
+			}
+			// Whichever namespace matched, the pair must agree — that's what
+			// lets a caller walk from path up to base.
+			if !isUnder(gotBase, gotPath) {
+				t.Errorf("returned pair (%q, %q) is not self-consistent", gotBase, gotPath)
+			}
+			// Assert BOTH halves of the pair, not just the base: alignUnder
+			// returns the path too, callers walk up from it, and a base-only
+			// assertion would pass even if the path came back from the other
+			// namespace.
+			if tc.wantResolved {
+				if gotBase != resolved(tc.base) {
+					t.Errorf("base = %q, want the resolved %q", gotBase, resolved(tc.base))
+				}
+				if gotPath != resolved(tc.path) {
+					t.Errorf("path = %q, want the resolved %q", gotPath, resolved(tc.path))
+				}
+			} else {
+				if gotBase != filepath.Clean(tc.base) {
+					t.Errorf("base = %q, want the input as given %q (no needless resolution)", gotBase, filepath.Clean(tc.base))
+				}
+				if gotPath != filepath.Clean(tc.path) {
+					t.Errorf("path = %q, want the input as given %q (no needless resolution)", gotPath, filepath.Clean(tc.path))
+				}
+			}
+		})
+	}
+}
+
+func TestResolved_MissingPathIsUnchanged(t *testing.T) {
+	// EvalSymlinks fails on a path that doesn't exist; containment checks that
+	// run before mkdir still need an answer.
+	missing := filepath.Join(t.TempDir(), "nope", "deeper")
+	if got := resolved(missing); got != missing {
+		t.Errorf("resolved(%q) = %q, want it unchanged", missing, got)
+	}
+}
+
 func TestProjectConfig_PathAndPresence(t *testing.T) {
 	home := withHome(t)
 	repo := filepath.Join(home, "repo")
