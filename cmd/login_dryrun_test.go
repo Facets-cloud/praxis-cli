@@ -75,7 +75,7 @@ func TestLoginDryRun_HasNoSideEffects(t *testing.T) {
 	}
 
 	// Aim at a DIFFERENT profile+URL — the most side-effect-prone shape.
-	loginProfile, loginURL = "probe", "https://probe.test"
+	rootProfile, loginURL = "probe", "https://probe.test"
 	runDryRunJSON(t)
 
 	after, err := os.ReadFile(credsPath)
@@ -182,7 +182,7 @@ func TestLoginDryRun_ProfileSwitchSkillsEffect(t *testing.T) {
 		return &authMeResponse{Email: "u@x"}, nil
 	})
 
-	loginProfile = "acme"
+	rootProfile = "acme"
 	report := runDryRunJSON(t)
 	effect, _ := report["skills_effect"].(string)
 	if effect == "" || report["active_profile"] != "default" {
@@ -192,5 +192,76 @@ func TestLoginDryRun_ProfileSwitchSkillsEffect(t *testing.T) {
 		if !strings.Contains(effect, want) {
 			t.Errorf("skills_effect %q missing %q", effect, want)
 		}
+	}
+}
+
+// "Whose skills are on disk" is a question about POINTERS. $PRAXIS_PROFILE
+// routes commands; it installs nothing. Resolving the dry run's baseline
+// through it meant `PRAXIS_PROFILE=acme praxis login --profile acme --dry-run`
+// reported "no profile switch" for a login that was about to move the pointer
+// off default and wipe default's org skills — the exact prediction --dry-run
+// exists to make, inverted, on the safe-probe path.
+func TestLoginDryRun_EnvDoesNotHideAPendingProfileSwitch(t *testing.T) {
+	isolateHome(t)
+	resetLoginFlags(t)
+	t.Cleanup(func() { loginDryRun = false })
+	seedProfile(t, "default", "https://stored.test", "tok")
+	seedProfile(t, "acme", "https://acme.test", "tok2")
+	if err := credentials.SetActive("default"); err != nil {
+		t.Fatal(err)
+	}
+	stubBrowserLogin(t)
+	stubPostAuth(t)
+	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
+		return &authMeResponse{Email: "u@x"}, nil
+	})
+
+	// The session is scoped to acme, but the pointer — and the installed
+	// catalog — still belong to default.
+	t.Setenv(credentials.EnvProfile, "acme")
+	rootProfile = "acme"
+
+	report := runDryRunJSON(t)
+	if report["active_profile"] != "default" {
+		t.Fatalf("active_profile = %v, want default — the env var owns no skills", report["active_profile"])
+	}
+	effect, _ := report["skills_effect"].(string)
+	if strings.Contains(effect, "no profile switch") {
+		t.Errorf("skills_effect %q claims no switch; login will move the pointer and wipe default's skills", effect)
+	}
+	for _, want := range []string{`"default"`, `"acme"`, "wiped"} {
+		if !strings.Contains(effect, want) {
+			t.Errorf("skills_effect %q missing %q", effect, want)
+		}
+	}
+}
+
+// The mirror case: with the pointer already on acme, an env var naming acme
+// changes nothing, and the report must not invent a switch either.
+func TestLoginDryRun_EnvMatchingThePointerReportsNoSwitch(t *testing.T) {
+	isolateHome(t)
+	resetLoginFlags(t)
+	t.Cleanup(func() { loginDryRun = false })
+	seedProfile(t, "default", "https://stored.test", "tok")
+	seedProfile(t, "acme", "https://acme.test", "tok2")
+	if err := credentials.SetActive("acme"); err != nil {
+		t.Fatal(err)
+	}
+	stubBrowserLogin(t)
+	stubPostAuth(t)
+	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
+		return &authMeResponse{Email: "u@x"}, nil
+	})
+
+	t.Setenv(credentials.EnvProfile, "acme")
+	rootProfile = "acme"
+
+	report := runDryRunJSON(t)
+	if report["active_profile"] != "acme" {
+		t.Fatalf("active_profile = %v, want acme", report["active_profile"])
+	}
+	effect, _ := report["skills_effect"].(string)
+	if !strings.Contains(effect, "no profile switch") {
+		t.Errorf("skills_effect %q should report no switch — the pointer already names acme", effect)
 	}
 }

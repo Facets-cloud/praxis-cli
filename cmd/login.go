@@ -38,7 +38,6 @@ const pollInterval = 1500 * time.Millisecond
 var pollRequestTimeout = 5 * time.Second
 
 var (
-	loginProfile       string
 	loginURL           string
 	loginToken         string
 	loginForce         bool
@@ -64,7 +63,8 @@ var (
 var osExit = os.Exit
 
 func init() {
-	loginCmd.Flags().StringVar(&loginProfile, "profile", "", "save under this profile name (default: \"default\")")
+	// --profile is the global flag on rootCmd (see root.go): for login it names
+	// the profile to create or update. One flag, one variable, both positions.
 	loginCmd.Flags().StringVar(&loginURL, "url", "", "Praxis deployment URL (required for a new profile; existing profiles reuse their saved URL)")
 	loginCmd.Flags().StringVar(&loginToken, "token", "", "skip browser flow; save and verify the given API key directly")
 	loginCmd.Flags().BoolVar(&loginForce, "force", false, "skip the stored token and re-authenticate from the start of the chain")
@@ -113,9 +113,15 @@ Multiple deployments? Use --profile to keep them separate:
   praxis login --profile acme --url https://...   → "acme"
   praxis login --profile bigcorp --url https://.. → "bigcorp"
 
-Re-running login (with the same profile or a different one) is the
-canonical way to refresh skills + manifest snapshot. There is no
-separate refresh command in v0.7.
+Use login to CREATE a profile or re-authenticate one whose token has
+expired. To switch between profiles that are already authenticated,
+` + "`praxis profiles use <name>`" + ` is the shorter path — same skill +
+manifest re-sync, no browser, and it refuses without changing anything
+if the stored token turns out to be dead.
+
+Re-running login (with the same profile or a different one) also
+refreshes skills + manifest snapshot; ` + "`praxis refresh-skills`" + ` does
+it for the active profile without touching credentials.
 
 Not sure what a login invocation will do? Add --dry-run: it reports the
 resolved profile and URL, whether the server is reachable, whether the
@@ -126,7 +132,12 @@ installed skills — then exits without changing anything.`,
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(loginJSON, false, out)
 
-		profileName := loginProfile
+		// Honor an explicit selection (-p, else $PRAXIS_PROFILE) so a session
+		// scoped to one profile logs into that one. With neither, login targets
+		// "default": it deliberately does NOT fall back to the active profile,
+		// so it can't silently re-auth another profile just because a project
+		// pointer names one.
+		profileName, _ := explicitProfile()
 		if profileName == "" {
 			profileName = credentials.DefaultProfileName
 		}
@@ -583,31 +594,11 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName string, prof creden
 		return fmt.Errorf("save credentials: %w", err)
 	}
 
-	projectRoot := ""
-	if local {
-		// Pin the profile to this directory tree. SetActiveLocal writes the
-		// project pointer and creates <cwd>/.praxis (requiring the cwd to be
-		// under home); the marker now names a profile we have, so ActiveRoot
-		// resolves to it and the install lands project-scoped.
-		root, err := credentials.SetActiveLocal(profileName)
-		if err != nil {
-			return fmt.Errorf("pin profile to this directory: %w", err)
-		}
-		projectRoot = root
-		restore := paths.OverrideActiveRoot(root)
-		defer restore()
-	} else {
-		if err := credentials.SetActive(profileName); err != nil {
-			return fmt.Errorf("set active profile: %w", err)
-		}
-		// Global login: pin the active root to home so the meta-skill,
-		// catalog, and MCP snapshot install user-level even when run from
-		// inside a project tree.
-		if home, herr := paths.Dir(); herr == nil {
-			restore := paths.OverrideActiveRoot(home)
-			defer restore()
-		}
+	projectRoot, restore, err := activateProfile(profileName, local)
+	if err != nil {
+		return err
 	}
+	defer restore()
 
 	// Post-auth: install meta-skill, wipe previous org skills, install
 	// this profile's catalog, refresh the MCP tools snapshot. The HTTP
@@ -615,27 +606,7 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName string, prof creden
 	state := postAuthSetup(out, asJSON, baseURL, prof.Auth())
 
 	if asJSON {
-		payload := map[string]any{
-			"ok":               true,
-			"profile":          profileName,
-			"username":         displayName,
-			"url":              baseURL,
-			"scope":            scopeLabel(local),
-			"meta_skill":       state.metaSkill,
-			"catalog_skills":   state.catalogSkills,
-			"removed_skills":   state.removedSkills,
-			"agents":           state.agents,
-			"removed_agents":   state.removedAgents,
-			"snapshot_path":    state.snapshotPath,
-			"snapshot_warning": state.snapshotWarning,
-		}
-		if projectRoot != "" {
-			payload["project_root"] = projectRoot
-		}
-		if prof.RaptorProfile != "" {
-			payload["raptor_profile"] = prof.RaptorProfile
-		}
-		return render.JSON(out, payload)
+		return render.JSON(out, setupPayload(profileName, displayName, baseURL, projectRoot, prof.RaptorProfile, local, state))
 	}
 	if local {
 		fmt.Fprintf(out, "\n✓ Logged in as %s and pinned profile %q to %s\n", displayName, profileName, projectRoot)
@@ -683,6 +654,72 @@ func raptorPin(profileName string) string {
 		return ""
 	}
 	return store[profileName].RaptorProfile
+}
+
+// activateProfile makes profileName the active profile and pins
+// paths.ActiveRoot to the matching scope, returning the project root (empty
+// when global) and a restore func the caller MUST defer.
+//
+// The two halves are inseparable, which is why they live in one helper: the
+// pointer decides which profile is active, and ActiveRoot decides where that
+// profile's skills, receipt, and MCP snapshot land. Flipping one without the
+// other is how you end up with profile A active and profile B's org skills on
+// disk — the exact invariant runPostAuthSetup exists to keep.
+//
+//   - local: write the project pointer (<cwd>/.praxis, created if needed and
+//     required to be under home) and pin the root there, so the install is
+//     project-scoped. The global pointer is left alone.
+//   - global: flip ~/.praxis/config.json and pin the root to home, so the
+//     install stays user-level even when run from inside a project tree.
+//
+// Shared by `praxis login` and `praxis profiles use`.
+func activateProfile(profileName string, local bool) (string, func(), error) {
+	noop := func() {}
+	if local {
+		root, err := credentials.SetActiveLocal(profileName)
+		if err != nil {
+			return "", noop, fmt.Errorf("pin profile to this directory: %w", err)
+		}
+		return root, paths.OverrideActiveRoot(root), nil
+	}
+	if err := credentials.SetActive(profileName); err != nil {
+		return "", noop, fmt.Errorf("set active profile: %w", err)
+	}
+	home, err := paths.Dir()
+	if err != nil {
+		// Home is unresolvable, so there's nothing to pin to — ActiveRoot
+		// will fail the same way downstream and postAuthSetup reports it.
+		return "", noop, nil
+	}
+	return "", paths.OverrideActiveRoot(home), nil
+}
+
+// setupPayload builds the JSON envelope for commands that make a profile
+// active and re-run postAuthSetup. `praxis login` and `praxis profiles use`
+// share it verbatim so an AI host can parse either one with the same reader —
+// including raptor_profile, so a switch surfaces the pairing login reported.
+func setupPayload(profileName, username, baseURL, projectRoot, raptorProfile string, local bool, state postAuthState) map[string]any {
+	payload := map[string]any{
+		"ok":               true,
+		"profile":          profileName,
+		"username":         username,
+		"url":              baseURL,
+		"scope":            scopeLabel(local),
+		"meta_skill":       state.metaSkill,
+		"catalog_skills":   state.catalogSkills,
+		"removed_skills":   state.removedSkills,
+		"agents":           state.agents,
+		"removed_agents":   state.removedAgents,
+		"snapshot_path":    state.snapshotPath,
+		"snapshot_warning": state.snapshotWarning,
+	}
+	if projectRoot != "" {
+		payload["project_root"] = projectRoot
+	}
+	if raptorProfile != "" {
+		payload["raptor_profile"] = raptorProfile
+	}
+	return payload
 }
 
 type authMeResponse struct {

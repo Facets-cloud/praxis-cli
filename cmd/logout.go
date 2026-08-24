@@ -36,14 +36,43 @@ still knows how to log back in.
   praxis logout         active profile: creds + org skills + manifest
   praxis logout --all   every profile's creds + every host's org skills
 
-To remove a non-active profile's credentials specifically, switch to it
-first with ` + "`praxis login --profile X`" + ` and then run logout. With v0.7's
-invariant that at most one profile's org skills are on disk at a time,
-there's no way (and no need) to target a non-active profile directly.`,
+To remove a NON-active profile, use ` + "`praxis profiles rm NAME`" + ` — it
+touches credentials only, and skips the double skill-cycle of switching just
+to delete. Because at most one profile's org skills are on disk at a time,
+logout REFUSES a profile selection that names a DIFFERENT profile than the
+active one (exit 2, nothing removed) rather than delete one profile's
+credentials while wiping another's: that covers the global ` + "`--profile`" + ` flag
+AND ` + "`$PRAXIS_PROFILE`" + `. Naming the active profile is allowed — it asks for
+exactly what a bare logout does.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(logoutJSON, false, out)
+
+		// Refuse BEFORE anything destructive, --all included: a diverging
+		// --profile with --all is a contradiction ("that one" vs "every one"),
+		// and honoring --all while ignoring --profile would wipe every profile
+		// for a user who named exactly one. logout also removes the org skills
+		// belonging to whichever profile is ACTIVE, so it can't delete a
+		// different profile's credentials without leaving the two out of step —
+		// which is why $PRAXIS_PROFILE is refused here too, not only the flag.
+		//
+		// Compared against the PERSISTED pointer, not ResolveActiveGlobal: the
+		// pointer is what owns the org skills on disk, and resolving through the
+		// environment would compare $PRAXIS_PROFILE with itself. Naming the
+		// profile logout would remove anyway is not a redirect, so it proceeds.
+		//
+		// Resolved ONCE, here, and used as the deletion target below. Letting the
+		// action re-resolve was a destructive bug: the guard compared the pointer
+		// while the deletion read the full chain, so `-p default logout` under
+		// PRAXIS_PROFILE=acme passed the check and deleted acme.
+		target := credentials.PersistedActiveName()
+		if refusedExplicitProfile(out, asJSON, "logout",
+			"run `praxis profiles rm %s` to remove that profile's credentials "+
+				"(no skill cycle) — logout only ever removes the active profile",
+			target) {
+			return nil
+		}
 
 		// logout is a GLOBAL lifecycle operation, mirroring login: pin the
 		// active root to home so the org-skill wipe and snapshot removal
@@ -109,20 +138,19 @@ there's no way (and no need) to target a non-active profile directly.`,
 			return nil
 		}
 
-		// Target the GLOBAL active profile only — logout is global (see the
-		// home pin above), so it removes the globally-active profile's
-		// credentials regardless of any project pointer in the cwd. v0.7
-		// dropped --profile from logout (see Long). To remove a non-active
-		// profile, login to it first.
-		active, _ := credentials.ResolveActiveGlobal()
+		// `target` is the persisted global pointer, resolved above alongside the
+		// guard — the same name, by construction. logout is global (see the home
+		// pin above), so a project pointer in the cwd can't redirect it, and
+		// neither can $PRAXIS_PROFILE: the pointer is what owns the credentials
+		// and the org skills this removes, together.
 		store, _ := credentials.Load()
 		credsPresent := false
-		if _, ok := store[active.Name]; ok {
+		if _, ok := store[target]; ok {
 			credsPresent = true
 		}
 
 		if credsPresent {
-			if err := credentials.Delete(active.Name); err != nil {
+			if err := credentials.Delete(target); err != nil {
 				return err
 			}
 		}
@@ -159,7 +187,7 @@ there's no way (and no need) to target a non-active profile directly.`,
 
 		if asJSON {
 			envelope := map[string]any{
-				"removed":        ifTrue(credsPresent, active.Name),
+				"removed":        ifTrue(credsPresent, target),
 				"removed_skills": liteResults(removed),
 				"removed_agents": agentLogoutLite(removedAgents),
 			}
@@ -169,9 +197,9 @@ there's no way (and no need) to target a non-active profile directly.`,
 			return render.JSON(out, envelope)
 		}
 		if credsPresent {
-			fmt.Fprintf(out, "✓ Removed profile %q.\n", active.Name)
+			fmt.Fprintf(out, "✓ Removed profile %q.\n", target)
 		} else {
-			fmt.Fprintf(out, "No credentials to remove for profile %q.\n", active.Name)
+			fmt.Fprintf(out, "No credentials to remove for profile %q.\n", target)
 		}
 		if len(removed) > 0 {
 			fmt.Fprintf(out, "✓ Removed %d org skill(s) from %d host(s).\n",

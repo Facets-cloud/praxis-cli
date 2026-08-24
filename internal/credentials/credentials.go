@@ -14,20 +14,36 @@
 //
 // Active-profile resolution (highest priority first):
 //
-//  1. --profile flag passed to a command (where it exists)
-//  2. <cwd>/.praxis/config.json project pointer (set by
-//     `praxis login --profile X --local`), discovered by walking up from
-//     the working directory to home
-//  3. ~/.praxis/config.json "default profile" pointer (set by
-//     `praxis login --profile X`)
-//  4. literal "default" section
+//  1. --profile/-p, the persistent root flag (scoped to one invocation)
+//  2. $PRAXIS_PROFILE (scoped to one shell or agent session)
+//  3. <cwd>/.praxis/config.json project pointer (set by
+//     `praxis profiles use X --local` or `praxis login --profile X --local`),
+//     discovered by walking up from the working directory to home
+//  4. ~/.praxis/config.json "default profile" pointer (set by
+//     `praxis profiles use X` or `praxis login --profile X`)
+//  5. literal "default" section
 //
-// Rationale: a project pointer is the most specific, explicit choice — being
-// inside that directory tree IS the intent — so it wins. The global pointer
-// is an explicit, persistent choice; it's next.
+// Rationale, and note the env var OUTRANKS the project pointer: the two
+// pointers are machine-global state, so moving one repoints every other shell
+// and agent session on the box — and rewrites the installed praxis-* skill
+// files a concurrent session may already have read. The environment writes
+// nothing and is invisible to other sessions, which makes it the only
+// concurrency-safe way to scope one session, and the reason a pinned repo stays
+// per-session overridable. The flag is the same argument narrowed to a single
+// command. Between the two pointers the project one still wins over the global
+// one: being inside that directory tree IS the intent.
 //
-// Single-profile users never see steps 1–3 — everything resolves to
+// Single-profile users never see steps 1–4 — everything resolves to
 // "default" automatically.
+//
+// Two deliberate exceptions, for callers asking a question about STATE rather
+// than about this invocation — "which profile owns the skills on disk?", or
+// "what would this command act on if the invocation named nothing?":
+// PersistedActiveName reads only the global pointer, and PointerActiveName only
+// the applicable one (project, else global). Both ignore the flag and the
+// environment. Resolving those questions through the full chain is what made
+// `login --dry-run` mispredict, and what makes a divergence check compare a
+// selection with itself.
 package credentials
 
 import (
@@ -117,10 +133,23 @@ type Source string
 
 const (
 	SourceFlag    Source = "flag"
+	SourceEnv     Source = "env"
 	SourceProject Source = "project"
 	SourceConfig  Source = "config"
 	SourceDefault Source = "default"
 )
+
+// EnvProfile selects the active profile for one PROCESS TREE — i.e. one shell
+// or one agent session.
+//
+// This is the concurrency-safe way to work in a profile. The active-profile
+// pointer (~/.praxis/config.json) and the installed org skills are BOTH
+// machine-global, so `praxis profiles use X` changes what every other session
+// on the machine resolves to, and rewrites skill files those sessions have
+// already read. Exporting PRAXIS_PROFILE instead writes nothing: it can't be
+// observed by another session, and another session's switch can't be observed
+// by you.
+const EnvProfile = "PRAXIS_PROFILE"
 
 // Active is the resolved active profile + provenance.
 type Active struct {
@@ -179,16 +208,72 @@ func resolveName(flagProfile string) (string, Source) {
 	if flagProfile != "" {
 		return flagProfile, SourceFlag
 	}
+	// Env outranks both pointers: it is this session's explicit choice, and a
+	// repo pinned via .praxis must still be overridable per session.
+	if name := EnvProfileName(); name != "" {
+		return name, SourceEnv
+	}
 	if name := projectProfile(); name != "" {
 		return name, SourceProject
 	}
 	return resolveGlobalName(flagProfile)
 }
 
+// EnvProfileName returns the profile named by $PRAXIS_PROFILE, or "" when it
+// is unset or blank. Read live on every resolution so a session can change it.
+func EnvProfileName() string {
+	return strings.TrimSpace(os.Getenv(EnvProfile))
+}
+
+// PersistedActiveName returns the profile named by the persisted global
+// pointer (~/.praxis/config.json), ignoring --profile and $PRAXIS_PROFILE.
+//
+// Destructive credentials operations MUST use this rather than
+// ResolveActiveGlobal. An override picks which deployment a SESSION talks to;
+// the pointer is what owns the org skills installed on disk. Resolving through
+// an override would let `PRAXIS_PROFILE=B praxis profiles rm A` delete the very
+// profile the pointer and those skills still belong to, leaving both dangling.
+func PersistedActiveName() string {
+	if cfg, _ := loadConfig(); cfg.Profile != "" {
+		return cfg.Profile
+	}
+	return DefaultProfileName
+}
+
+// PointerActiveName returns the profile named by whichever on-disk pointer
+// applies here — the project pointer when this tree is pinned to a profile that
+// exists, else the persisted global one, else "default". Like
+// PersistedActiveName it ignores --profile and $PRAXIS_PROFILE, so it answers
+// "what would this command act on if the invocation named nothing?".
+//
+// That is what an explicit selection has to be measured against. A command that
+// refuses a redirect is protecting against DIVERGENCE between the named profile
+// and the one whose skills are on disk; `-p X` where X is already the answer is
+// a no-op, not a conflict, and refusing it turns the single-profile user's only
+// profile name into an error.
+func PointerActiveName() (string, error) {
+	if name := projectProfile(); name != "" {
+		store, err := Load()
+		if err != nil {
+			return "", err
+		}
+		// Same guard as ResolveActive: a pointer naming a profile this machine
+		// doesn't have (a teammate-committed .praxis, a stale post-logout
+		// pointer) is inert and falls through to the global resolution.
+		if _, ok := store[name]; ok {
+			return name, nil
+		}
+	}
+	return PersistedActiveName(), nil
+}
+
 // resolveGlobalName is resolveName without the project-pointer step.
 func resolveGlobalName(flagProfile string) (string, Source) {
 	if flagProfile != "" {
 		return flagProfile, SourceFlag
+	}
+	if name := EnvProfileName(); name != "" {
+		return name, SourceEnv
 	}
 	if cfg, _ := loadConfig(); cfg.Profile != "" {
 		return cfg.Profile, SourceConfig

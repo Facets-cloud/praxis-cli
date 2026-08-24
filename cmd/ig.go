@@ -54,8 +54,7 @@ var errBundleContract = errors.New("bundle contract violation")
 const maxMemberFileBytes = 1 << 30 // 1 GiB
 
 var (
-	igJSON    bool
-	igProfile string
+	igJSON bool
 
 	igSyncAll bool
 
@@ -434,33 +433,10 @@ func statusOne(active credentials.Active, catalog string) (state, serverVersion,
 	return state, c.Version, local.Digest, nil
 }
 
-// --- auth resolution honoring --profile --------------------------------
-
-// activeOrAuthExitProfile resolves the credentials profile (honoring the
-// --profile flag) or exits with the auth code. Variant of memory.go's
-// activeOrAuthExit that threads the flag so a non-default profile is
-// selectable — and reproducible in .sync.json's refresh.
-func activeOrAuthExitProfile(out io.Writer, profileFlag string) credentials.Active {
-	active, err := credentials.ResolveActive(profileFlag)
-	if err != nil {
-		render.PrintError(out, true, err.Error(), "could not load credentials", exitcode.Error)
-		os.Exit(exitcode.Error)
-	}
-	if !active.Loaded || active.Profile.Token == "" {
-		render.PrintError(out, true,
-			fmt.Sprintf("no credentials for profile %q", active.Name),
-			"run `praxis login` (or `praxis login --profile "+active.Name+"`)",
-			exitcode.Auth)
-		os.Exit(exitcode.Auth)
-	}
-	return active
-}
-
 // --- command tree ------------------------------------------------------
 
 func init() {
 	igCmd.PersistentFlags().BoolVar(&igJSON, "json", false, "JSON output (default when stdout is non-TTY)")
-	igCmd.PersistentFlags().StringVar(&igProfile, "profile", "", "credentials profile to use (defaults to the active profile)")
 
 	igSyncCmd.Flags().BoolVar(&igSyncAll, "all", false, "sync every catalog in the org")
 
@@ -516,7 +492,7 @@ var igListCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(igJSON, false, out)
-		active := activeOrAuthExitProfile(out, igProfile)
+		active := activeOrAuthExit(out)
 
 		cats, err := igcatalog.ListCatalogs(active.Profile.URL, active.Profile.Auth())
 		if err != nil {
@@ -553,7 +529,7 @@ live tree.`,
 		if !igSyncAll && len(args) != 1 {
 			usageExit(out, "sync requires exactly one <catalog> (or --all)", "praxis ig sync <catalog>")
 		}
-		active := activeOrAuthExitProfile(out, igProfile)
+		active := activeOrAuthExit(out)
 
 		targets := args
 		if igSyncAll {
@@ -607,7 +583,7 @@ var igStatusCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(igJSON, false, out)
-		active := activeOrAuthExitProfile(out, igProfile)
+		active := activeOrAuthExit(out)
 
 		var targets []string
 		if len(args) == 1 {
@@ -684,7 +660,7 @@ var igPublishCmd = &cobra.Command{
 				"provide --git/--sha, or a member-meta.json with {git, sha}")
 		}
 
-		active := activeOrAuthExitProfile(out, igProfile)
+		active := activeOrAuthExit(out)
 
 		gz := gzipBytes(raw)
 		if err := igcatalog.PublishMember(active.Profile.URL, active.Profile.Auth(),
@@ -734,7 +710,7 @@ var igClaimsCmd = &cobra.Command{
 		if igClaimsGit == "" {
 			usageExit(out, "--git is required", "praxis ig claims --git https://github.com/org/repo.git")
 		}
-		active := activeOrAuthExitProfile(out, igProfile)
+		active := activeOrAuthExit(out)
 
 		names, err := igcatalog.Claims(active.Profile.URL, active.Profile.Auth(), igClaimsGit)
 		if err != nil {
@@ -782,7 +758,7 @@ var igManifestPushCmd = &cobra.Command{
 		// git_sha is best-effort: a manifest may come from a non-git dir.
 		gitSHA, _ := gitHeadSHA(filepath.Dir(file))
 
-		active := activeOrAuthExitProfile(out, igProfile)
+		active := activeOrAuthExit(out)
 
 		m := igcatalog.Manifest{
 			Content:  string(content),
@@ -811,7 +787,7 @@ var igManifestPullCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
-		active := activeOrAuthExitProfile(out, igProfile)
+		active := activeOrAuthExit(out)
 
 		m, err := igcatalog.ManifestPull(active.Profile.URL, active.Profile.Auth(), args[0])
 		if err != nil {

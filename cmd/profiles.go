@@ -60,15 +60,20 @@ A failing check on one profile is reported inline and does not abort the
 listing.
 
 The active profile (the one used when no --profile is given) is marked
-with "*" and reported as active_profile in JSON output.`,
+with "*" and reported as active_profile in JSON output.
+
+To change it, run ` + "`praxis profiles use <name>`" + ` — that also re-syncs
+the org skills so they match the profile you switched to.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(profilesJSON, false, out)
 
 		// Resolve the active profile via the standard chain so the marker
-		// matches what every other command would actually use.
-		active, err := credentials.ResolveActive("")
+		// matches what every other command would actually use — including the
+		// global --profile flag, which makes `praxis -p acme profiles` show
+		// acme as active because that IS what commands would resolve to.
+		active, err := credentials.ResolveActive(rootProfile)
 		if err != nil {
 			return err
 		}

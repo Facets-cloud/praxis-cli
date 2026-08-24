@@ -130,13 +130,46 @@ Praxis skills active inside one repository and not globally.
 Requires an existing valid login. Exits 3 if not logged in — run
 ` + "`praxis login`" + ` first.
 
+This always re-syncs the ACTIVE profile, so a global ` + "`--profile`" + ` (or
+` + "`$PRAXIS_PROFILE`" + `) naming a DIFFERENT profile is REFUSED (exit 2,
+nothing changed): installing one profile's skills while the pointer names
+another is the exact state this flow prevents. Naming the active profile is
+allowed — it asks for the re-sync that was going to happen anyway. To change
+profiles, use ` + "`praxis profiles use X`" + ` — it switches and re-syncs in
+one step.
+
 For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(refreshSkillsJSON, false, out)
 
-		active, err := credentials.ResolveActive("")
+		// Installing profile X's skills while the pointer still names Y is the
+		// one state the post-auth flow exists to prevent, so refresh-skills
+		// only ever re-syncs the ACTIVE profile — by flag or by environment.
+		// Switching is a switch.
+		//
+		// Only a DIVERGING selection is a switch, though: compared against the
+		// applicable pointer (project when this tree is pinned, else global,
+		// matching the root this command installs into), so naming the profile
+		// it would re-sync anyway is the no-op it looks like.
+		acts, err := credentials.PointerActiveName()
+		if err != nil {
+			return err
+		}
+		if refusedExplicitProfile(out, asJSON, "refresh-skills",
+			"run `praxis profiles use %s` — it switches AND re-syncs the skills in one step",
+			acts) {
+			return nil
+		}
+
+		// ResolveActive(acts), not ResolveActive("") — act on the name the guard
+		// approved. With "" this re-read the full chain including the environment,
+		// so `-p default refresh-skills` under PRAXIS_PROFILE=acme passed the check
+		// and then installed acme's catalog into default's root: exactly the mixed
+		// state the comment above says this flow exists to prevent. Passing `acts`
+		// makes the guard and the action the same decision.
+		active, err := credentials.ResolveActive(acts)
 		if err != nil {
 			return err
 		}
@@ -166,7 +199,10 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 			defer restore()
 		}
 
-		state := runPostAuthSetup(out, asJSON, active.Profile.URL, active.Profile.Auth())
+		// Through the seam, like login and `profiles use` — calling
+		// runPostAuthSetup directly made this the one sync path tests could not
+		// intercept, so nothing pinned that refresh-skills syncs at all.
+		state := postAuthSetup(out, asJSON, active.Profile.URL, active.Profile.Auth())
 
 		// Report the *effective* scope (where files actually landed).
 		scope := "user"

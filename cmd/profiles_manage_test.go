@@ -109,6 +109,64 @@ func TestProfilesRm_ActiveIsRefused(t *testing.T) {
 	}
 }
 
+// $PRAXIS_PROFILE selects the deployment a session talks to; it must NOT
+// redefine which profile is undeletable. Resolving the guard through the env
+// override let `PRAXIS_PROFILE=other praxis profiles rm default` delete the
+// profile the persisted pointer and the installed org skills still refer to.
+func TestProfilesRm_EnvOverrideCannotUnprotectActive(t *testing.T) {
+	isolateHome(t)
+	resetProfilesManageFlags(t)
+	seedProfile(t, "default", "https://cp.test", "tok")
+	seedProfile(t, "other", "https://other.test", "tok2")
+	if err := credentials.SetActive("default"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(credentials.EnvProfile, "other")
+	exit := stubOsExit(t)
+
+	var buf bytes.Buffer
+	profilesRmCmd.SetOut(&buf)
+	profilesRmJSON = true
+	if err := profilesRmCmd.RunE(profilesRmCmd, []string{"default"}); err == nil {
+		t.Fatal("rm of the persisted active profile succeeded while PRAXIS_PROFILE named another")
+	}
+	if *exit != exitcode.Usage {
+		t.Errorf("osExit code = %d, want %d (Usage)", *exit, exitcode.Usage)
+	}
+	store, _ := credentials.Load()
+	if _, ok := store["default"]; !ok {
+		t.Error("persisted active profile was deleted; its pointer and skills are now orphaned")
+	}
+}
+
+// The other half: an override must not protect a profile either. `other` is
+// not the persisted active, so naming it in the environment doesn't make it
+// undeletable -- removing it can't desync pointer and skills.
+func TestProfilesRm_EnvOverrideDoesNotProtectNonActive(t *testing.T) {
+	isolateHome(t)
+	resetProfilesManageFlags(t)
+	seedProfile(t, "default", "https://cp.test", "tok")
+	seedProfile(t, "other", "https://other.test", "tok2")
+	if err := credentials.SetActive("default"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(credentials.EnvProfile, "other")
+
+	var buf bytes.Buffer
+	profilesRmCmd.SetOut(&buf)
+	profilesRmJSON = true
+	if err := profilesRmCmd.RunE(profilesRmCmd, []string{"other"}); err != nil {
+		t.Fatalf("rm of a non-active profile named by the env = %v, want success", err)
+	}
+	store, _ := credentials.Load()
+	if _, ok := store["other"]; ok {
+		t.Error("profile still present after removal")
+	}
+	if _, ok := store["default"]; !ok {
+		t.Error("removal touched the active profile")
+	}
+}
+
 func TestProfilesRm_MissingExitsUsage(t *testing.T) {
 	isolateHome(t)
 	resetProfilesManageFlags(t)

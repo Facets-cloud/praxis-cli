@@ -138,11 +138,40 @@ That's it. Open Claude Code (or Codex, or Gemini CLI) and try:
 
 ## Command surface
 
-The CLI ships **12 user-facing commands**. All AI-callable commands
-accept `--json` (auto-emit when stdout is non-TTY) with stable JSON
-schemas. `login` requires a human at a browser; it still emits a
-JSON envelope so your AI host can see what got installed.
-`completion` is shell-script output and has no JSON form.
+All AI-callable commands accept `--json` (auto-emit when stdout is
+non-TTY) with stable JSON schemas. `login` is the one command that
+requires a human at a browser; it still emits a JSON envelope so your
+AI host can see what got installed. `completion` is shell-script
+output and has no JSON form.
+
+One global flag and one environment variable apply everywhere:
+
+```text
+-p, --profile <name>
+   Use that credentials profile for THIS invocation only. Outranks
+   $PRAXIS_PROFILE and both pointers; writes nothing, so the next command
+   resolves normally and the installed skills stay untouched.
+   Works before or after the command name:
+     praxis -p acme duty list
+     praxis duty list -p acme
+   `logout` and `refresh-skills` refuse it (exit 2, nothing changed) when
+   it names a DIFFERENT profile than the active one — they act on
+   whichever profile is active. `profiles use` refuses one that
+   contradicts its argument. Naming the profile the command would act on
+   anyway is allowed: it's the no-op it looks like. For `login` it names
+   the profile to create or update.
+
+PRAXIS_PROFILE=<name>
+   Same thing, for every command in ONE shell or agent session. Lives in
+   the process environment, so it writes nothing and no other session can
+   see it — this is the concurrency-safe way to work in a profile.
+     export PRAXIS_PROFILE=acme
+     praxis duty list          # profile_source: env
+   `logout` and `refresh-skills` refuse this too when it diverges from the
+   active profile; a session already scoped to the profile they act on is
+   fine. `profiles use` still works and reports `shadowed_by_env`, since
+   your session keeps using the variable.
+```
 
 ```text
 praxis login [--profile X] [--url Y] [--token Z] [--local] [--raptor-profile R]
@@ -164,6 +193,15 @@ praxis login [--profile X] [--url Y] [--token Z] [--local] [--raptor-profile R]
 praxis profiles [--refresh] [--json]
    List every profile with URL, username, active marker, and login
    state (never prints tokens). --refresh live-verifies each token.
+
+praxis profiles use <profile> [--local] [--json]
+   Switch the active profile WITHOUT re-authenticating, and re-sync
+   its skills + MCP snapshot (the same post-auth flow as login), so
+   the pointer and the installed skills never disagree. Verifies the
+   stored token first: exits 3 (dead token — run `praxis login
+   --profile X`) or 5 (unreachable) having changed nothing.
+   --local pins the profile to the CURRENT directory tree instead of
+   switching globally. See "Local mode" below.
 
 praxis profiles rename OLD NEW [--json]
    Rename a credentials section in place, keeping URL/username/token/
@@ -230,16 +268,19 @@ praxis help               cobra help
 
 ### Core invariant
 
-> **Login is the canonical mutator of installed-skill state.**
-> The CLI's on-disk state always matches the active profile.
+> **Whatever moves the active-profile pointer also re-installs the
+> skills.** The CLI's on-disk state always matches the active profile.
 
-Profile switching is `praxis login --profile X` — login wipes the
-previous profile's org skills and installs X's. At the **user
-(global) level** there's never a mixed-profile state on disk.
-`refresh-skills` runs the same post-login flow without changing
-credentials.
+Only two commands move that pointer — `praxis login [--profile X]` and
+`praxis profiles use X` — and both wipe the previous profile's org
+skills and install X's in the same step. At the **user (global) level**
+there's never a mixed-profile state on disk. `refresh-skills` runs the
+same post-login flow without changing credentials or the pointer.
 
-The one deliberate exception is **local mode** (`praxis login --local`):
+This is why hand-editing `~/.praxis/config.json` is not "switching": it
+moves the pointer only, leaving the previous profile's skills installed.
+
+The one deliberate exception is **local mode** (the `--local` flag):
 each directory tree keeps its *own* profile and its own copy of that
 profile's skills, so different repos can run different profiles at the
 same time without clobbering each other. The invariant still holds
@@ -292,16 +333,84 @@ After login --profile bigcorp --url ...:
                           (acme's skills wiped — bigcorp's installed)
 ```
 
-`[acme]`'s saved URL and token are still there. To switch back:
+`[acme]`'s saved URL and token are still there.
+
+### Switching the active profile
 
 ```bash
-praxis login --profile acme
+praxis profiles              # who's available, who's active
+praxis profiles use acme     # switch back to acme
 ```
 
-No `--url` needed — acme's URL is already saved. The token is
-re-validated; if it's still fresh the browser doesn't open. The
-`praxis-acme-*` skills come back from the server, `praxis-bigcorp-*`
-get wiped.
+No `--url` and no browser: acme's URL is already saved and its stored
+token is re-validated against the deployment. The `praxis-acme-*` skills
+come back from the server, `praxis-bigcorp-*` get wiped, and the MCP
+snapshot is rewritten — the invariant above, in one command.
+
+For a **single** command against another deployment, don't switch at all
+— pass `-p`:
+
+```bash
+praxis -p bigcorp duty list     # read bigcorp, stay on acme
+praxis -p bigcorp status        # profile_source: flag
+```
+
+Switching moves the installed skills; `-p` doesn't. Use `-p` for a
+one-off or to compare two deployments, and `profiles use` when you
+actually want to work in that deployment.
+
+### Several sessions at once
+
+> **`profiles use` is machine-global.** It rewrites the active-profile
+> pointer *and* replaces the installed `praxis-*` skills, so it changes
+> every other shell and agent session on the machine — including skill
+> files a running session has already read.
+
+If you run more than one agent session, scope each one instead of
+switching:
+
+```bash
+# terminal 1 / session A
+export PRAXIS_PROFILE=acme
+
+# terminal 2 / session B
+export PRAXIS_PROFILE=bigcorp
+```
+
+Neither writes anything, neither can see the other's variable, and a
+`profiles use` in a third session moves neither of them. `praxis status`
+reports `profile_source: env` so a session can confirm its own scope.
+
+Run `profiles use` from a scoped session and it still switches the global
+default for everyone else, but reports what your session actually uses:
+
+```json
+{ "profile": "root", "shadowed_by_env": "PRAXIS_PROFILE=vymo",
+  "effective_profile": "vymo" }
+```
+
+**One limitation to be aware of:** `-p` and `PRAXIS_PROFILE` route your
+commands to the right deployment, but the `praxis-*` skill files on disk
+always belong to the globally-active profile — there is one user-level
+skills directory. Cross-profile work therefore gets the right gateway
+with the active profile's skill text. If you need another org's custom
+skills loaded, either switch (affecting other sessions) or give that repo
+its own copy with `profiles use <name> --local`.
+
+Because it needs no human at a browser, this is the switch your **AI
+host can run itself**. It refuses cleanly rather than half-switching:
+
+| Situation | Exit | State |
+| --- | --- | --- |
+| token expired / revoked | `3` | unchanged — run `praxis login --profile acme` |
+| deployment unreachable | `5` | unchanged — retry |
+| no such profile | `2` | unchanged |
+
+Switching to the profile that's already active is a valid re-sync,
+equivalent to `praxis refresh-skills`.
+
+`praxis login --profile acme` still works and does the same thing; it's
+the right call when the profile is new or its token needs replacing.
 
 ### Local mode — a profile per directory
 
@@ -318,15 +427,16 @@ shared in `~/.praxis/credentials` — local mode never duplicates secrets.
 
 ```bash
 cd ~/work/acme-repo
-praxis login --profile acme --local        # pins this tree to "acme"
+praxis profiles use acme --local        # pins this tree to "acme"
 
 cd ~/work/bigcorp-repo
-praxis login --profile bigcorp --local     # pins this tree to "bigcorp"
+praxis profiles use bigcorp --local     # pins this tree to "bigcorp"
 ```
 
-(If the profile's stored token is still valid, `--local` reuses it — no
-browser. Already logged in everywhere and just re-pinning? `praxis
-refresh-skills --project` does the same without re-auth.)
+(`praxis login --profile X --local` does the same for a profile that
+isn't authenticated yet, reusing a still-valid stored token when there
+is one. Re-pinning the *already-active* profile? `praxis refresh-skills
+--project` is the same thing without naming it.)
 
 Now each repo is permanently "logged in" as its own profile:
 
@@ -336,9 +446,11 @@ Now each repo is permanently "logged in" as its own profile:
 ~/  (everywhere else)  → the global profile (set by `praxis login`)
 ```
 
-`praxis login --profile <name> --local`:
+`praxis profiles use <name> --local` (and `praxis login --profile <name>
+--local`):
 
-1. Saves the profile's credentials globally (as any login does), then
+1. Keeps the profile's credentials global (login saves them there
+   first), then
    writes a project pointer at `<repo>/.praxis/config.json` (creating
    `<repo>/.praxis/` if needed; an existing root at or above the cwd is
    reused) — WITHOUT touching the global active-profile pointer.
@@ -350,11 +462,17 @@ Now each repo is permanently "logged in" as its own profile:
 Active-profile resolution walks this chain (first match wins):
 
 ```text
-1. --profile flag on the command
-2. <cwd>/.praxis/config.json   ← project pointer (walks up to your home dir)
-3. ~/.praxis/config.json       ← global pointer (set by `praxis login --profile`)
-4. "default"
+1. -p/--profile flag           ← global flag, this invocation only
+2. $PRAXIS_PROFILE             ← this shell / agent session only
+3. <cwd>/.praxis/config.json   ← project pointer (walks up to your home dir)
+4. ~/.praxis/config.json       ← global pointer (`praxis login` / `profiles use`)
+5. "default"
 ```
+
+The first two write nothing, so they're safe with concurrent sessions.
+A typo'd `-p`/`$PRAXIS_PROFILE` fails with exit 3 rather than falling
+back — silently routing an explicit choice to another org would be worse
+than stopping.
 
 Local mode only activates when **you actually have the pinned profile**.
 A `.praxis/` that's empty, or whose pointer names a profile not in your
@@ -369,14 +487,21 @@ project` in JSON).
 
 A few things to know:
 
-- **`login` (global) and `logout` are always global.** Run from inside a
-  project tree, plain `praxis login` and `praxis logout` operate on
-  shared credentials at the user level — never scoped to the repo. Use
-  `login --local` / `refresh-skills --project` to manage local mode; to
-  fully detach a repo, delete its marker: `rm -rf .praxis`.
+- **`login` (global), `logout`, and `profiles use` (without `--local`)
+  are always global.** Run from inside a project tree they operate on
+  shared credentials and user-level skills — never scoped to the repo,
+  so a global switch can't overwrite a repo pinned to another profile.
+  `profiles use` says so when that happens: its output carries
+  `shadowed_by_project_root` and `effective_profile`, because the repo's
+  pointer still wins for commands run there. Use `profiles use --local`
+  / `login --local` / `refresh-skills --project` to manage local mode;
+  to fully detach a repo, delete its marker: `rm -rf .praxis`.
 - **Discovery is bounded to your home directory.** A repo must live
-  under `$HOME` for auto-discovery to find its `.praxis/`; `login --local`
-  refuses to pin a directory outside it.
+  under `$HOME` for auto-discovery to find its `.praxis/`; `--local`
+  refuses to pin a directory outside it (exit 2, nothing changed).
+  Symlinks are resolved before that check, so a logical home works:
+  `$HOME=/tmp/x` on macOS (where `/tmp` links to `/private/tmp`) does
+  contain `/private/tmp/x/repo`.
 - Add `/.praxis/` to the repo's `.gitignore` — it holds a per-developer
   snapshot, not source. (If it does get committed, the inert-by-default
   behavior above keeps it harmless for teammates.)
@@ -403,8 +528,8 @@ Credentials-only: the section keeps its URL, username, token, and
 raptor pairing; the global active-profile pointer follows if it named
 the old profile. No browser round-trip, no second API key, no skill
 churn. (Directory trees pinned via `--local` reference profiles by
-name — re-pin those with `praxis login --profile <new> --local`;
-until then they harmlessly fall back to the global profile.)
+name — re-pin those with `praxis profiles use <new> --local`; until
+then they harmlessly fall back to the global profile.)
 
 ### Removing a profile
 
@@ -419,7 +544,9 @@ skills, and manifest snapshot (it refuses nothing — it's the right
 tool for the active profile precisely because it cleans up skills):
 
 ```bash
-praxis logout                  # remove the active profile fully
+praxis profiles use acme       # make acme active
+praxis logout                  # remove acme fully
+# default and bigcorp are untouched.
 ```
 
 To wipe every profile and every host:
