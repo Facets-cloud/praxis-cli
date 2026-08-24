@@ -68,7 +68,13 @@ cmd/                  cobra command tree (only commands that DO something
   completion.go       `praxis completion {bash|zsh|fish|powershell}`
   logout.go           `praxis logout` (deletes ~/.praxis/credentials)
   duty.go             `praxis duty *` (Agent Schedule runs/findings/reports)
+  chat.go             `praxis chat` — experimental in-process agent TUI
+  run.go              `praxis run` — experimental headless one-shot
+  agent.go            `praxis agent *` — experimental agent-runtime
+                       management (plugin/mcp/slack/sessions/skills/
+                       acp/sdk), forwarded verbatim to the runtime
 internal/             pure logic, unit-tested
+  agent/              the ONLY import boundary to praxis-harness
   paths/              Praxis filesystem locations. Two roots: the HOME root
                        (~/.praxis, always holds credentials + global pointer)
                        and a discovered PROJECT root (<repo>/.praxis) that
@@ -96,6 +102,48 @@ fetched from the server, name-prefixed (`praxis-*`), and have the
 in-process MCP reference (`run_cloud_cli(...)`) is rewritten to a
 `praxis mcp <mcp> <fn> --arg …` shell-out — see
 `internal/skillcatalog` and `internal/render/preamble.go`.
+
+## The embedded coding agent (praxis-harness)
+
+`praxis chat` / `praxis run` / `praxis agent *` run the praxis-harness
+coding agent **in-process**, as a Go module dependency pinned in
+`go.mod`. `internal/agent` is the only package that imports it; cobra
+commands never reach the harness directly. Invariants to preserve:
+
+- **Everything is gated.** `agent.CheckEnabled()` guards every entry
+  point (`PRAXIS_EXPERIMENTAL=1` or `--experimental`). Return the gate
+  error, never print it as well — `cmd.Execute()` renders it once.
+- **Passthrough over modelling.** Each option struct ends in
+  `ExtraArgs`, appended LAST so it overrides modelled flags, and the
+  `agent` subcommands forward argv verbatim (`DisableFlagParsing`).
+  A new harness flag must be usable with no praxis-cli release; only
+  add a cobra flag when discoverability earns it.
+- **Never trust `cmd.ArgsLenAtDash()`** for passthrough. pflag records
+  it on the shared flag set and does not reset it between parses, so a
+  second invocation in one process reads the first one's dashes. Use
+  `agentPassthroughArgs`, which judges `args` directly.
+- **The sandbox-child dialect bypasses cobra.** The harness re-execs
+  this binary with bare native flags for its process sandbox;
+  `main()` routes any argv containing `-sandbox-child` straight to
+  `agent.RunNative`. `praxis run --sandbox process` also defaults
+  `-sandbox-exec` to this binary, because the harness only ever looks
+  for a sibling/PATH `prx` or `praxis-native`.
+- **praxis-cli owns updates.** `internal/agent` sets the harness's
+  self-update disable env var (unless the operator set it), so the
+  harness never advertises its own releases from inside praxis.
+- **`praxis agent` (runtime) vs `praxis agents` (installed agent
+  files)** are different commands one letter apart. Keep the
+  disambiguation in both help texts; a test asserts it.
+- **Version reporting** reads the harness release from the embedded
+  module graph (`debug.ReadBuildInfo().Deps`), not a linker stamp. It
+  reads "unknown" in test binaries only, because Go records no
+  dependency modules for them.
+
+Bumping the harness: `go get github.com/Facets-cloud/praxis-harness@vX.Y.Z
+&& go mod tidy`, then re-check the modelled flag names against the
+release by running the built binary with the full flag set and a
+deliberately missing `--prompt-file` — a renamed flag surfaces as
+"flag provided but not defined" instead of the file error.
 
 ## Local mode (per-directory profiles)
 

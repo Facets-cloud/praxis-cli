@@ -7,7 +7,6 @@ import (
 	"syscall"
 
 	"github.com/Facets-cloud/praxis-cli/internal/agent"
-	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
 )
 
@@ -30,6 +29,9 @@ var (
 	chatFallback     string
 	chatPrompt       string
 	chatMaxTurns     int
+	chatExtensions   []string
+	chatGoProviders  []string
+	chatAddDirs      []string
 )
 
 var chatCmd = &cobra.Command{
@@ -50,15 +52,22 @@ inside the TUI to authenticate with an AI provider (Anthropic, OpenAI, etc.).
 Start views: 'praxis chat' opens a single session; 'praxis chat --agents' opens
 the session dashboard, which lists persisted sessions grouped by state and
 creates or resumes them from its composer. (Note 'praxis agents' is unrelated:
-it lists the agent files praxis installed into your AI hosts.)`,
+it lists the agent files praxis installed into your AI hosts.)
+
+Anything after -- is passed to the agent runtime verbatim, so runtime flags this
+CLI does not model stay reachable:
+
+  praxis chat --experimental -- -no-lsp`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	Args:          agentPassthroughArgs("praxis chat", "pass the opening prompt with --prompt"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if chatExperimental {
 			agent.Enable()
 		}
+		// Returned, not printed here: Execute() renders it once. Printing and
+		// returning would show the same gate message to the user twice.
 		if err := agent.CheckEnabled(); err != nil {
-			render.PrintError(os.Stderr, false, err.Error(), "", 1)
 			return err
 		}
 
@@ -83,7 +92,11 @@ it lists the agent files praxis installed into your AI hosts.)`,
 			FallbackModels: chatFallback,
 			Prompt:         chatPrompt,
 			MaxTurns:       chatMaxTurns,
+			Extensions:     chatExtensions,
+			GoProviders:    chatGoProviders,
+			AddDirs:        chatAddDirs,
 		}
+		opts.ExtraArgs = args
 
 		return agent.RunChat(ctx, opts)
 	},
@@ -108,6 +121,11 @@ func init() {
 	chatCmd.Flags().StringVar(&chatFallback, "fallback-models", "", "comma-separated fallback model IDs")
 	chatCmd.Flags().StringVar(&chatPrompt, "prompt", "", "initial prompt to send after startup")
 	chatCmd.Flags().IntVar(&chatMaxTurns, "max-turns", 0, "max turns per prompt (0 = default)")
+	// Repeatable, not comma-separated: a directory name may contain a comma, and
+	// splitting on it would hand the agent two roots that exist nowhere.
+	chatCmd.Flags().StringArrayVar(&chatExtensions, "extension", nil, "extension directory to load, repeatable")
+	chatCmd.Flags().StringArrayVar(&chatGoProviders, "go-provider", nil, "Go provider plugin to load, repeatable")
+	chatCmd.Flags().StringArrayVar(&chatAddDirs, "add-dir", nil, "additional writable directory, repeatable")
 
 	// The dashboard owns session identity: it picks the row to open and clears the
 	// startup prompt and resume path (harness tui.loadDashboardApplication). Refuse
