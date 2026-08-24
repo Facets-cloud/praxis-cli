@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/Facets-cloud/praxis-cli/internal/agent"
 )
 
 // TestVersionCmd_JSON_PrintsAllFields verifies the JSON branch contains
@@ -24,7 +26,7 @@ func TestVersionCmd_JSON_PrintsAllFields(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
 		t.Fatalf("output is not JSON: %v\noutput: %s", err, buf.String())
 	}
-	for _, key := range []string{"version", "commit", "built", "go", "os", "arch"} {
+	for _, key := range []string{"version", "commit", "built", "go", "os", "arch", "agent"} {
 		if _, ok := got[key]; !ok {
 			t.Errorf("JSON missing key %q\nfull output:\n%s", key, buf.String())
 		}
@@ -37,6 +39,13 @@ func TestVersionCmd_JSON_PrintsAllFields(t *testing.T) {
 	}
 	if got["arch"] != runtime.GOARCH {
 		t.Errorf("arch = %v, want %s", got["arch"], runtime.GOARCH)
+	}
+	// The embedded agent runtime ships on its own release cadence, so a bug filed
+	// against `praxis chat` is unactionable without its version. (In this test
+	// binary the value is "unknown": Go records no dependency modules for test
+	// binaries — see agent.TestHarnessVersionFrom for the shipped-binary cases.)
+	if got, want := got["agent"], agent.HarnessVersion(); got != want {
+		t.Errorf("agent = %v, want %s", got, want)
 	}
 	// Sanity-check the human path renders the same data — invoke via an
 	// outer cobra Execute() so the parent IsTTY logic doesn't kick in;

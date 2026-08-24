@@ -18,8 +18,16 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.24"
+          go-version: "1.25"
           cache: true
+
+      - name: Configure private module access
+        env:
+          CI_GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${CI_GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+          go env -w GOPRIVATE="github.com/Facets-cloud/*"
+          go env -w GONOSUMDB="github.com/Facets-cloud/*"
 
       - name: Verify HOMEBREW_TAP_TOKEN propagates + can write to homebrew-tap
         env:

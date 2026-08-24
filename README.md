@@ -142,7 +142,9 @@ All AI-callable commands accept `--json` (auto-emit when stdout is
 non-TTY) with stable JSON schemas. `login` is the one command that
 requires a human at a browser; it still emits a JSON envelope so your
 AI host can see what got installed. `completion` is shell-script
-output and has no JSON form.
+output and has no JSON form. Three further commands — `chat`, `run`
+and `agent` — drive the experimental in-process coding agent and stay
+off until you opt in.
 
 One global flag and one environment variable apply everywhere:
 
@@ -264,6 +266,52 @@ praxis update [--yes] [--json]
 praxis version [--json]   build metadata
 praxis completion <shell> shell completion script (bash/zsh/fish/ps)
 praxis help               cobra help
+```
+
+### Experimental — the local coding agent
+
+These run the Praxis coding agent **in-process** (no second binary) and
+are disabled unless you pass `--experimental` or set
+`PRAXIS_EXPERIMENTAL=1`. Provider credentials live in
+`~/.praxis/agent/auth.json` — separate from the control-plane
+credentials in `~/.praxis/credentials`; use `/login` inside the TUI.
+`praxis version` reports the embedded agent release.
+
+The two profile notions stay separate for the same reason: `-p/--profile`
+is the credentials profile, as everywhere else in this CLI, while
+`--agent-profile` isolates the agent runtime's own state.
+
+```text
+praxis chat [--agents] [flags] [-- <agent flags>]
+   Interactive terminal agent: multi-turn conversation, tools, MCP,
+   session persistence. --agents starts on the session dashboard
+   instead of a single session.
+
+praxis run --prompt "..." [flags] [-- <agent flags>]
+   One-shot headless run for scripting and CI. Emits JSON whenever
+   stdout is not a TTY (--json=false for prose in a pipe).
+   Output:      --json/--result-json, --usage-json, --output-schema
+   Containment: --sandbox, --add-dir, --permission-rule, --safe-mode
+   Budgets:     --max-turns, --max-token-budget, --max-time
+
+praxis agent <subcommand>
+   Manage the local agent runtime. (Distinct from `praxis agents`,
+   which lists installed agent FILES and is not experimental.)
+     plugin     plugin marketplaces and installed plugins
+     mcp        the agent's own MCP servers (add/list/import/login)
+     slack      Slack persona setup / status / disconnect
+     sessions   persisted sessions as a table; prune empty ones
+     skills     skill usage report; flags idle skills, changes nothing
+     acp        serve over the Agent Client Protocol (stdio)
+     sdk        serve over the JSONL SDK protocol (stdio)
+```
+
+Arguments after an `agent` subcommand — and anything after `--` on
+`chat` / `run` — reach the agent runtime verbatim, so a runtime flag
+newer than your praxis build is still usable:
+
+```bash
+praxis run --experimental --prompt "audit deps" -- -reflex-capture true
 ```
 
 ### Core invariant

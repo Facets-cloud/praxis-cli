@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime"
 
+	"github.com/Facets-cloud/praxis-cli/internal/agent"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
 )
@@ -31,6 +32,7 @@ var versionCmd = &cobra.Command{
 				"go":      runtime.Version(),
 				"os":      runtime.GOOS,
 				"arch":    runtime.GOARCH,
+				"agent":   agent.HarnessVersion(),
 			})
 		}
 		fmt.Fprintf(out, "praxis version %s\n", version)
@@ -38,6 +40,9 @@ var versionCmd = &cobra.Command{
 		fmt.Fprintf(out, "  built:   %s\n", date)
 		fmt.Fprintf(out, "  go:      %s\n", runtime.Version())
 		fmt.Fprintf(out, "  os/arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		// The embedded agent runtime ships on its own release cadence, so a bug
+		// report against "praxis chat" needs this line to be actionable.
+		fmt.Fprintf(out, "  agent:   praxis-harness %s\n", agent.HarnessVersion())
 		return nil
 	},
 }
