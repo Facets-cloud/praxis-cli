@@ -37,10 +37,11 @@ func resetRunFlagState() {
 	runOpts = agent.HeadlessArgs{}
 	runExperimental = false
 	runJSON = false
+	resetGlobalProfileFlag()
 	for _, name := range []string{
 		"experimental", "prompt", "prompt-file", "model", "thinking", "cwd",
 		"max-turns", "sandbox", "sandbox-exec", "add-dir", "permission-rule",
-		"result-json", "json", "usage-json", "help",
+		"result-json", "json", "usage-json", "agent-profile", "help",
 	} {
 		if flag := runCmd.Flags().Lookup(name); flag != nil {
 			_ = flag.Value.Set(flag.DefValue)
@@ -207,6 +208,31 @@ func TestRunCmd_JSONWhenStdoutIsNotATTY(t *testing.T) {
 	}
 	if i := argIndex(*gotNative, "-result-json"); i >= 0 {
 		t.Fatalf("--usage-json was upgraded to -result-json: %v", *gotNative)
+	}
+}
+
+// Same collision as TestChatCmd_GlobalCredentialsProfileFlagStillParses: -p is
+// the credentials profile for every praxis command, and the agent's own settings
+// profile has to be spelled --agent-profile so it does not take that name away
+// from this one. The credentials profile is the CLI's business and must not leak
+// into the runtime argv; the agent profile must.
+func TestRunCmd_ProfileFlagsAreDistinct(t *testing.T) {
+	t.Setenv("PRAXIS_EXPERIMENTAL", "1")
+
+	gotNative, _, _ := captureRuntime(t)
+	if _, err := execRun(t, "-p", "acme", "--prompt", "hi"); err != nil {
+		t.Fatalf("praxis run -p acme err = %v, want the global credentials flag to parse", err)
+	}
+	if i := argIndex(*gotNative, "-profile"); i >= 0 {
+		t.Fatalf("credentials profile leaked into the agent argv: %v", *gotNative)
+	}
+
+	gotNative, _, _ = captureRuntime(t)
+	if _, err := execRun(t, "--agent-profile", "smoke", "--prompt", "hi"); err != nil {
+		t.Fatalf("praxis run --agent-profile err = %v", err)
+	}
+	if i := argIndex(*gotNative, "-profile"); i < 0 || (*gotNative)[i+1] != "smoke" {
+		t.Fatalf("--agent-profile did not reach the runtime as -profile: %v", *gotNative)
 	}
 }
 

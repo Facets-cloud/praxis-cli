@@ -48,6 +48,20 @@ func captureRuntime(t *testing.T) (native *[]string, skills *[]string, calls *in
 	return &gotNative, &gotSkills, &n
 }
 
+// resetGlobalProfileFlag clears the root command's persistent -p/--profile and
+// the package-level var behind it. The agent commands accept that flag like every
+// other command, so a case that passes -p would otherwise leave the whole package
+// pinned to that credentials profile — which reroutes later tests' profile
+// resolution and, in the guards that refuse a diverging profile, ends the test
+// process outright.
+func resetGlobalProfileFlag() {
+	rootProfile = ""
+	if flag := rootCmd.PersistentFlags().Lookup("profile"); flag != nil {
+		_ = flag.Value.Set(flag.DefValue)
+		flag.Changed = false
+	}
+}
+
 func equalArgs(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

@@ -109,7 +109,9 @@ func init() {
 	f.StringVar(&runOpts.SessionDir, "session-dir", "", "directory holding persisted sessions")
 	f.StringVar(&runOpts.ForkFrom, "fork-from", "", "fork a source session into --session")
 	f.StringVar(&runOpts.Cwd, "cwd", ".", "working directory")
-	f.StringVar(&runOpts.Profile, "profile", "", "named profile from settings to apply")
+	// NOT --profile: see cmd/chat.go. -p/--profile is the CLI-wide credentials
+	// profile and a local flag of that name would take it away from this command.
+	f.StringVar(&runOpts.Profile, "agent-profile", "", "named agent settings profile to apply (agent runtime, not the credentials profile)")
 	f.StringVar(&runOpts.CacheKey, "cache-key", "", "prompt-cache partition key")
 
 	// Output. --json is the CLI-wide convention (auto-selected when stdout is not

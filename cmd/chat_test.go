@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/Facets-cloud/praxis-cli/internal/agent"
 )
 
 // execChat drives the command the way a user does: through the ROOT command.
@@ -38,6 +41,7 @@ func execChat(t *testing.T, args ...string) (string, error) {
 // it ever validates, which ExecuteC turns into a nil error that looks like success.
 func resetChatFlagState() {
 	chatAgents, chatPrompt, chatResume, chatSessionID = false, "", "", ""
+	resetGlobalProfileFlag()
 	for _, name := range []string{"agents", "prompt", "resume", "session-id", "help"} {
 		if flag := chatCmd.Flags().Lookup(name); flag != nil {
 			_ = flag.Value.Set(flag.DefValue)
@@ -84,6 +88,22 @@ func TestChatCmd_AgentsRejectsSingleSessionIdentityFlags(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "--agents cannot be combined with") {
 			t.Fatalf("chat %v err = %v, want a conflicting-flag error", conflicting, err)
+		}
+	}
+}
+
+// -p/--profile is the CLI-wide credentials profile, declared persistent on the
+// root command. A local flag of the same name on a subcommand REPLACES the
+// inherited one, shorthand and all, so naming the agent's own state profile
+// --profile made `praxis chat -p acme` die with "unknown shorthand flag: 'p'"
+// while every other command accepted it. Reaching the experimental gate proves
+// the flag parsed.
+func TestChatCmd_GlobalCredentialsProfileFlagStillParses(t *testing.T) {
+	t.Setenv("PRAXIS_EXPERIMENTAL", "")
+	for _, args := range [][]string{{"-p", "acme"}, {"--profile", "acme"}} {
+		_, err := execChat(t, args...)
+		if !errors.Is(err, agent.ErrExperimentalDisabled) {
+			t.Fatalf("chat %v err = %v, want the experimental gate error (i.e. the flag parsed)", args, err)
 		}
 	}
 }

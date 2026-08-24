@@ -134,6 +134,14 @@ commands never reach the harness directly. Invariants to preserve:
 - **`praxis agent` (runtime) vs `praxis agents` (installed agent
   files)** are different commands one letter apart. Keep the
   disambiguation in both help texts; a test asserts it.
+- **Never name a local flag after a root persistent flag.** A local
+  flag REPLACES the inherited one, shorthand included: `--profile` on
+  the agent commands took `-p/--profile` (the credentials profile)
+  away from them, so `praxis chat -p acme` died with "unknown
+  shorthand flag". The agent's own profile is `--agent-profile`, and a
+  test in each command asserts `-p` still parses. Tests that pass `-p`
+  must reset `rootProfile` (`resetGlobalProfileFlag`) or later tests
+  in the package inherit that credentials profile.
 - **Version reporting** reads the harness release from the embedded
   module graph (`debug.ReadBuildInfo().Deps`), not a linker stamp. It
   reads "unknown" in test binaries only, because Go records no

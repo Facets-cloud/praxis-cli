@@ -277,6 +277,10 @@ are disabled unless you pass `--experimental` or set
 credentials in `~/.praxis/credentials`; use `/login` inside the TUI.
 `praxis version` reports the embedded agent release.
 
+The two profile notions stay separate for the same reason: `-p/--profile`
+is the credentials profile, as everywhere else in this CLI, while
+`--agent-profile` isolates the agent runtime's own state.
+
 ```text
 praxis chat [--agents] [flags] [-- <agent flags>]
    Interactive terminal agent: multi-turn conversation, tools, MCP,

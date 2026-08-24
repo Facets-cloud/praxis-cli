@@ -146,7 +146,12 @@ func init() {
 	chatCmd.Flags().BoolVar(&chatEphemeral, "ephemeral", false, "do not persist the session (no resume)")
 	chatCmd.Flags().StringVar(&chatMcpConfig, "mcp-config", "", "explicit MCP config path")
 	chatCmd.Flags().StringVar(&chatSettings, "settings", "", "explicit settings.json for hooks")
-	chatCmd.Flags().StringVar(&chatProfile, "profile", "", "isolated Praxis profile")
+	// NOT --profile: that name belongs to the CLI-wide credentials profile
+	// (rootCmd's persistent -p/--profile). A local flag of the same name replaces
+	// the inherited one outright — shorthand included — so `praxis chat -p acme`
+	// would die with "unknown shorthand flag". This one isolates the AGENT's own
+	// state directory, a different thing entirely.
+	chatCmd.Flags().StringVar(&chatProfile, "agent-profile", "", "isolated agent state profile (agent runtime, not the credentials profile)")
 	chatCmd.Flags().StringVar(&chatFallback, "fallback-models", "", "comma-separated fallback model IDs")
 	chatCmd.Flags().StringVar(&chatPrompt, "prompt", "", "initial prompt to send after startup")
 	chatCmd.Flags().IntVar(&chatMaxTurns, "max-turns", 0, "max turns per prompt (0 = default)")
