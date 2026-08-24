@@ -26,14 +26,24 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 	store, _ := credentials.Load()
 	prof, exists := store[profileName]
 
-	// The profile whose org skills are on disk right now. Mirror login's
-	// scope semantics: a global login resolves globally (a project pointer
-	// can't redirect it); --local resolves against the full chain.
-	var active credentials.Active
+	// The profile whose org skills are on disk right now — which is a question
+	// about POINTERS, not about this invocation. $PRAXIS_PROFILE changes where
+	// commands route; it does not change which catalog was installed, so
+	// resolving through it made the report claim "no profile switch" for a login
+	// that was about to move the pointer and wipe the previous profile's skills.
+	//
+	// Scope still mirrors login's: a global login owns the home root, so only the
+	// persisted global pointer can have put skills there; --local installs into
+	// the project root, whose pointer wins when the tree is pinned.
+	var activeName string
 	if local {
-		active, _ = credentials.ResolveActive("")
+		pinned, perr := credentials.PointerActiveName()
+		if perr != nil {
+			return perr
+		}
+		activeName = pinned
 	} else {
-		active, _ = credentials.ResolveActiveGlobal()
+		activeName = credentials.PersistedActiveName()
 	}
 
 	var probeAuth map[string]string
@@ -99,9 +109,9 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 	}
 
 	skillsEffect := fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)
-	if active.Name != profileName {
+	if activeName != profileName {
 		skillsEffect = fmt.Sprintf("active profile switches %q → %q; %q's praxis-* org skills are wiped and %q's catalog installed",
-			active.Name, profileName, active.Name, profileName)
+			activeName, profileName, activeName, profileName)
 	}
 
 	if asJSON {
@@ -112,7 +122,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 			"profile_exists": exists,
 			"url":            baseURL,
 			"scope":          scopeLabel(local),
-			"active_profile": active.Name,
+			"active_profile": activeName,
 			"reachable":      reachable,
 			"token_status":   tokenStatus,
 			"action":         action,
