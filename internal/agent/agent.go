@@ -191,25 +191,45 @@ func RunSkillsReport(ctx context.Context, args []string, stdout, stderr *os.File
 	return harnessskills.Run(ctx, args, harnessskills.DefaultLoader, stdout, stderr)
 }
 
-// NativeDialectArgs reports whether argv is a bare native-runner invocation —
-// the dialect the harness uses when it re-execs this binary as a process-sandbox
-// child (`<self> -provider … -sandbox-child -result-json`) — and returns the
+// NativeDialectArgs reports whether argv is the harness's process-sandbox child
+// invocation — `<self> -provider … -sandbox-child -result-json` — and returns the
 // arguments to hand to RunNative.
 //
 // It exists because the harness resolves that child by looking for a sibling or
-// PATH binary named prx / praxis-native and, finding neither, falls back to
-// re-execing with bare flags. Cobra would reject those outright ("unknown
-// shorthand flag"), so process isolation would fail with a parse error instead
-// of running. The gate is deliberately narrow: only -sandbox-child, the flag no
-// human passes and every sandbox child carries, selects this path.
+// PATH binary named prx / praxis-native and, finding neither next to a binary
+// called praxis, falls back to re-execing with bare native flags. Cobra rejects
+// those outright ("unknown shorthand flag"), so process isolation would fail with
+// a parse error instead of running.
+//
+// Both markers are required, because both are structural to that call site: the
+// child registers only the sandbox tool set (-sandbox-child) and the parent
+// parses its single JSON object back (-result-json) — see the harness's
+// praxis/native_process_sandbox.go childArgs. Matching the shape rather than one
+// flag keeps an ordinary mistyped invocation on the cobra path, where it gets a
+// real error message.
+//
+// The experimental gate deliberately does not apply here, and cannot: the
+// harness builds the child's environment from scratch — PATH, LANG and the
+// provider key only (sandboxChildEnvironment) — so PRAXIS_EXPERIMENTAL cannot
+// reach the child even though the parent that spawned it had already passed the
+// gate. The gate is a feature switch, not a privilege boundary: this path grants
+// nothing that PRAXIS_EXPERIMENTAL=1 would not, and the child still needs a
+// provider credential in that scrubbed environment to do any work.
 func NativeDialectArgs(argv []string) ([]string, bool) {
-	if len(argv) < 2 {
+	if len(argv) < 3 {
 		return nil, false
 	}
+	var sandboxChild, resultJSON bool
 	for _, arg := range argv[1:] {
-		if arg == "-sandbox-child" || arg == "--sandbox-child" {
-			return argv[1:], true
+		switch arg {
+		case "-sandbox-child", "--sandbox-child":
+			sandboxChild = true
+		case "-result-json", "--result-json":
+			resultJSON = true
 		}
+	}
+	if sandboxChild && resultJSON {
+		return argv[1:], true
 	}
 	return nil, false
 }

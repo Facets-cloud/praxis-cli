@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"github.com/Facets-cloud/praxis-cli/internal/agent"
+	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
 )
 
@@ -16,6 +17,7 @@ import (
 var (
 	runOpts         agent.HeadlessArgs
 	runExperimental bool
+	runJSON         bool
 )
 
 var runCmd = &cobra.Command{
@@ -30,6 +32,10 @@ PRAXIS_EXPERIMENTAL=1.
 
 The prompt can be provided via --prompt, --prompt-file, or piped through stdin
 with --prompt -.
+
+Output is JSON whenever stdout is not a TTY, so an AI host or CI job that pipes
+this command always gets a parseable payload; pass --json=false for prose in a
+pipe, or --json to force JSON on a terminal.
 
 Anything after -- is passed to the agent runtime verbatim, so harness flags that
 this CLI does not model are still reachable without waiting for a praxis release:
@@ -59,6 +65,17 @@ Examples:
 
 		opts := runOpts
 		opts.ExtraArgs = args
+		// An AI host spawns praxis with stdout piped and no flags, and the repo
+		// contract is that such a caller gets parseable output. -result-json is the
+		// runtime's parseable mode, and it also silences the streaming event feed
+		// (harness: quiet := resultJSON || usageJSON), so the caller receives one
+		// JSON object rather than prose followed by JSON. --json=false opts out;
+		// --usage-json is left alone because it is already a parseable payload.
+		if jsonFlag := cmd.Flags().Lookup("json"); jsonFlag != nil && jsonFlag.Changed {
+			opts.ResultJSON = opts.ResultJSON || runJSON
+		} else if !opts.UsageJSON && !render.IsTTY(os.Stdout) {
+			opts.ResultJSON = true
+		}
 		// The process sandbox re-execs a child that speaks the harness's native
 		// flag dialect. The harness looks for a sibling or PATH prx /
 		// praxis-native and finds neither next to a binary called praxis, so
@@ -95,7 +112,9 @@ func init() {
 	f.StringVar(&runOpts.Profile, "profile", "", "named profile from settings to apply")
 	f.StringVar(&runOpts.CacheKey, "cache-key", "", "prompt-cache partition key")
 
-	// Output.
+	// Output. --json is the CLI-wide convention (auto-selected when stdout is not
+	// a TTY); --result-json is the runtime's own name for the same payload.
+	f.BoolVar(&runJSON, "json", false, "emit the final result as JSON (default when stdout is not a TTY)")
 	f.BoolVar(&runOpts.ResultJSON, "result-json", false, "emit final result as JSON")
 	f.BoolVar(&runOpts.UsageJSON, "usage-json", false, "emit cumulative usage as JSON")
 	f.StringVar(&runOpts.OutputSchema, "output-schema", "", "JSON schema file the final answer must satisfy")

@@ -36,10 +36,11 @@ func execRun(t *testing.T, args ...string) (string, error) {
 func resetRunFlagState() {
 	runOpts = agent.HeadlessArgs{}
 	runExperimental = false
+	runJSON = false
 	for _, name := range []string{
 		"experimental", "prompt", "prompt-file", "model", "thinking", "cwd",
 		"max-turns", "sandbox", "sandbox-exec", "add-dir", "permission-rule",
-		"result-json", "help",
+		"result-json", "json", "usage-json", "help",
 	} {
 		if flag := runCmd.Flags().Lookup(name); flag != nil {
 			_ = flag.Value.Set(flag.DefValue)
@@ -161,6 +162,51 @@ func TestRunCmd_GatedWithoutExperimental(t *testing.T) {
 	}
 	if *calls != 0 {
 		t.Fatalf("runtime called %d times, want 0 when gated", *calls)
+	}
+}
+
+// An AI host spawns praxis with stdout piped and no flags at all; the CLI-wide
+// contract is that such a caller gets parseable output. Test stdout is never a
+// TTY, so the default path here is exactly the piped case.
+func TestRunCmd_JSONWhenStdoutIsNotATTY(t *testing.T) {
+	t.Setenv("PRAXIS_EXPERIMENTAL", "1")
+
+	gotNative, _, _ := captureRuntime(t)
+	if _, err := execRun(t, "--prompt", "hi"); err != nil {
+		t.Fatalf("praxis run err = %v", err)
+	}
+	if argIndex(*gotNative, "-result-json") < 0 {
+		t.Fatalf("piped stdout did not select JSON output: %v", *gotNative)
+	}
+
+	// --json=false is the opt-out for a human piping to a pager or a file.
+	gotNative, _, _ = captureRuntime(t)
+	if _, err := execRun(t, "--prompt", "hi", "--json=false"); err != nil {
+		t.Fatalf("praxis run --json=false err = %v", err)
+	}
+	if i := argIndex(*gotNative, "-result-json"); i >= 0 {
+		t.Fatalf("--json=false still emitted JSON: %v", *gotNative)
+	}
+
+	// --json forces it, and --result-json (the runtime's own name) still works.
+	for _, flag := range []string{"--json", "--result-json"} {
+		gotNative, _, _ = captureRuntime(t)
+		if _, err := execRun(t, "--prompt", "hi", flag); err != nil {
+			t.Fatalf("praxis run %s err = %v", flag, err)
+		}
+		if argIndex(*gotNative, "-result-json") < 0 {
+			t.Fatalf("%s did not emit -result-json: %v", flag, *gotNative)
+		}
+	}
+
+	// --usage-json is already a parseable payload; do not also switch on the
+	// result payload and change what the caller asked for.
+	gotNative, _, _ = captureRuntime(t)
+	if _, err := execRun(t, "--prompt", "hi", "--usage-json"); err != nil {
+		t.Fatalf("praxis run --usage-json err = %v", err)
+	}
+	if i := argIndex(*gotNative, "-result-json"); i >= 0 {
+		t.Fatalf("--usage-json was upgraded to -result-json: %v", *gotNative)
 	}
 }
 

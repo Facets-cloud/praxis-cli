@@ -284,8 +284,9 @@ praxis chat [--agents] [flags] [-- <agent flags>]
    instead of a single session.
 
 praxis run --prompt "..." [flags] [-- <agent flags>]
-   One-shot headless run for scripting and CI.
-   Output:      --result-json, --usage-json, --output-schema
+   One-shot headless run for scripting and CI. Emits JSON whenever
+   stdout is not a TTY (--json=false for prose in a pipe).
+   Output:      --json/--result-json, --usage-json, --output-schema
    Containment: --sandbox, --add-dir, --permission-rule, --safe-mode
    Budgets:     --max-turns, --max-token-budget, --max-time
 

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -70,6 +71,9 @@ CLI does not model stay reachable:
 		if err := agent.CheckEnabled(); err != nil {
 			return err
 		}
+		if err := rejectDashboardIdentityFlags(); err != nil {
+			return err
+		}
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
@@ -102,6 +106,31 @@ CLI does not model stay reachable:
 	},
 }
 
+// rejectDashboardIdentityFlags refuses the flag combinations the dashboard would
+// silently drop: it picks the row to open and clears the startup prompt, resume
+// path and session id (harness tui.loadDashboardApplication), so accepting them
+// would look like the agent ignoring the user.
+//
+// This is checked on the flag VALUE rather than through
+// MarkFlagsMutuallyExclusive, which keys off "was the flag passed" and would
+// reject an explicit --agents=false --prompt — a single-session run that has no
+// conflict at all.
+func rejectDashboardIdentityFlags() error {
+	if !chatAgents {
+		return nil
+	}
+	for _, conflict := range []struct{ flag, value string }{
+		{"prompt", chatPrompt},
+		{"resume", chatResume},
+		{"session-id", chatSessionID},
+	} {
+		if conflict.value != "" {
+			return fmt.Errorf("--agents cannot be combined with --%s: the session dashboard picks which session to open, so the agent would drop it", conflict.flag)
+		}
+	}
+	return nil
+}
+
 func init() {
 	chatCmd.Flags().BoolVar(&chatExperimental, "experimental", false, "enable experimental agent features")
 	chatCmd.Flags().BoolVar(&chatAgents, "agents", false, "start on the session dashboard instead of a single session")
@@ -126,13 +155,6 @@ func init() {
 	chatCmd.Flags().StringArrayVar(&chatExtensions, "extension", nil, "extension directory to load, repeatable")
 	chatCmd.Flags().StringArrayVar(&chatGoProviders, "go-provider", nil, "Go provider plugin to load, repeatable")
 	chatCmd.Flags().StringArrayVar(&chatAddDirs, "add-dir", nil, "additional writable directory, repeatable")
-
-	// The dashboard owns session identity: it picks the row to open and clears the
-	// startup prompt and resume path (harness tui.loadDashboardApplication). Refuse
-	// the combinations it would silently drop rather than ignoring the user's input.
-	chatCmd.MarkFlagsMutuallyExclusive("agents", "prompt")
-	chatCmd.MarkFlagsMutuallyExclusive("agents", "resume")
-	chatCmd.MarkFlagsMutuallyExclusive("agents", "session-id")
 
 	rootCmd.AddCommand(chatCmd)
 }

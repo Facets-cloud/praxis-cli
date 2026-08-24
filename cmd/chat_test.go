@@ -72,6 +72,7 @@ func TestChatCmd_AgentsFlagDocumentsDashboardStartView(t *testing.T) {
 // Silently dropping those flags would look like the agent ignoring the user, so the
 // combination is refused before anything launches.
 func TestChatCmd_AgentsRejectsSingleSessionIdentityFlags(t *testing.T) {
+	t.Setenv("PRAXIS_EXPERIMENTAL", "1")
 	for _, conflicting := range [][]string{
 		{"--agents", "--prompt", "fix the bug"},
 		{"--agents", "--resume", "/tmp/session.jsonl"},
@@ -79,10 +80,47 @@ func TestChatCmd_AgentsRejectsSingleSessionIdentityFlags(t *testing.T) {
 	} {
 		_, err := execChat(t, conflicting...)
 		if err == nil {
-			t.Fatalf("chat %v was accepted; want a mutually-exclusive-flag error", conflicting)
+			t.Fatalf("chat %v was accepted; want a conflicting-flag error", conflicting)
 		}
-		if !strings.Contains(err.Error(), "none of the others can be") {
-			t.Fatalf("chat %v err = %v, want a mutual exclusion error", conflicting, err)
+		if !strings.Contains(err.Error(), "--agents cannot be combined with") {
+			t.Fatalf("chat %v err = %v, want a conflicting-flag error", conflicting, err)
 		}
+	}
+}
+
+// Turning the dashboard OFF explicitly is a plain single-session run, and every
+// identity flag is legal there. Checking "was --agents passed" instead of its
+// value — which is what cobra's MarkFlagsMutuallyExclusive does — rejects
+// `--agents=false --prompt …` for a conflict that does not exist.
+func TestRejectDashboardIdentityFlags_ValueNotPresence(t *testing.T) {
+	t.Cleanup(resetChatFlagState)
+
+	resetChatFlagState()
+	chatAgents, chatPrompt = false, "fix the bug"
+	if err := rejectDashboardIdentityFlags(); err != nil {
+		t.Fatalf("--agents=false with --prompt rejected: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		setup func()
+	}{
+		{"prompt", func() { chatAgents, chatPrompt = true, "fix the bug" }},
+		{"resume", func() { chatAgents, chatResume = true, "/tmp/session.jsonl" }},
+		{"session-id", func() { chatAgents, chatSessionID = true, "abc123" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetChatFlagState()
+			tc.setup()
+			if err := rejectDashboardIdentityFlags(); err == nil {
+				t.Fatalf("--agents with --%s accepted; the dashboard would drop it", tc.name)
+			}
+		})
+	}
+
+	resetChatFlagState()
+	chatAgents = true
+	if err := rejectDashboardIdentityFlags(); err != nil {
+		t.Fatalf("--agents alone rejected: %v", err)
 	}
 }

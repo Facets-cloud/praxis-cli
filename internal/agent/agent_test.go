@@ -274,6 +274,9 @@ func TestChatOptsToArgsRepeatables(t *testing.T) {
 // The harness re-execs this binary as a process-sandbox child using bare native
 // flags. Cobra cannot parse that dialect, so main() has to recognize it — and
 // must NOT hijack an ordinary invocation, which would take the whole CLI down.
+// Recognition keys on the SHAPE of that call site (-sandbox-child together with
+// -result-json), so a stray flag on a human command line stays on the cobra path
+// and gets a real error instead of silently starting the runtime.
 func TestNativeDialectArgs(t *testing.T) {
 	child := []string{"/usr/local/bin/praxis", "-provider", "anthropic", "-sandbox-child", "-result-json"}
 	args, ok := NativeDialectArgs(child)
@@ -289,6 +292,9 @@ func TestNativeDialectArgs(t *testing.T) {
 		{"praxis", "chat", "--experimental"},
 		{"praxis", "run", "--prompt", "sandbox-child"},
 		{"praxis", "agent", "sessions"},
+		// Half the shape is not the shape: one marker alone must not route.
+		{"praxis", "-sandbox-child"},
+		{"praxis", "run", "--result-json"},
 	} {
 		if _, ok := NativeDialectArgs(argv); ok {
 			t.Errorf("NativeDialectArgs(%v) = true, want false: cobra must keep handling normal invocations", argv)
