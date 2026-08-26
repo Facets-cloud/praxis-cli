@@ -3,8 +3,11 @@
 // nudges toward the use-ig skill when the session's cwd is a repo the catalog
 // server claims as an ig member (membership is resolved from the repo's
 // canonical git identity — see cmd `praxis ig hook`; no agent-maintained file is
-// consulted). settings.json hooks are a Claude-Code-specific mechanism, so only
-// that host is wired.
+// consulted), and `praxis hook user-prompt-submit`, which nudges toward the
+// skill matching the submitted prompt.
+//
+// Claude Code gets all three events. Codex and Gemini CLI get the prompt hook
+// only, into their own files — see Hosts() for the per-host keys and units.
 //
 // The merge is additive and idempotent: other hooks and top-level keys are left
 // untouched, exactly one praxis entry exists per event, and a moved praxis
@@ -20,24 +23,62 @@ import (
 	"strings"
 )
 
-// hookEvent pairs a Claude settings key with the `praxis ig hook` event arg and
-// the matcher Claude expects for that key.
+// hookEvent pairs a host's settings key with the praxis argv to run and the
+// matcher that host expects.
 type hookEvent struct {
-	key, event, matcher string
+	key, args, matcher string
 }
 
-func events() []hookEvent {
-	return []hookEvent{
-		{"SessionStart", "session-start", "startup|resume"},
-		{"CwdChanged", "cwd-changed", ""},
+// Host is one AI host's hook config. The differences are not guessable: Gemini
+// calls the prompt event BeforeAgent and takes its timeout in MILLISECONDS,
+// Codex keeps hooks in its own hooks.json and will not run one until trusted
+// via its in-app /hooks, and Antigravity has no hook mechanism at all.
+type Host struct {
+	Harness   string
+	File      string
+	Events    []hookEvent
+	Timeout   int
+	EntryName string // Gemini lists entries by name in /hooks; others have no such field
+}
+
+const promptArgs = "hook user-prompt-submit"
+
+// allArgs is every hook praxis has ever written, for Uninstall to sweep.
+var allArgs = []string{"ig hook session-start", "ig hook cwd-changed", promptArgs}
+
+func Hosts(home string) []Host {
+	return []Host{
+		{Harness: "claude-code", File: filepath.Join(home, ".claude", "settings.json"), Timeout: 5, Events: []hookEvent{
+			{"SessionStart", "ig hook session-start", "startup|resume"},
+			{"CwdChanged", "ig hook cwd-changed", ""},
+			{"UserPromptSubmit", promptArgs, ""},
+		}},
+		{Harness: "codex", File: filepath.Join(home, ".codex", "hooks.json"), Timeout: 5, Events: []hookEvent{
+			{"UserPromptSubmit", promptArgs, ""},
+		}},
+		{Harness: "gemini-cli", File: filepath.Join(home, ".gemini", "settings.json"), Timeout: 5000,
+			EntryName: "praxis-skill-nudge", Events: []hookEvent{
+				{"BeforeAgent", promptArgs, ""},
+			}},
+		{Harness: "antigravity"}, // no hook mechanism; listed so callers can say so
 	}
 }
 
-// command is the hook command string for praxisPath and event. The executable
+// ByHarness returns the host with the given harness id.
+func ByHarness(home, harness string) (Host, bool) {
+	for _, h := range Hosts(home) {
+		if h.Harness == harness {
+			return h, true
+		}
+	}
+	return Host{}, false
+}
+
+// command is the hook command string for praxisPath and args. The executable
 // path is shell-quoted so a path containing spaces (e.g. "/Applications/Praxis
 // CLI/praxis") still runs — Claude Code executes the command via a shell.
-func command(praxisPath, event string) string {
-	return shellQuote(praxisPath) + " ig hook " + event
+func command(praxisPath, args string) string {
+	return shellQuote(praxisPath) + " " + args
 }
 
 // shellQuote single-quotes s for safe use as one shell word, escaping any
@@ -67,19 +108,19 @@ func hookExecBase(cmd string) string {
 	return filepath.Base(tok)
 }
 
-// isPraxisHookCommand reports whether cmd is OUR hook for event. The event
+// isPraxisHookCommand reports whether cmd is OUR hook for args. The argv
 // suffix alone is insufficient — another tool could ship `foo ig hook
 // session-start` — so argv[0]'s basename must actually be praxis. Getting this
 // wrong would clobber a foreign hook.
-func isPraxisHookCommand(cmd, event string) bool {
-	if !strings.HasSuffix(cmd, " ig hook "+event) {
+func isPraxisHookCommand(cmd, args string) bool {
+	if !strings.HasSuffix(cmd, " "+args) {
 		return false
 	}
 	return hookExecBase(cmd) == "praxis"
 }
 
-// praxisCommandsFor returns every praxis hook command string for event in list.
-func praxisCommandsFor(list []any, event string) []string {
+// praxisCommandsFor returns every praxis hook command string for args in list.
+func praxisCommandsFor(list []any, args string) []string {
 	var out []string
 	for _, item := range list {
 		entry, ok := item.(map[string]any)
@@ -92,7 +133,7 @@ func praxisCommandsFor(list []any, event string) []string {
 		}
 		for _, hv := range inner {
 			if h, ok := hv.(map[string]any); ok {
-				if cmd, _ := h["command"].(string); isPraxisHookCommand(cmd, event) {
+				if cmd, _ := h["command"].(string); isPraxisHookCommand(cmd, args) {
 					out = append(out, cmd)
 				}
 			}
@@ -101,27 +142,31 @@ func praxisCommandsFor(list []any, event string) []string {
 	return out
 }
 
-// listUpsert normalizes list to hold EXACTLY ONE praxis entry for event pointing
+// listUpsert normalizes list to hold EXACTLY ONE praxis entry for e pointing
 // at praxisPath: it is a no-op when that already holds, otherwise it strips every
 // praxis hook for the event (foreign hooks preserved) and appends one fresh
 // entry — collapsing stale-path or accidentally-duplicated entries.
-func listUpsert(list []any, praxisPath, event, matcher string) ([]any, bool) {
-	want := command(praxisPath, event)
-	if found := praxisCommandsFor(list, event); len(found) == 1 && found[0] == want {
+func listUpsert(list []any, h Host, praxisPath string, e hookEvent) ([]any, bool) {
+	want := command(praxisPath, e.args)
+	if found := praxisCommandsFor(list, e.args); len(found) == 1 && found[0] == want {
 		return list, false // already exactly one, and current
 	}
-	stripped, _ := listRemove(list, event)
-	entry := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": want, "timeout": 5}}}
-	if matcher != "" {
-		entry["matcher"] = matcher
+	stripped, _ := listRemove(list, e.args)
+	inner := map[string]any{"type": "command", "command": want, "timeout": h.Timeout}
+	if h.EntryName != "" {
+		inner["name"] = h.EntryName
+	}
+	entry := map[string]any{"hooks": []any{inner}}
+	if e.matcher != "" {
+		entry["matcher"] = e.matcher
 	}
 	return append(stripped, entry), true
 }
 
-// listRemove strips every praxis entry for event from list. An entry is dropped
+// listRemove strips every praxis entry for args from list. An entry is dropped
 // only when removing our command empties its inner hooks; a mixed entry keeps
 // its foreign hooks.
-func listRemove(list []any, event string) ([]any, bool) {
+func listRemove(list []any, args string) ([]any, bool) {
 	changed := false
 	out := make([]any, 0, len(list))
 	for _, item := range list {
@@ -139,7 +184,7 @@ func listRemove(list []any, event string) ([]any, bool) {
 		for _, hv := range inner {
 			h, ok := hv.(map[string]any)
 			if ok {
-				if cmd, _ := h["command"].(string); isPraxisHookCommand(cmd, event) {
+				if cmd, _ := h["command"].(string); isPraxisHookCommand(cmd, args) {
 					changed = true
 					continue
 				}
@@ -155,21 +200,21 @@ func listRemove(list []any, event string) ([]any, bool) {
 	return out, changed
 }
 
-// mutate loads settingsPath, applies fn to its hooks map, and writes back if
+// mutate loads path, applies fn to its hooks map, and writes back if
 // fn reported a change. A missing file is treated as empty. Invalid JSON is an
 // error (we refuse to overwrite a file we can't parse). The prior file is kept
 // as settings.json.bak. Backup and any newly-created settings file are written
 // 0600 — a Claude settings file can hold credentials/env values, so its copy
 // must not be world-readable.
-func mutate(settingsPath string, fn func(hooks map[string]any) bool) (bool, error) {
-	raw, err := os.ReadFile(settingsPath)
+func mutate(path string, fn func(hooks map[string]any) bool) (bool, error) {
+	raw, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return false, err
 	}
 	settings := map[string]any{}
 	if len(raw) > 0 {
 		if uErr := json.Unmarshal(raw, &settings); uErr != nil {
-			return false, fmt.Errorf("hooks: %s is not valid JSON (refusing to overwrite): %w", settingsPath, uErr)
+			return false, fmt.Errorf("hooks: %s is not valid JSON (refusing to overwrite): %w", path, uErr)
 		}
 	}
 	hooks, _ := settings["hooks"].(map[string]any)
@@ -181,28 +226,31 @@ func mutate(settingsPath string, fn func(hooks map[string]any) bool) (bool, erro
 	}
 	settings["hooks"] = hooks
 	if len(raw) > 0 {
-		if bErr := os.WriteFile(settingsPath+".bak", raw, 0o600); bErr != nil {
-			return false, fmt.Errorf("hooks: writing backup %s.bak: %w", settingsPath, bErr)
+		if bErr := os.WriteFile(path+".bak", raw, 0o600); bErr != nil {
+			return false, fmt.Errorf("hooks: writing backup %s.bak: %w", path, bErr)
 		}
 	}
 	b, mErr := json.MarshalIndent(settings, "", "  ")
 	if mErr != nil {
 		return false, mErr
 	}
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return false, err
 	}
-	return true, os.WriteFile(settingsPath, append(b, '\n'), 0o600)
+	return true, os.WriteFile(path, append(b, '\n'), 0o600)
 }
 
-// Install merges praxis's SessionStart + CwdChanged hooks into settingsPath,
-// pointing at praxisPath. Returns whether the file changed.
-func Install(settingsPath, praxisPath string) (bool, error) {
-	return mutate(settingsPath, func(hooks map[string]any) bool {
+// Install merges h's hooks into its config file, pointing at praxisPath.
+// Returns whether the file changed. A host with no events is a no-op.
+func Install(h Host, praxisPath string) (bool, error) {
+	if len(h.Events) == 0 {
+		return false, nil
+	}
+	return mutate(h.File, func(hooks map[string]any) bool {
 		changed := false
-		for _, e := range events() {
+		for _, e := range h.Events {
 			list, _ := hooks[e.key].([]any)
-			next, ch := listUpsert(list, praxisPath, e.event, e.matcher)
+			next, ch := listUpsert(list, h, praxisPath, e)
 			if ch {
 				hooks[e.key] = next
 				changed = true
@@ -212,24 +260,31 @@ func Install(settingsPath, praxisPath string) (bool, error) {
 	})
 }
 
-// Uninstall removes praxis's SessionStart + CwdChanged hooks from settingsPath,
-// leaving foreign hooks and other keys intact. Returns whether the file changed.
-func Uninstall(settingsPath, praxisPath string) (bool, error) {
-	return mutate(settingsPath, func(hooks map[string]any) bool {
+// Uninstall removes praxis's hooks from h's config file, leaving foreign hooks
+// and other keys intact. It sweeps every key present in the file, not just the
+// ones h declares, so a key an older praxis wrote is still cleaned up.
+func Uninstall(h Host) (bool, error) {
+	return mutate(h.File, func(hooks map[string]any) bool {
 		changed := false
-		for _, e := range events() {
-			list, ok := hooks[e.key].([]any)
+		for key, v := range hooks {
+			list, ok := v.([]any)
 			if !ok {
 				continue
 			}
-			next, ch := listRemove(list, e.event)
-			if ch {
-				if len(next) == 0 {
-					delete(hooks, e.key)
-				} else {
-					hooks[e.key] = next
+			hit := false
+			for _, args := range allArgs {
+				if next, ch := listRemove(list, args); ch {
+					list, hit = next, true
 				}
-				changed = true
+			}
+			if !hit {
+				continue
+			}
+			changed = true
+			if len(list) == 0 {
+				delete(hooks, key)
+			} else {
+				hooks[key] = list
 			}
 		}
 		return changed

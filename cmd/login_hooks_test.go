@@ -20,8 +20,8 @@ func TestWirePraxisHooksAlwaysUserLevel(t *testing.T) {
 
 	got := wirePraxisHooks(io.Discard, true, hosts)
 	want := filepath.Join(home, ".claude", "settings.json")
-	if got != want {
-		t.Errorf("wired to %q, want user-level %q", got, want)
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("wired to %q, want user-level [%q]", got, want)
 	}
 	if _, err := os.Stat(want); err != nil {
 		t.Errorf("user-level settings.json not written: %v", err)
@@ -32,9 +32,12 @@ func TestWirePraxisHooksAlwaysUserLevel(t *testing.T) {
 }
 
 func TestWirePraxisHooksSkipsWithoutClaudeCode(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	if got := wirePraxisHooks(io.Discard, true, []harness.Harness{{Name: "codex"}}); got != "" {
-		t.Errorf("no claude-code host → no wiring, got %q", got)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Codex has its own file, so a codex-only login must not touch Claude's.
+	wirePraxisHooks(io.Discard, true, []harness.Harness{{Name: "codex"}})
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); err == nil {
+		t.Error("codex-only login must not create a claude settings.json")
 	}
 }
 
@@ -64,5 +67,27 @@ func TestUnwirePraxisHooksCleanNoop(t *testing.T) {
 	removed, warn := unwirePraxisHooks()
 	if removed || warn != "" {
 		t.Errorf("clean no-op expected, got removed=%v warn=%q", removed, warn)
+	}
+}
+
+// Every hook-capable detected host gets wired, each into its own file.
+func TestWirePraxisHooksCoversEveryHost(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	got := wirePraxisHooks(io.Discard, true, []harness.Harness{
+		{Name: "claude-code"}, {Name: "codex"}, {Name: "gemini-cli"}, {Name: "antigravity"},
+	})
+	want := []string{
+		filepath.Join(home, ".claude", "settings.json"),
+		filepath.Join(home, ".codex", "hooks.json"),
+		filepath.Join(home, ".gemini", "settings.json"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("wired %v, want %v (antigravity has no hooks)", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("wired[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }
