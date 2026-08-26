@@ -4,10 +4,20 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 const praxis = "/usr/local/bin/praxis"
+
+const igArgs = "ig hook session-start"
+
+// claudeAt is the claude-code host rebased onto a temp file.
+func claudeAt(file string) Host {
+	h, _ := ByHarness("/nonexistent", "claude-code")
+	h.File = file
+	return h
+}
 
 func readSettings(t *testing.T, p string) map[string]any {
 	t.Helper()
@@ -52,7 +62,7 @@ func has(ss []string, want string) bool {
 
 func TestInstallCreatesBothHooks(t *testing.T) {
 	p := filepath.Join(t.TempDir(), ".claude", "settings.json")
-	changed, err := Install(p, praxis)
+	changed, err := Install(claudeAt(p), praxis)
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
@@ -60,20 +70,20 @@ func TestInstallCreatesBothHooks(t *testing.T) {
 		t.Error("first install must report changed")
 	}
 	s := readSettings(t, p)
-	if !has(commandsFor(t, s, "SessionStart"), command(praxis, "session-start")) {
+	if !has(commandsFor(t, s, "SessionStart"), command(praxis, igArgs)) {
 		t.Error("SessionStart hook not wired")
 	}
-	if !has(commandsFor(t, s, "CwdChanged"), command(praxis, "cwd-changed")) {
+	if !has(commandsFor(t, s, "CwdChanged"), command(praxis, "ig hook cwd-changed")) {
 		t.Error("CwdChanged hook not wired")
 	}
 }
 
 func TestInstallIsIdempotent(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "settings.json")
-	if _, err := Install(p, praxis); err != nil {
+	if _, err := Install(claudeAt(p), praxis); err != nil {
 		t.Fatal(err)
 	}
-	changed, err := Install(p, praxis)
+	changed, err := Install(claudeAt(p), praxis)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,10 +107,10 @@ func TestInstallRefreshesStalePath(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			p := filepath.Join(t.TempDir(), "settings.json")
-			if _, err := Install(p, c.from); err != nil {
+			if _, err := Install(claudeAt(p), c.from); err != nil {
 				t.Fatal(err)
 			}
-			changed, err := Install(p, c.to)
+			changed, err := Install(claudeAt(p), c.to)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -108,15 +118,15 @@ func TestInstallRefreshesStalePath(t *testing.T) {
 				t.Error("a moved praxis binary must refresh the hook path")
 			}
 			got := commandsFor(t, readSettings(t, p), "SessionStart")
-			if len(got) != 1 || !has(got, command(c.to, "session-start")) {
+			if len(got) != 1 || !has(got, command(c.to, igArgs)) {
 				t.Errorf("stale path not refreshed to one current entry: %v", got)
 			}
 			// The refreshed entry must still be recognized as ours (so a further
 			// install is idempotent, not duplicating).
-			if !isPraxisHookCommand(got[0], "session-start") {
+			if !isPraxisHookCommand(got[0], igArgs) {
 				t.Errorf("refreshed command not recognized as praxis: %q", got[0])
 			}
-			again, err := Install(p, c.to)
+			again, err := Install(claudeAt(p), c.to)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -131,7 +141,7 @@ func TestInstallCollapsesDuplicateEntries(t *testing.T) {
 	// A prior bug could leave two praxis entries for one event; install must
 	// normalize to exactly one.
 	p := filepath.Join(t.TempDir(), "settings.json")
-	want := command(praxis, "session-start")
+	want := command(praxis, igArgs)
 	seed := map[string]any{
 		"hooks": map[string]any{
 			"SessionStart": []any{
@@ -144,7 +154,7 @@ func TestInstallCollapsesDuplicateEntries(t *testing.T) {
 	if err := os.WriteFile(p, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Install(p, praxis); err != nil {
+	if _, err := Install(claudeAt(p), praxis); err != nil {
 		t.Fatal(err)
 	}
 	if got := commandsFor(t, readSettings(t, p), "SessionStart"); len(got) != 1 {
@@ -168,7 +178,7 @@ func TestInstallPreservesForeignHooksAndKeys(t *testing.T) {
 	if err := os.WriteFile(p, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Install(p, praxis); err != nil {
+	if _, err := Install(claudeAt(p), praxis); err != nil {
 		t.Fatal(err)
 	}
 	s := readSettings(t, p)
@@ -179,7 +189,7 @@ func TestInstallPreservesForeignHooksAndKeys(t *testing.T) {
 	if !has(cmds, "flow hook session-start") {
 		t.Error("foreign flow hook removed")
 	}
-	if !has(cmds, command(praxis, "session-start")) {
+	if !has(cmds, command(praxis, igArgs)) {
 		t.Error("praxis hook not added alongside foreign hook")
 	}
 	// A .bak of the prior file is kept, and NOT world/group readable (it may
@@ -198,7 +208,7 @@ func TestInstallRefusesInvalidJSON(t *testing.T) {
 	if err := os.WriteFile(p, []byte("{ not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Install(p, praxis); err == nil {
+	if _, err := Install(claudeAt(p), praxis); err == nil {
 		t.Error("Install must refuse to overwrite invalid JSON")
 	}
 	if b, _ := os.ReadFile(p); string(b) != "{ not json" {
@@ -221,10 +231,10 @@ func TestUninstallRemovesOnlyPraxisHooks(t *testing.T) {
 	if err := os.WriteFile(p, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Install(p, praxis); err != nil {
+	if _, err := Install(claudeAt(p), praxis); err != nil {
 		t.Fatal(err)
 	}
-	changed, err := Uninstall(p, praxis)
+	changed, err := Uninstall(claudeAt(p))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,13 +242,13 @@ func TestUninstallRemovesOnlyPraxisHooks(t *testing.T) {
 		t.Error("uninstall must report change when praxis hooks were present")
 	}
 	cmds := commandsFor(t, readSettings(t, p), "SessionStart")
-	if has(cmds, command(praxis, "session-start")) {
+	if has(cmds, command(praxis, igArgs)) {
 		t.Error("praxis hook not removed")
 	}
 	if !has(cmds, "flow hook session-start") {
 		t.Error("foreign hook wrongly removed")
 	}
-	changed, err = Uninstall(p, praxis)
+	changed, err = Uninstall(claudeAt(p))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +258,7 @@ func TestUninstallRemovesOnlyPraxisHooks(t *testing.T) {
 }
 
 func TestUninstallMissingFileIsNoop(t *testing.T) {
-	changed, err := Uninstall(filepath.Join(t.TempDir(), "nope.json"), praxis)
+	changed, err := Uninstall(claudeAt(filepath.Join(t.TempDir(), "nope.json")))
 	if err != nil {
 		t.Fatalf("uninstall on missing file must not error: %v", err)
 	}
@@ -260,15 +270,93 @@ func TestUninstallMissingFileIsNoop(t *testing.T) {
 func TestIsPraxisHookCommandRejectsForeignAndQuotedForeign(t *testing.T) {
 	// Ownership is by argv[0] basename, quote-aware.
 	cases := map[string]bool{
-		command(praxis, "session-start"):                          true,
+		command(praxis, igArgs):                                   true,
 		"/usr/local/bin/praxis ig hook session-start":             true, // bare (older) form
 		"'/Applications/Praxis CLI/praxis' ig hook session-start": true,
 		"flow hook session-start":                                 false,
 		"/opt/tool/ig ig hook session-start":                      false, // basename ig, not praxis
 	}
 	for cmd, want := range cases {
-		if got := isPraxisHookCommand(cmd, "session-start"); got != want {
+		if got := isPraxisHookCommand(cmd, igArgs); got != want {
 			t.Errorf("isPraxisHookCommand(%q) = %v, want %v", cmd, got, want)
+		}
+	}
+}
+
+// Each host names the prompt event differently and Gemini's timeout is in
+// milliseconds; getting either wrong writes a file that parses and never fires.
+func TestPerHostPromptEventAndTimeout(t *testing.T) {
+	tests := []struct {
+		harness, key string
+		timeout      float64
+	}{
+		{"claude-code", "UserPromptSubmit", 5},
+		{"codex", "UserPromptSubmit", 5},
+		{"gemini-cli", "BeforeAgent", 5000},
+	}
+	for _, tc := range tests {
+		t.Run(tc.harness, func(t *testing.T) {
+			h, _ := ByHarness("/nonexistent", tc.harness)
+			h.File = filepath.Join(t.TempDir(), "hooks.json")
+			if _, err := Install(h, praxis); err != nil {
+				t.Fatal(err)
+			}
+			s := readSettings(t, h.File)
+			if !has(commandsFor(t, s, tc.key), command(praxis, promptArgs)) {
+				t.Fatalf("prompt hook not under %q: %+v", tc.key, s)
+			}
+			hooks, _ := s["hooks"].(map[string]any)
+			list, _ := hooks[tc.key].([]any)
+			inner, _ := list[0].(map[string]any)["hooks"].([]any)
+			if got, _ := inner[0].(map[string]any)["timeout"].(float64); got != tc.timeout {
+				t.Errorf("timeout = %v, want %v", got, tc.timeout)
+			}
+		})
+	}
+}
+
+// Antigravity has no hook mechanism, so installing must write nothing.
+func TestHooklessHostIsNoop(t *testing.T) {
+	h, _ := ByHarness("/nonexistent", "antigravity")
+	if changed, err := Install(h, praxis); err != nil || changed {
+		t.Errorf("changed=%v err=%v, want no-op", changed, err)
+	}
+}
+
+// Uninstall must clean every host, not just claude — otherwise logout leaves
+// Codex and Gemini pointing at a binary the user signed out of.
+func TestUninstallCleansEveryHost(t *testing.T) {
+	home := t.TempDir()
+	for _, h := range Hosts(home) {
+		if len(h.Events) == 0 {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(h.File), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(h.File, []byte(`{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"flow hook x"}]}]},"mine":"keep"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Install(h, praxis); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, h := range Hosts(home) {
+		if len(h.Events) == 0 {
+			continue
+		}
+		if _, err := Uninstall(h); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(h.File)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), praxis) {
+			t.Errorf("%s: praxis hook survived", h.Harness)
+		}
+		if !strings.Contains(string(raw), "flow hook x") || !strings.Contains(string(raw), `"mine": "keep"`) {
+			t.Errorf("%s: foreign hook or key lost", h.Harness)
 		}
 	}
 }
