@@ -48,6 +48,9 @@ download the asset for this OS/arch, verify its checksum against the release's
 checksums.txt, and atomically replace the running binary.
 
 Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
+	// raptor names the same operation `raptor upgrade`, and Homebrew names it
+	// `brew upgrade`. Accept both verbs here so neither habit hits an error.
+	Aliases: []string{"upgrade"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(updateJSON, false, out)
