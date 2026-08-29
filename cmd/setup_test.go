@@ -1,10 +1,14 @@
 package cmd
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/Facets-cloud/praxis-cli/internal/claudehooks"
 )
 
 func TestSetupCommandStaysHidden(t *testing.T) {
@@ -172,4 +176,90 @@ func bodyHas(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// repairPraxisHooks heals a hook wired from a version-stamped path, and must
+// leave a machine that never logged in without any hooks at all.
+func TestRepairPraxisHooksHealsStalePathAndAddsNone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	self := filepath.Join(binDir, "praxis")
+	if err := os.WriteFile(self, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Cleanup(claudehooks.SetExecPathForTest(self))
+
+	// A machine with no praxis hooks stays untouched.
+	if repaired, warn := repairPraxisHooks(); len(repaired) != 0 || warn != "" {
+		t.Fatalf("unwired machine: repaired=%v warn=%q, want no change", repaired, warn)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("repair created a settings file on an unwired machine")
+	}
+
+	// A hook wired from a Caskroom path the upgrade deleted is re-pointed.
+	host, _ := claudehooks.ByHarness(home, "claude-code")
+	if _, err := claudehooks.Install(host, "/opt/homebrew/Caskroom/praxis/1.6.0/praxis_darwin_arm64"); err != nil {
+		t.Fatal(err)
+	}
+	repaired, warn := repairPraxisHooks()
+	if warn != "" || len(repaired) != 1 || repaired[0] != "claude-code" {
+		t.Fatalf("repaired=%v warn=%q, want [claude-code] and no warning", repaired, warn)
+	}
+	raw, err := os.ReadFile(host.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "Caskroom") || !strings.Contains(string(raw), self) {
+		t.Fatalf("hook not re-pointed at %s:\n%s", self, raw)
+	}
+
+	// Already current: nothing to report.
+	if repaired, _ := repairPraxisHooks(); len(repaired) != 0 {
+		t.Fatalf("second run repaired %v, want nothing", repaired)
+	}
+}
+
+// An unparseable settings.json must surface, not vanish.
+func TestRepairPraxisHooksReportsUnparseableSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	self := filepath.Join(binDir, "praxis")
+	if err := os.WriteFile(self, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Cleanup(claudehooks.SetExecPathForTest(self))
+
+	host, _ := claudehooks.ByHarness(home, "claude-code")
+	if err := os.MkdirAll(filepath.Dir(host.File), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(host.File, []byte("{ not json,"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repaired, warn := repairPraxisHooks()
+	if warn == "" || !strings.Contains(warn, "not valid JSON") {
+		t.Fatalf("warning = %q, want the invalid-JSON error", warn)
+	}
+	if len(repaired) != 0 {
+		t.Fatalf("repaired = %v, want nothing", repaired)
+	}
+	var buf bytes.Buffer
+	printHookRepair(&buf, false, repaired, warn)
+	if !strings.Contains(buf.String(), "⚠") {
+		t.Fatalf("printHookRepair stayed silent on a warning: %q", buf.String())
+	}
+	if buf.Reset(); func() string { printHookRepair(&buf, true, repaired, warn); return buf.String() }() != "" {
+		t.Fatalf("printHookRepair printed under --json")
+	}
 }

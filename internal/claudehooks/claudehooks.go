@@ -128,35 +128,54 @@ func isPraxisHookCommand(cmd, args string) bool {
 	return isPraxisExec(hookExecBase(cmd))
 }
 
-// BinaryPath is the praxis path to bake into a hook command. os.Executable
-// reports the VERSION-STAMPED install directory (Homebrew stages the binary in
-// Caskroom/<version>/), and that directory is deleted by the next upgrade —
-// taking every hook wired from it with it. A PATH entry that resolves to the
-// same file (the cask's bin/praxis symlink) survives upgrades, so prefer it.
-// Never resolve symlinks here: that is exactly what pins a hook to one version.
-func BinaryPath() (string, error) {
-	exe, err := execPathForTest()
+// StableBinaryPath is the PATH entry that resolves to the running binary, and
+// whether one exists. os.Executable reports the VERSION-STAMPED install
+// directory (Homebrew stages the binary in Caskroom/<version>/), which the next
+// upgrade deletes — taking every hook wired from it with it. The cask's
+// bin/praxis symlink survives upgrades, so a hook must name that instead. Never
+// resolve symlinks here: that is exactly what pins a hook to one version.
+//
+// A praxis elsewhere on PATH is a DIFFERENT install, so the candidate must be
+// the same file. Repair uses the ok result to stay out of a host's config
+// unless it has a durable path to offer.
+func StableBinaryPath() (string, bool) {
+	exe, err := execPathForTest() // absolute on darwin and linux, the two we build
 	if err != nil {
-		return "", err
+		return "", false
 	}
-	if abs, aErr := filepath.Abs(exe); aErr == nil {
-		exe = abs
-	}
-	stable, lErr := exec.LookPath("praxis")
-	if lErr != nil {
-		return exe, nil
+	stable, err := exec.LookPath("praxis")
+	if err != nil {
+		return "", false
 	}
 	if abs, aErr := filepath.Abs(stable); aErr == nil {
-		stable = abs
+		stable = abs // a "." PATH entry yields a relative path
 	}
-	if sameFile(stable, exe) {
+	if !sameFile(stable, exe) {
+		return "", false
+	}
+	return stable, true
+}
+
+// BinaryPath is the praxis path to bake into a hook command: the stable PATH
+// entry, else the running binary. `praxis login` accepts the fallback because
+// the user chose which binary to run.
+func BinaryPath() (string, error) {
+	if stable, ok := StableBinaryPath(); ok {
 		return stable, nil
 	}
-	return exe, nil
+	return execPathForTest()
 }
 
 // execPathForTest is os.Executable, seamed for tests.
 var execPathForTest = os.Executable
+
+// SetExecPathForTest pins the running-binary path and returns the restore func,
+// so a test can stage a cask layout without an installed praxis.
+func SetExecPathForTest(path string) func() {
+	prev := execPathForTest
+	execPathForTest = func() (string, error) { return path, nil }
+	return func() { execPathForTest = prev }
+}
 
 // sameFile reports whether two paths name one file, following symlinks.
 func sameFile(a, b string) bool {
@@ -295,21 +314,7 @@ func mutate(path string, fn func(hooks map[string]any) bool) (bool, error) {
 // Install merges h's hooks into its config file, pointing at praxisPath.
 // Returns whether the file changed. A host with no events is a no-op.
 func Install(h Host, praxisPath string) (bool, error) {
-	if len(h.Events) == 0 {
-		return false, nil
-	}
-	return mutate(h.File, func(hooks map[string]any) bool {
-		changed := false
-		for _, e := range h.Events {
-			list, _ := hooks[e.key].([]any)
-			next, ch := listUpsert(list, h, praxisPath, e)
-			if ch {
-				hooks[e.key] = next
-				changed = true
-			}
-		}
-		return changed
-	})
+	return upsert(h, praxisPath, false)
 }
 
 // Repair re-points h's EXISTING praxis hook entries at praxisPath and adds
@@ -317,15 +322,27 @@ func Install(h Host, praxisPath string) (bool, error) {
 // so `praxis setup` (the Homebrew post-install hook) calls this to heal them
 // without a login — while a user who never logged in still gets no hooks.
 func Repair(h Host, praxisPath string) (bool, error) {
+	return upsert(h, praxisPath, true)
+}
+
+// upsert points h's hooks at praxisPath. When existingOnly, an event that
+// carries no praxis hook today is left alone. Install and Repair share this so
+// they cannot drift on the empty-host guard or the write path.
+func upsert(h Host, praxisPath string, existingOnly bool) (bool, error) {
+	if len(h.Events) == 0 {
+		return false, nil // a host with no hook mechanism has no file to write
+	}
 	return mutate(h.File, func(hooks map[string]any) bool {
 		changed := false
 		for _, e := range h.Events {
 			list, _ := hooks[e.key].([]any)
-			if len(praxisCommandsFor(list, e.args)) == 0 {
-				continue // not wired here — repair must not create a hook
+			if existingOnly && len(praxisCommandsFor(list, e.args)) == 0 {
+				continue
 			}
-			if next, ch := listUpsert(list, h, praxisPath, e); ch {
-				hooks[e.key], changed = next, true
+			next, ch := listUpsert(list, h, praxisPath, e)
+			if ch {
+				hooks[e.key] = next
+				changed = true
 			}
 		}
 		return changed

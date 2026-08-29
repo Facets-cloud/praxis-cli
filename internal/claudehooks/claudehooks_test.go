@@ -406,16 +406,21 @@ func TestBinaryPathPrefersTheStablePathEntry(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 	t.Setenv("PATH", binDir)
-	execPathForTest = func() (string, error) { return staged, nil }
-	defer func() { execPathForTest = os.Executable }()
+	fakeExec(t, staged)
 
-	got, err := BinaryPath()
-	if err != nil {
-		t.Fatalf("BinaryPath: %v", err)
+	got, ok := StableBinaryPath()
+	if !ok {
+		t.Fatalf("StableBinaryPath found none, want the bin/praxis symlink")
 	}
 	if got != stable {
-		t.Fatalf("BinaryPath = %q, want the stable PATH entry %q", got, stable)
+		t.Fatalf("StableBinaryPath = %q, want the stable PATH entry %q", got, stable)
 	}
+}
+
+// fakeExec points the os.Executable seam at path for one test.
+func fakeExec(t *testing.T, path string) {
+	t.Helper()
+	t.Cleanup(SetExecPathForTest(path))
 }
 
 // A praxis elsewhere on PATH is a DIFFERENT install; the running binary wins.
@@ -429,9 +434,11 @@ func TestBinaryPathKeepsSelfWhenPathEntryIsAnotherBinary(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", filepath.Dir(other))
-	execPathForTest = func() (string, error) { return self, nil }
-	defer func() { execPathForTest = os.Executable }()
+	fakeExec(t, self)
 
+	if got, ok := StableBinaryPath(); ok {
+		t.Fatalf("StableBinaryPath = %q for a different install, want none", got)
+	}
 	got, err := BinaryPath()
 	if err != nil {
 		t.Fatalf("BinaryPath: %v", err)
@@ -453,10 +460,10 @@ func TestRepairRepointsWiredHooksAndAddsNone(t *testing.T) {
 	if err != nil || !changed {
 		t.Fatalf("Repair changed=%v err=%v", changed, err)
 	}
-	for _, key := range []string{"SessionStart", "CwdChanged", "UserPromptSubmit"} {
-		got := commandsFor(t, readSettings(t, wired), key)
-		if len(got) != 1 || strings.Contains(got[0], stale) {
-			t.Fatalf("%s not re-pointed: %v", key, got)
+	for _, e := range h.Events {
+		got := commandsFor(t, readSettings(t, wired), e.key)
+		if len(got) != 1 || got[0] != command(praxis, e.args) {
+			t.Fatalf("%s = %v, want exactly %q", e.key, got, command(praxis, e.args))
 		}
 	}
 
