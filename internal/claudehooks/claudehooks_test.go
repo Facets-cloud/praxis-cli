@@ -360,3 +360,111 @@ func TestUninstallCleansEveryHost(t *testing.T) {
 		}
 	}
 }
+
+// A cask install stages the binary under its per-arch asset name, so an entry
+// written from that path must still be recognized as ours — otherwise every
+// login appends a duplicate and logout leaves the dead hook behind.
+func TestReleaseNamedBinaryIsRecognizedAsOurs(t *testing.T) {
+	staged := "/opt/homebrew/Caskroom/praxis/1.6.0/praxis_darwin_arm64"
+	if !isPraxisHookCommand(command(staged, igArgs), igArgs) {
+		t.Fatalf("staged release binary not recognized as a praxis hook")
+	}
+	if isPraxisHookCommand("'/usr/bin/praxisfoo' "+igArgs, igArgs) {
+		t.Fatalf("foreign praxisfoo binary claimed as ours")
+	}
+}
+
+func TestInstallReplacesStaleCaskroomEntry(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "settings.json")
+	h := claudeAt(file)
+	if _, err := Install(h, "/opt/homebrew/Caskroom/praxis/1.6.0/praxis_darwin_arm64"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if _, err := Install(h, praxis); err != nil {
+		t.Fatalf("reinstall: %v", err)
+	}
+	got := commandsFor(t, readSettings(t, file), "UserPromptSubmit")
+	if len(got) != 1 || got[0] != command(praxis, promptArgs) {
+		t.Fatalf("stale Caskroom entry not collapsed: %v", got)
+	}
+}
+
+// BinaryPath must not resolve symlinks: the resolved target is the
+// version-stamped path that the next upgrade deletes.
+func TestBinaryPathPrefersTheStablePathEntry(t *testing.T) {
+	dir := t.TempDir()
+	staged := filepath.Join(dir, "praxis_darwin_arm64")
+	if err := os.WriteFile(staged, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write staged binary: %v", err)
+	}
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	stable := filepath.Join(binDir, "praxis")
+	if err := os.Symlink(staged, stable); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+	execPathForTest = func() (string, error) { return staged, nil }
+	defer func() { execPathForTest = os.Executable }()
+
+	got, err := BinaryPath()
+	if err != nil {
+		t.Fatalf("BinaryPath: %v", err)
+	}
+	if got != stable {
+		t.Fatalf("BinaryPath = %q, want the stable PATH entry %q", got, stable)
+	}
+}
+
+// A praxis elsewhere on PATH is a DIFFERENT install; the running binary wins.
+func TestBinaryPathKeepsSelfWhenPathEntryIsAnotherBinary(t *testing.T) {
+	dir := t.TempDir()
+	self := filepath.Join(dir, "praxis")
+	other := filepath.Join(t.TempDir(), "praxis")
+	for _, p := range []string{self, other} {
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	t.Setenv("PATH", filepath.Dir(other))
+	execPathForTest = func() (string, error) { return self, nil }
+	defer func() { execPathForTest = os.Executable }()
+
+	got, err := BinaryPath()
+	if err != nil {
+		t.Fatalf("BinaryPath: %v", err)
+	}
+	if got != self {
+		t.Fatalf("BinaryPath = %q, want the running binary %q", got, self)
+	}
+}
+
+func TestRepairRepointsWiredHooksAndAddsNone(t *testing.T) {
+	dir := t.TempDir()
+	wired := filepath.Join(dir, "wired.json")
+	h := claudeAt(wired)
+	stale := "/opt/homebrew/Caskroom/praxis/1.6.0/praxis_darwin_arm64"
+	if _, err := Install(h, stale); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	changed, err := Repair(h, praxis)
+	if err != nil || !changed {
+		t.Fatalf("Repair changed=%v err=%v", changed, err)
+	}
+	for _, key := range []string{"SessionStart", "CwdChanged", "UserPromptSubmit"} {
+		got := commandsFor(t, readSettings(t, wired), key)
+		if len(got) != 1 || strings.Contains(got[0], stale) {
+			t.Fatalf("%s not re-pointed: %v", key, got)
+		}
+	}
+
+	empty := filepath.Join(dir, "empty.json")
+	if changed, err := Repair(claudeAt(empty), praxis); err != nil || changed {
+		t.Fatalf("Repair on an unwired host changed=%v err=%v", changed, err)
+	}
+	if _, err := os.Stat(empty); !os.IsNotExist(err) {
+		t.Fatalf("Repair created a settings file for an unwired host")
+	}
+}

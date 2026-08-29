@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -108,6 +109,14 @@ func hookExecBase(cmd string) string {
 	return filepath.Base(tok)
 }
 
+// isPraxisExec reports whether a hook argv[0] basename is praxis. Release
+// binaries keep their per-arch asset name (praxis_darwin_arm64), and a
+// Homebrew cask renames only the symlink in bin/ — so entries written from the
+// staged file carry that name and must still be recognized as ours.
+func isPraxisExec(base string) bool {
+	return base == "praxis" || strings.HasPrefix(base, "praxis_")
+}
+
 // isPraxisHookCommand reports whether cmd is OUR hook for args. The argv
 // suffix alone is insufficient — another tool could ship `foo ig hook
 // session-start` — so argv[0]'s basename must actually be praxis. Getting this
@@ -116,7 +125,50 @@ func isPraxisHookCommand(cmd, args string) bool {
 	if !strings.HasSuffix(cmd, " "+args) {
 		return false
 	}
-	return hookExecBase(cmd) == "praxis"
+	return isPraxisExec(hookExecBase(cmd))
+}
+
+// BinaryPath is the praxis path to bake into a hook command. os.Executable
+// reports the VERSION-STAMPED install directory (Homebrew stages the binary in
+// Caskroom/<version>/), and that directory is deleted by the next upgrade —
+// taking every hook wired from it with it. A PATH entry that resolves to the
+// same file (the cask's bin/praxis symlink) survives upgrades, so prefer it.
+// Never resolve symlinks here: that is exactly what pins a hook to one version.
+func BinaryPath() (string, error) {
+	exe, err := execPathForTest()
+	if err != nil {
+		return "", err
+	}
+	if abs, aErr := filepath.Abs(exe); aErr == nil {
+		exe = abs
+	}
+	stable, lErr := exec.LookPath("praxis")
+	if lErr != nil {
+		return exe, nil
+	}
+	if abs, aErr := filepath.Abs(stable); aErr == nil {
+		stable = abs
+	}
+	if sameFile(stable, exe) {
+		return stable, nil
+	}
+	return exe, nil
+}
+
+// execPathForTest is os.Executable, seamed for tests.
+var execPathForTest = os.Executable
+
+// sameFile reports whether two paths name one file, following symlinks.
+func sameFile(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(fa, fb)
 }
 
 // praxisCommandsFor returns every praxis hook command string for args in list.
@@ -254,6 +306,26 @@ func Install(h Host, praxisPath string) (bool, error) {
 			if ch {
 				hooks[e.key] = next
 				changed = true
+			}
+		}
+		return changed
+	})
+}
+
+// Repair re-points h's EXISTING praxis hook entries at praxisPath and adds
+// none. An upgrade deletes the directory an older praxis wired its hooks from,
+// so `praxis setup` (the Homebrew post-install hook) calls this to heal them
+// without a login — while a user who never logged in still gets no hooks.
+func Repair(h Host, praxisPath string) (bool, error) {
+	return mutate(h.File, func(hooks map[string]any) bool {
+		changed := false
+		for _, e := range h.Events {
+			list, _ := hooks[e.key].([]any)
+			if len(praxisCommandsFor(list, e.args)) == 0 {
+				continue // not wired here — repair must not create a hook
+			}
+			if next, ch := listUpsert(list, h, praxisPath, e); ch {
+				hooks[e.key], changed = next, true
 			}
 		}
 		return changed

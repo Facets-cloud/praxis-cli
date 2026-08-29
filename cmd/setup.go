@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Facets-cloud/praxis-cli/internal/claudehooks"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
@@ -53,6 +54,7 @@ and via the Homebrew post-install hook.
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(setupJSON, false, out)
+		repairPraxisHooks(out, asJSON)
 		n, err := installBootstrapSkills(out, asJSON)
 		if err != nil {
 			return err
@@ -98,6 +100,27 @@ func installBootstrapSkills(out io.Writer, asJSON bool) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// repairPraxisHooks re-points already-wired hooks at the current binary. An
+// upgrade deletes the version-stamped directory an older praxis wired from, so
+// the cask post-install hook (which runs `praxis setup`) heals those hooks
+// without a login. It adds no hook: a user who never logged in stays untouched.
+func repairPraxisHooks(out io.Writer, asJSON bool) {
+	praxisPath, err := claudehooks.BinaryPath()
+	if err != nil {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	for _, host := range claudehooks.Hosts(home) {
+		changed, err := claudehooks.Repair(host, praxisPath)
+		if err == nil && changed && !asJSON {
+			fmt.Fprintf(out, "  ✓ %-12s hooks re-pointed at %s\n", host.Harness, praxisPath)
+		}
+	}
 }
 
 // bootstrapMarkerPath is ~/.praxis/.bootstrap-v1, the sentinel that makes
