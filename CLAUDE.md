@@ -251,7 +251,14 @@ Invariants to preserve when touching this area:
 ## AI-host hooks (the skill nudge)
 
 `praxis login` wires a prompt-submit hook into each host that has one; `logout`
-removes it. Per-host differences that are NOT guessable: Gemini's event is
+removes it. The command written into a host config must be a path that SURVIVES
+an upgrade (`claudehooks.BinaryPath`): Homebrew stages the binary under
+`Caskroom/<version>/`, so a resolved path dies at the next upgrade. `praxis
+setup` and `praxis update` call `claudehooks.Repair` to heal hooks wired that
+way — it re-points existing entries only, and only from a PATH entry that IS the
+running binary, so a throwaway build cannot capture a real install's hooks.
+
+Per-host differences that are NOT guessable: Gemini's event is
 `BeforeAgent` (not `UserPromptSubmit`) and its timeout is in MILLISECONDS;
 Codex needs an in-app `/hooks` trust before it runs anything; Antigravity has no
 hook mechanism. See the `Hosts()` table.

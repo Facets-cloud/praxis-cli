@@ -285,15 +285,12 @@ func noticeFreshness(out io.Writer, asJSON bool) []Freshness {
 // them (see claudehooks.Hosts). Paths are always USER-level, even under
 // --local, because logout only cleans those. Never fatal: a wire failure warns.
 func wirePraxisHooks(out io.Writer, asJSON bool, hosts []harness.Harness) []string {
-	praxisPath, err := os.Executable()
+	praxisPath, err := claudehooks.BinaryPath()
 	if err != nil {
 		if !asJSON {
 			fmt.Fprintf(out, "Warning: could not resolve praxis binary for hook wiring: %v\n", err)
 		}
 		return nil
-	}
-	if resolved, rErr := filepath.EvalSymlinks(praxisPath); rErr == nil {
-		praxisPath = resolved
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

@@ -156,6 +156,11 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 		// the binary update.
 		refreshed, refreshErr := refreshSkills()
 
+		// The binary just moved for anyone whose hooks were wired from a
+		// version-stamped path; re-point them so the update does not leave a
+		// hook pointing at a directory that no longer exists.
+		repaired, repairWarn := repairPraxisHooks()
+
 		if asJSON {
 			payload := map[string]any{
 				"updated":         true,
@@ -170,6 +175,7 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 		}
 
 		fmt.Fprintf(out, "✓ Updated to %s.\n", latest)
+		printHookRepair(out, asJSON, repaired, repairWarn)
 		if refreshErr != nil {
 			fmt.Fprintf(out, "  ⚠ skill refresh skipped: %v\n", refreshErr)
 		} else if len(refreshed) > 0 {
