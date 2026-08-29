@@ -125,17 +125,18 @@ func repairPraxisHooks() (repaired []string, warning string) {
 	if err != nil {
 		return nil, ""
 	}
+	var failed []string // one host must not hide another's failure
 	for _, host := range claudehooks.Hosts(home) {
 		changed, err := claudehooks.Repair(host, praxisPath)
 		if err != nil {
-			warning = err.Error() // e.g. hand-edited settings.json is not valid JSON
+			failed = append(failed, err.Error()) // e.g. hand-edited settings.json is not valid JSON
 			continue
 		}
 		if changed {
 			repaired = append(repaired, host.Harness)
 		}
 	}
-	return repaired, warning
+	return repaired, strings.Join(failed, "; ")
 }
 
 // printHookRepair renders what repairPraxisHooks did, or stays silent.
