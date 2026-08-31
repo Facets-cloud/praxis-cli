@@ -263,6 +263,26 @@ Per-host differences that are NOT guessable: Gemini's event is
 Codex needs an in-app `/hooks` trust before it runs anything; Antigravity has no
 hook mechanism. See the `Hosts()` table.
 
+### Two paths to the same binary — do not mix them up
+
+`praxis update` and the hook writer need OPPOSITE answers, and each is wrong for
+the other:
+
+- A **hook command** must name the DURABLE path (`claudehooks.BinaryPath` — the
+  PATH entry / brew's `bin/praxis` symlink). A resolved path names a
+  version directory that the next upgrade deletes.
+- A **file replacement** must name the REAL file (`selfupdate.TargetPath`).
+  `os.Rename` does not follow a destination symlink — it REPLACES it — so
+  renaming over brew's `bin/praxis` turns that link into a regular file and
+  Homebrew can no longer upgrade or uninstall (`brew upgrade` then fails with
+  "already a Binary at …", and its rollback can purge the Caskroom entry).
+
+`praxis update` additionally REFUSES a Homebrew-managed install
+(`selfupdate.HomebrewCask`) rather than write into brew's tree: brew records the
+version in its own metadata, so a self-update there makes `brew info` report a
+version that is not on disk. This exits 0 with `reason: homebrew_managed` — it
+is guidance, not a failure.
+
 ## Build & run
 
 ```bash

@@ -398,3 +398,81 @@ func TestAtomicReplace_TargetMissing_DefaultsTo0755(t *testing.T) {
 		t.Errorf("perm = %o, want 0755 (fallback when current missing)", mode)
 	}
 }
+
+// os.Rename does not follow a destination symlink. A self-update that renames
+// over a package manager's bin/ link DESTROYS that link, which is how a
+// Homebrew install stops being upgradeable. TargetPath must hand back the real
+// file so the link survives.
+func TestTargetPathResolvesToTheRealFileAndKeepsTheLink(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "praxis_darwin_arm64")
+	if err := os.WriteFile(real, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "praxis")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := TargetPath(link)
+	if err != nil {
+		t.Fatalf("TargetPath: %v", err)
+	}
+	if got == link {
+		t.Fatalf("TargetPath returned the link itself — a rename would destroy it")
+	}
+
+	// Replacing the resolved target must leave the link intact and current.
+	newBin := filepath.Join(dir, "downloaded")
+	if err := os.WriteFile(newBin, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := AtomicReplace(got, newBin); err != nil {
+		t.Fatalf("AtomicReplace: %v", err)
+	}
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("lstat link: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link became a regular file — this is the Homebrew breakage")
+	}
+	body, err := os.ReadFile(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "new" {
+		t.Fatalf("link resolves to %q, want the updated binary", body)
+	}
+}
+
+func TestTargetPathMissingFile(t *testing.T) {
+	if _, err := TargetPath(filepath.Join(t.TempDir(), "absent")); err == nil {
+		t.Fatal("want an error for a path that does not exist")
+	}
+}
+
+func TestHomebrewCask(t *testing.T) {
+	tests := []struct {
+		name, in string
+		want     bool
+	}{
+		{"arm mac cask", "/opt/homebrew/Caskroom/praxis/1.8.1/praxis_darwin_arm64", true},
+		{"intel mac cask", "/usr/local/Caskroom/praxis/1.8.1/praxis_darwin_amd64", true},
+		{"linuxbrew", "/home/linuxbrew/.linuxbrew/Caskroom/praxis/1.8.1/praxis_linux_amd64", true},
+		{"go install", "/Users/x/go/bin/praxis", false},
+		{"manual install", "/usr/local/bin/praxis", false},
+		{"caskroom as a name fragment", "/opt/MyCaskroomTool/praxis", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, got := HomebrewCask(tc.in)
+			if got != tc.want {
+				t.Fatalf("HomebrewCask(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+			if got && dir != filepath.Dir(tc.in) {
+				t.Fatalf("dir = %q, want %q", dir, filepath.Dir(tc.in))
+			}
+		})
+	}
+}
