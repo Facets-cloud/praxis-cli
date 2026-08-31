@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -201,6 +202,38 @@ func ParseChecksums(body, assetName string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("checksum for %s not found in checksums.txt", assetName)
+}
+
+// TargetPath is the file a self-update must replace: the real file behind
+// path, never a symlink to it. os.Rename does NOT follow a destination
+// symlink — it replaces the link itself — so an update run through a
+// package manager's bin/ link would delete that link and leave the manager
+// without the binary it believes it owns.
+//
+// This is the OPPOSITE of what a hook command needs. A hook must name the
+// durable path (the link, see claudehooks.BinaryPath); a file replacement must
+// name the real file.
+func TargetPath(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+// HomebrewCask reports the version directory when path is a file Homebrew
+// staged, and whether it is one. Homebrew records the installed version in its
+// own metadata, so a self-update into that tree makes `brew info` report a
+// version that is not on disk. `brew upgrade` is the correct command there.
+// The Homebrew prefix varies by platform, so the Caskroom path segment is the
+// marker, not a fixed prefix.
+func HomebrewCask(path string) (string, bool) {
+	const seg = string(filepath.Separator) + "Caskroom" + string(filepath.Separator)
+	i := strings.Index(path, seg)
+	if i < 0 {
+		return "", false
+	}
+	return filepath.Dir(path), true
 }
 
 // AtomicReplace replaces the binary at currentPath with the file at newPath.
