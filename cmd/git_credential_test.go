@@ -105,9 +105,17 @@ func assertSilentFallThrough(t *testing.T, protocol, host string) {
 	}
 }
 
-func TestGitCredentialGet_RefusesNonGitHubHosts(t *testing.T) {
-	// "github.com.evil.test" is the suffix trap; "" is a missing host.
-	for _, host := range []string{"gitlab.com", "evil.example.com", "github.com.evil.test", ""} {
+func TestGitCredentialGet_RefusesNonBrokeredHosts(t *testing.T) {
+	// "*.evil.test" are the suffix/impostor traps (gitlab/bitbucket entries
+	// are exact-match only); "" is a missing host.
+	for _, host := range []string{
+		"evil.example.com",
+		"github.com.evil.test",
+		"gitlab.com.evil.test",
+		"bitbucket.org.evil.test",
+		"sub.gitlab.com", // no subdomain logic for OAuth hosts
+		"",
+	} {
 		t.Run(host, func(t *testing.T) { assertSilentFallThrough(t, "https", host) })
 	}
 }
@@ -118,22 +126,40 @@ func TestGitCredentialGet_RefusesNonHTTPSProtocol(t *testing.T) {
 	}
 }
 
-func TestGitCredentialGet_AllowsGitHubHosts(t *testing.T) {
-	for _, host := range []string{"github.com", "GitHub.COM", "acme.ghe.com", "github.com:443"} {
-		t.Run(host, func(t *testing.T) {
+func TestGitCredentialGet_AllowsBrokeredHosts(t *testing.T) {
+	// Per-provider usernames come from the SERVER's response and must reach
+	// git unchanged (x-access-token is only a fallback for empty username).
+	tests := []struct {
+		host     string
+		username string
+		token    string
+	}{
+		{"github.com", "x-access-token", "ghs_abc"},
+		{"GitHub.COM", "x-access-token", "ghs_abc"},
+		{"acme.ghe.com", "x-access-token", "ghs_abc"},
+		{"github.com:443", "x-access-token", "ghs_abc"},
+		{"gitlab.com", "oauth2", "glat_abc"},
+		{"bitbucket.org", "x-token-auth", "bbat_abc"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.host, func(t *testing.T) {
 			orig := callMCP
 			defer func() { callMCP = orig }()
 			callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
-				env := `{"content":[{"type":"text","text":"{\"username\":\"x-access-token\",\"password\":\"ghs_abc\"}"}]}`
+				env := `{"content":[{"type":"text","text":"{\"username\":\"` + tc.username +
+					`\",\"password\":\"` + tc.token + `\"}"}]}`
 				return []byte(env), 200, nil
 			}
 			var out bytes.Buffer
-			in := strings.NewReader("protocol=https\nhost=" + host + "\n\n")
+			in := strings.NewReader("protocol=https\nhost=" + tc.host + "\n\n")
 			if err := runGitCredential(&out, in, "get",
 				func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil }); err != nil {
 				t.Fatalf("err: %v", err)
 			}
-			if !strings.Contains(out.String(), "password=ghs_abc") {
+			if !strings.Contains(out.String(), "username="+tc.username+"\n") {
+				t.Fatalf("expected username %q to pass through, got %q", tc.username, out.String())
+			}
+			if !strings.Contains(out.String(), "password="+tc.token+"\n") {
 				t.Fatalf("expected a credential, got %q", out.String())
 			}
 		})
