@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Facets-cloud/praxis-cli/internal/claudehooks"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
@@ -14,6 +15,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// `praxis setup` also re-points hooks an older praxis wired from a path that an
+// upgrade has since deleted — see repairPraxisHooks.
+//
 // `praxis setup` and the first-run auto-install land the pre-login GTM skill
 // (praxis-getting-started) into the user's AI host the moment praxis is
 // installed — WITHOUT a login. This solves the bootstrap chicken-and-egg: skills
@@ -45,14 +49,18 @@ var setupCmd = &cobra.Command{
 (Claude Code, Codex, Gemini CLI) so your assistant knows what Praxis by
 Facets does, where to sign up, and how to log in — before you authenticate.
 
-No credentials or network are required. This runs automatically on first use
-and via the Homebrew post-install hook.
+It also re-points any hook an older praxis wired from a path that an upgrade
+has since deleted. No hook is added, and no credentials or network are
+required. This runs automatically on first use and via the Homebrew
+post-install hook.
 
   Next: praxis login --url https://<your-account-id>.console.facets.cloud`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(setupJSON, false, out)
+		repaired, repairWarn := repairPraxisHooks()
+		printHookRepair(out, asJSON, repaired, repairWarn)
 		n, err := installBootstrapSkills(out, asJSON)
 		if err != nil {
 			return err
@@ -98,6 +106,50 @@ func installBootstrapSkills(out io.Writer, asJSON bool) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// repairPraxisHooks re-points already-wired hooks at the stable binary path. An
+// upgrade deletes the version-stamped directory an older praxis wired from, so
+// the cask post-install hook (which runs `praxis setup`) heals those hooks
+// without a login. Two limits keep it from touching hooks it should not: it
+// adds no hook, so a user who never logged in stays untouched; and it needs a
+// PATH entry that IS the running binary, so a throwaway build (a repo `./praxis
+// setup`, a downloaded `praxis update`) cannot repoint a real install at itself.
+// Callers print, so the notice can follow their own result line.
+func repairPraxisHooks() (repaired []string, warning string) {
+	praxisPath, ok := claudehooks.StableBinaryPath()
+	if !ok {
+		return nil, ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, ""
+	}
+	var failed []string // one host must not hide another's failure
+	for _, host := range claudehooks.Hosts(home) {
+		changed, err := claudehooks.Repair(host, praxisPath)
+		if err != nil {
+			failed = append(failed, err.Error()) // e.g. hand-edited settings.json is not valid JSON
+			continue
+		}
+		if changed {
+			repaired = append(repaired, host.Harness)
+		}
+	}
+	return repaired, strings.Join(failed, "; ")
+}
+
+// printHookRepair renders what repairPraxisHooks did, or stays silent.
+func printHookRepair(out io.Writer, asJSON bool, repaired []string, warning string) {
+	if asJSON {
+		return
+	}
+	if len(repaired) > 0 {
+		fmt.Fprintf(out, "  ✓ re-pointed hooks at the current praxis for: %s\n", strings.Join(repaired, ", "))
+	}
+	if warning != "" {
+		fmt.Fprintf(out, "  ⚠ some hooks not re-pointed (re-run `praxis login` after fixing): %s\n", warning)
+	}
 }
 
 // bootstrapMarkerPath is ~/.praxis/.bootstrap-v1, the sentinel that makes

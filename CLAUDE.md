@@ -28,6 +28,26 @@ Concretely:
 - When a trade-off pits multi-profile ergonomics against single-profile
   cleanliness, single-profile wins.
 
+## Match this repo, and keep it small
+
+Before adding anything, open 2-3 existing files that do the same job and copy
+their shape. A diff that reads like a different person wrote it is a review cost
+even when the logic is right.
+
+- **Smallest diff that works.** Fewest files, fewest new packages. Extending an
+  existing file beats a new one; a new one beats a new package.
+- **Comments: match the neighbours, which are terse.** One line in a function
+  body. Package/function docs 3-8 lines, one long block per file at most. Never
+  explain what the code says, never defend a design — that goes in the PR body.
+- **No layer for data we already have.** Check what the server already sends and
+  what the CLI already parses before writing a parser.
+- **No speculative entries.** A filter list, config key or flag with nothing
+  using it today is dead state; leave it out.
+
+Measure, don't guess: `grep -cE '^\s*//' <file>`, and prefer files whose
+`git log` has no `Co-Authored-By: Claude` — that is a real baseline, not prior
+AI output.
+
 ## Testing — non-negotiable
 
 **Unit test coverage is required, not optional.**
@@ -39,11 +59,11 @@ Concretely:
   passes after.
 - `make test` (= `go test -race ./...`) must stay green on every commit
   to `main`. CI gates merges on this.
-- Coverage target: **≥ 75%** across the board. Use
-  `go test -cover ./...` before opening a PR. This includes `cmd/*`
-  cobra commands — test them with `cmd.SetOut(&buf)` and call
-  `RunE`/`Run` directly. Mock external dependencies via package-level
-  function vars (see `cmd/update.go`'s seams as a reference).
+- Never lower a package's coverage. Use `go test -cover ./...` before
+  opening a PR. This includes `cmd/*` cobra commands — test them with
+  `cmd.SetOut(&buf)` and call `RunE`/`Run` directly. Mock external
+  dependencies via package-level function vars (see `cmd/update.go`'s
+  seams as a reference).
 
 ### Conventions
 
@@ -68,6 +88,8 @@ cmd/                  cobra command tree (only commands that DO something
   completion.go       `praxis completion {bash|zsh|fish|powershell}`
   logout.go           `praxis logout` (deletes ~/.praxis/credentials)
   duty.go             `praxis duty *` (Agent Schedule runs/findings/reports)
+  hook.go             `praxis hook user-prompt-submit` (hidden) — the AI-host
+                       prompt hook that nudges toward a matching praxis skill
 internal/             pure logic, unit-tested
   paths/              Praxis filesystem locations. Two roots: the HOME root
                        (~/.praxis, always holds credentials + global pointer)
@@ -80,6 +102,13 @@ internal/             pure logic, unit-tested
                        can cross-check raptor's control plane against the
                        praxis profile URL; never writes raptor's store
   selfupdate/         GitHub Releases fetch, checksum, atomic replace
+  hosthooks/          merges praxis's hooks into each AI host's hook config.
+                       ONE JSON merge engine, per-host differences in a Host
+                       spec — file path, event key, and timeout UNIT all
+                       differ (see the invariants below)
+  skillnudge/         keyword index built from installed skills' frontmatter
+                       `triggers:` + a small static Facets vocabulary; decides
+                       which skill a prompt should invoke
 Makefile              build (with ldflags), install, test, lint, clean
 .goreleaser.yml       release config — raw binaries × 4 arches + brew tap
 .github/workflows/    ci.yml (every push), release.yml (on tag)
@@ -218,6 +247,41 @@ Invariants to preserve when touching this area:
   both come from the same one. Resolution only ADDS matches, so a symlink
   pointing out of home keeps working. Don't reintroduce a bare
   `isUnder(home, cwd)` on those two.
+
+## AI-host hooks (the skill nudge)
+
+`praxis login` wires a prompt-submit hook into each host that has one; `logout`
+removes it. The command written into a host config must be a path that SURVIVES
+an upgrade (`claudehooks.BinaryPath`): Homebrew stages the binary under
+`Caskroom/<version>/`, so a resolved path dies at the next upgrade. `praxis
+setup` and `praxis update` call `claudehooks.Repair` to heal hooks wired that
+way — it re-points existing entries only, and only from a PATH entry that IS the
+running binary, so a throwaway build cannot capture a real install's hooks.
+
+Per-host differences that are NOT guessable: Gemini's event is
+`BeforeAgent` (not `UserPromptSubmit`) and its timeout is in MILLISECONDS;
+Codex needs an in-app `/hooks` trust before it runs anything; Antigravity has no
+hook mechanism. See the `Hosts()` table.
+
+### Two paths to the same binary — do not mix them up
+
+`praxis update` and the hook writer need OPPOSITE answers, and each is wrong for
+the other:
+
+- A **hook command** must name the DURABLE path (`claudehooks.BinaryPath` — the
+  PATH entry / brew's `bin/praxis` symlink). A resolved path names a
+  version directory that the next upgrade deletes.
+- A **file replacement** must name the REAL file (`selfupdate.TargetPath`).
+  `os.Rename` does not follow a destination symlink — it REPLACES it — so
+  renaming over brew's `bin/praxis` turns that link into a regular file and
+  Homebrew can no longer upgrade or uninstall (`brew upgrade` then fails with
+  "already a Binary at …", and its rollback can purge the Caskroom entry).
+
+`praxis update` additionally REFUSES a Homebrew-managed install
+(`selfupdate.HomebrewCask`) rather than write into brew's tree: brew records the
+version in its own metadata, so a self-update there makes `brew info` report a
+version that is not on disk. This exits 0 with `reason: homebrew_managed` — it
+is guidance, not a failure.
 
 ## Build & run
 

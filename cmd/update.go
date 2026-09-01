@@ -25,6 +25,7 @@ var (
 	verifyChecksum     = selfupdate.VerifyChecksum
 	parseChecksums     = selfupdate.ParseChecksums
 	atomicReplace      = selfupdate.AtomicReplace
+	selfPath           = os.Executable
 
 	// Freshness-engine seams (see cmd/update_check.go). raptor is a second tool
 	// the same engine tracks; these let tests stub its release + local version.
@@ -47,7 +48,11 @@ var updateCmd = &cobra.Command{
 download the asset for this OS/arch, verify its checksum against the release's
 checksums.txt, and atomically replace the running binary.
 
-Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
+Homebrew installs are left to Homebrew: this command refuses them and names
+'brew upgrade --cask praxis', so brew's recorded version stays true.`,
+	// raptor names the same operation `raptor upgrade`, and Homebrew names it
+	// `brew upgrade`. Accept both verbs here so neither habit hits an error.
+	Aliases: []string{"upgrade"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(updateJSON, false, out)
@@ -84,9 +89,33 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 			return err
 		}
 
-		myPath, err := os.Executable()
+		myPath, err := selfPath()
 		if err != nil {
 			return fmt.Errorf("locate self: %w", err)
+		}
+		// Replace the real file, not a link to it (see selfupdate.TargetPath).
+		myPath, err = selfupdate.TargetPath(myPath)
+		if err != nil {
+			return fmt.Errorf("locate self: %w", err)
+		}
+		// Homebrew owns its own tree; writing into it desyncs brew's recorded
+		// version from the file on disk. Refuse and name the right command.
+		if _, ok := selfupdate.HomebrewCask(myPath); ok {
+			if asJSON {
+				return render.JSON(out, map[string]any{
+					"updated":  false,
+					"reason":   "homebrew_managed",
+					"version":  current,
+					"latest":   latest,
+					"run":      "brew upgrade --cask praxis",
+					"location": myPath,
+				})
+			}
+			fmt.Fprintf(out, "Update available: %s → %s\n", current, latest)
+			fmt.Fprintf(out, "\nHomebrew installed this praxis (%s).\n", myPath)
+			fmt.Fprintln(out, "Run this instead, so brew keeps track of the version:")
+			fmt.Fprintln(out, "\n  brew update && brew upgrade --cask praxis")
+			return nil
 		}
 
 		if !asJSON {
@@ -153,6 +182,11 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 		// the binary update.
 		refreshed, refreshErr := refreshSkills()
 
+		// The binary just moved for anyone whose hooks were wired from a
+		// version-stamped path; re-point them so the update does not leave a
+		// hook pointing at a directory that no longer exists.
+		repaired, repairWarn := repairPraxisHooks()
+
 		if asJSON {
 			payload := map[string]any{
 				"updated":         true,
@@ -167,6 +201,7 @@ Homebrew users: prefer 'brew upgrade praxis' so brew tracks the version.`,
 		}
 
 		fmt.Fprintf(out, "✓ Updated to %s.\n", latest)
+		printHookRepair(out, asJSON, repaired, repairWarn)
 		if refreshErr != nil {
 			fmt.Fprintf(out, "  ⚠ skill refresh skipped: %v\n", refreshErr)
 		} else if len(refreshed) > 0 {

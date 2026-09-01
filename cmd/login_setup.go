@@ -28,11 +28,8 @@ type postAuthState struct {
 	removedAgents   []agentInstallationLite
 	snapshotPath    string
 	snapshotWarning string
-	// hooksWired is the Claude settings.json path where the use-ig cwd hooks
-	// were wired (SessionStart + CwdChanged), or "" when no claude-code host
-	// was detected. The hooks nudge toward use-ig when cwd is an ig catalog
-	// repo. AI hosts read this to know the nudge is live.
-	hooksWired string
+	// hooksWired lists the host config files praxis wrote hooks into.
+	hooksWired []string
 	// staleTools lists tools (praxis, raptor) found behind their latest release
 	// at login, so the agent can offer an upgrade.
 	staleTools []Freshness
@@ -284,59 +281,47 @@ func noticeFreshness(out io.Writer, asJSON bool) []Freshness {
 	return stale
 }
 
-// wirePraxisHooks installs praxis's SessionStart + CwdChanged hooks into the
-// claude-code host's USER-level settings.json so a session inside an ig catalog
-// repo gets nudged toward the use-ig skill (see internal/claudehooks +
-// `praxis ig hook`). Only claude-code has a settings.json hook mechanism; other
-// hosts get skills but no hook. Returns the settings path on a successful wire,
-// "" otherwise. Never fatal: a wire failure warns and returns "".
-//
-// The settings path is ALWAYS user-level, even under `--local` project scope:
-// the hook resolves the active profile per-cwd at run time, so a single
-// user-level hook serves every project — and logout (which unwires the
-// user-level path) can then always clean it up. Deriving the path from the
-// possibly-project-scoped `hosts` entry would strand the hook in a project's
-// settings.json that logout never touches.
-func wirePraxisHooks(out io.Writer, asJSON bool, hosts []harness.Harness) string {
-	detected := false
-	for _, h := range hosts {
-		if h.Name == "claude-code" {
-			detected = true
-			break
-		}
-	}
-	if !detected {
-		return ""
-	}
-	cc, ok := harness.ByName("claude-code") // fresh, unscoped (user-level) harness
-	if !ok {
-		return ""
-	}
-	praxisPath, err := os.Executable()
+// wirePraxisHooks installs praxis's hooks into every detected host that has
+// them (see claudehooks.Hosts). Paths are always USER-level, even under
+// --local, because logout only cleans those. Never fatal: a wire failure warns.
+func wirePraxisHooks(out io.Writer, asJSON bool, hosts []harness.Harness) []string {
+	praxisPath, err := claudehooks.BinaryPath()
 	if err != nil {
 		if !asJSON {
 			fmt.Fprintf(out, "Warning: could not resolve praxis binary for hook wiring: %v\n", err)
 		}
-		return ""
+		return nil
 	}
-	if resolved, rErr := filepath.EvalSymlinks(praxisPath); rErr == nil {
-		praxisPath = resolved
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
 	}
-	settingsPath := filepath.Join(filepath.Dir(cc.SkillDir), "settings.json")
-	changed, err := claudehooks.Install(settingsPath, praxisPath)
-	switch {
-	case err != nil:
-		if !asJSON {
-			fmt.Fprintf(out, "Warning: use-ig hooks not wired (skills installed; wire by hand or re-run): %v\n", err)
+	var wired []string
+	for _, h := range hosts {
+		host, ok := claudehooks.ByHarness(home, h.Name)
+		if !ok || len(host.Events) == 0 {
+			continue // no hook mechanism for this host
 		}
-		return ""
-	case changed && !asJSON:
-		fmt.Fprintf(out, "✓ claude-code: wired SessionStart + CwdChanged hooks → %s\n", settingsPath)
-		fmt.Fprintln(out, "  (they nudge toward use-ig when cwd is an ig catalog repo)")
-	case !changed && !asJSON:
-		fmt.Fprintf(out, "✓ claude-code: use-ig hooks already wired → %s\n", settingsPath)
+		changed, err := claudehooks.Install(host, praxisPath)
+		if err != nil {
+			if !asJSON {
+				fmt.Fprintf(out, "Warning: %s hooks not wired (skills installed; re-run to retry): %v\n", h.Name, err)
+			}
+			continue
+		}
+		wired = append(wired, host.File)
+		if !asJSON {
+			state := "wired"
+			if !changed {
+				state = "already wired"
+			}
+			fmt.Fprintf(out, "✓ %s: hooks %s → %s\n", h.Name, state, host.File)
+			if h.Name == "codex" {
+				fmt.Fprintln(out, "  run /hooks inside Codex once to trust it")
+			}
+		}
 	}
-	return settingsPath
+	return wired
 }
 
 // resolveProjectScope reads the already-resolved active root and reports the
