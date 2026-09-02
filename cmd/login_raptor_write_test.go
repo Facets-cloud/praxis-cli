@@ -35,13 +35,13 @@ func stubAuthMeOK(t *testing.T) {
 	})
 }
 
-// driveInteractivePAT runs the real PAT prompt tier in human mode. RunE sees a
-// non-TTY stdout under `go test` and would otherwise skip the prompt as a
-// machine invocation. The browser tier is stubbed to fail the test.
+// driveInteractivePAT runs the real control-plane PAT tier, with the browser
+// handshake stubbed to deposit immediately. The API-key tier is stubbed to fail
+// the test, so anything that falls through is caught.
 func driveInteractivePAT(t *testing.T, username, token string) {
 	t.Helper()
 	clearFacetsEnv(t)
-	stubPrompts(t, username, token)
+	stubHandshake(t, sessionCredential{Token: token, Username: username}, nil)
 	stubAuthMode(t, facetsAuthMode)
 	stubOpenBrowser(t)
 	orig := interactivePATFn

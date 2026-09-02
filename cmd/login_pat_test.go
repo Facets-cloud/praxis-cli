@@ -2,12 +2,15 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 )
@@ -26,12 +29,32 @@ func stubPrompts(t *testing.T, username, token string) {
 	t.Cleanup(func() { stdinIsTTY, readSecret, readLine = origTTY, origSecret, origLine })
 }
 
-// stubAuthMode swaps the /auth/status probe.
+// stubAuthMode swaps the /auth/status probe, reporting a deployment that
+// serves the zero-copy handshake. stubAuthStatus covers the other combinations.
 func stubAuthMode(t *testing.T, mode string) {
 	t.Helper()
-	orig := fetchAuthMode
-	fetchAuthMode = func(string) string { return mode }
-	t.Cleanup(func() { fetchAuthMode = orig })
+	stubAuthStatus(t, authStatus{Mode: mode, PATHandshake: true})
+}
+
+func stubAuthStatus(t *testing.T, st authStatus) {
+	t.Helper()
+	orig := fetchAuthStatus
+	fetchAuthStatus = func(string) authStatus { return st }
+	t.Cleanup(func() { fetchAuthStatus = orig })
+}
+
+// stubHandshake makes the browser deposit land immediately. Without it the
+// poll runs for the full --timeout against a host that does not exist.
+func stubHandshake(t *testing.T, cred sessionCredential, err error) *string {
+	t.Helper()
+	var gotNonce string
+	orig := pollSessionFn
+	pollSessionFn = func(_ context.Context, _, nonce string, _ time.Duration) (sessionCredential, error) {
+		gotNonce = nonce
+		return cred, err
+	}
+	t.Cleanup(func() { pollSessionFn = orig })
+	return &gotNonce
 }
 
 // stubOpenBrowser records the URL login would open without opening it.
@@ -47,19 +70,19 @@ func stubOpenBrowser(t *testing.T) *string {
 // ─── patPageURL ──────────────────────────────────────────────────────────
 
 func TestPatPageURL(t *testing.T) {
-	// Must stay byte-identical to what `raptor login` opens
-	// (raptor/cmd/login.go: baseURL + "/v2/home#personal-access-tokens"), so a
-	// token created for one CLI is the same credential the other asks for.
+	// The nonce must survive into the query verbatim: it is the whole
+	// credential tying this browser tab to the waiting CLI process.
+	const nonce = "abc123"
 	tests := []struct {
 		name, in, want string
 	}{
-		{"plain", "https://cp.test", "https://cp.test/v2/home#personal-access-tokens"},
-		{"trailing slash", "https://cp.test/", "https://cp.test/v2/home#personal-access-tokens"},
-		{"loopback", "http://127.0.0.1:8080", "http://127.0.0.1:8080/v2/home#personal-access-tokens"},
+		{"plain", "https://cp.test", "https://cp.test/ui/ai/cli-login?cli_session=abc123"},
+		{"trailing slash", "https://cp.test/", "https://cp.test/ui/ai/cli-login?cli_session=abc123"},
+		{"loopback", "http://127.0.0.1:8080", "http://127.0.0.1:8080/ui/ai/cli-login?cli_session=abc123"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := patPageURL(tc.in); got != tc.want {
+			if got := patPageURL(tc.in, nonce); got != tc.want {
 				t.Errorf("patPageURL(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
@@ -70,25 +93,25 @@ func TestPatPageURL(t *testing.T) {
 
 func TestTryInteractivePAT_Skips(t *testing.T) {
 	tests := []struct {
-		name     string
-		asJSON   bool
-		tty      bool
-		authMode string
-		baseURL  string
+		name      string
+		asJSON    bool
+		authMode  string
+		handshake bool
+		baseURL   string
 	}{
-		{name: "json output is machine-invoked", asJSON: true, tty: true, authMode: facetsAuthMode, baseURL: "https://cp.test"},
-		{name: "no tty to prompt on", tty: false, authMode: facetsAuthMode, baseURL: "https://cp.test"},
-		{name: "not a facets deployment", tty: true, authMode: "general", baseURL: "https://cp.test"},
-		{name: "probe unreachable or too old", tty: true, authMode: "", baseURL: "https://cp.test"},
-		{name: "plaintext non-loopback url", tty: true, authMode: facetsAuthMode, baseURL: "http://cp.test"},
+		// --json and a missing TTY no longer skip: the user types nothing, so
+		// an AI host gets the same flow (and the raptor credentials with it).
+		{name: "not a facets deployment", authMode: "general", handshake: true, baseURL: "https://cp.test"},
+		{name: "probe unreachable or too old", authMode: "", handshake: true, baseURL: "https://cp.test"},
+		{name: "deployment predates the handshake", authMode: facetsAuthMode, handshake: false, baseURL: "https://cp.test"},
+		{name: "plaintext non-loopback url", authMode: facetsAuthMode, handshake: true, baseURL: "http://cp.test"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateHome(t)
 			resetLoginFlags(t)
-			stubPrompts(t, "u@corp", "pat-should-not-be-sent")
-			stdinIsTTY = func() bool { return tc.tty }
-			stubAuthMode(t, tc.authMode)
+			stubAuthStatus(t, authStatus{Mode: tc.authMode, PATHandshake: tc.handshake})
+			stubHandshake(t, sessionCredential{}, errors.New("must not poll"))
 			stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
 				t.Fatal("verified a PAT on a path that should have been skipped")
 				return nil, nil
@@ -102,24 +125,27 @@ func TestTryInteractivePAT_Skips(t *testing.T) {
 	}
 }
 
-func TestTryInteractivePAT_EmptyAnswerFallsThrough(t *testing.T) {
-	// Pressing Enter at either prompt is the documented way to say "skip this,
-	// give me a Praxis API key" — it must not be an error.
+func TestTryInteractivePAT_IncompleteHandshakeFallsThrough(t *testing.T) {
+	// Abandoning the browser, or a deposit carrying no username, must hand the
+	// login on to the API-key flow rather than fail it. A PAT with no username
+	// could never authenticate — it has no identity header to travel with.
 	tests := []struct {
-		name, username, token string
+		name string
+		cred sessionCredential
+		err  error
 	}{
-		{"blank username", "", "tok"},
-		{"blank token", "u@corp", ""},
+		{name: "browser never completed", err: context.DeadlineExceeded},
+		{name: "deposit carries no username", cred: sessionCredential{Token: "pat-1"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateHome(t)
 			resetLoginFlags(t)
-			stubPrompts(t, tc.username, tc.token)
 			stubAuthMode(t, facetsAuthMode)
 			stubOpenBrowser(t)
+			stubHandshake(t, tc.cred, tc.err)
 			stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
-				t.Fatal("verified empty credentials")
+				t.Fatal("verified an incomplete credential")
 				return nil, nil
 			})
 
@@ -133,11 +159,11 @@ func TestTryInteractivePAT_EmptyAnswerFallsThrough(t *testing.T) {
 
 // ─── the happy path ──────────────────────────────────────────────────────
 
-func TestTryInteractivePAT_PersistsPastedPAT(t *testing.T) {
+func TestTryInteractivePAT_PersistsHandshakePAT(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
 	stubPostAuth(t)
-	stubPrompts(t, "u@corp", "pat-pasted")
+	gotNonce := stubHandshake(t, sessionCredential{Token: "pat-pasted", Username: "u@corp"}, nil)
 	stubAuthMode(t, facetsAuthMode)
 	opened := stubOpenBrowser(t)
 	restoreStderr := captureStderr(t)
@@ -153,8 +179,13 @@ func TestTryInteractivePAT_PersistsPastedPAT(t *testing.T) {
 	if !handled || err != nil {
 		t.Fatalf("handled=%v err=%v, want true/nil", handled, err)
 	}
-	if *opened != "https://cp.test/v2/home#personal-access-tokens" {
-		t.Errorf("opened %q, want the control plane's PAT page", *opened)
+	// The page must carry the SAME nonce the CLI then polls — that pairing is
+	// the whole credential linking this browser tab to this process.
+	if want := patPageURL("https://cp.test", *gotNonce); *opened != want {
+		t.Errorf("opened %q, want %q", *opened, want)
+	}
+	if len(*gotNonce) != 48 {
+		t.Errorf("nonce %q is %d chars, want the 48 the server validates", *gotNonce, len(*gotNonce))
 	}
 	// A control-plane PAT is only valid alongside the identity header.
 	if gotAuth["Authorization"] != "Bearer pat-pasted" || gotAuth["X-Facets-Username"] != "u@corp" {
@@ -162,7 +193,7 @@ func TestTryInteractivePAT_PersistsPastedPAT(t *testing.T) {
 	}
 	prof := mustLoadProfile(t, "default")
 	if prof.Token != "pat-pasted" || prof.Username != "u@corp" || prof.AuthMode != credentials.AuthModeBasic {
-		t.Errorf("persisted profile = %+v, want the pasted PAT in %q mode", prof, credentials.AuthModeBasic)
+		t.Errorf("persisted profile = %+v, want the handshake PAT in %q mode", prof, credentials.AuthModeBasic)
 	}
 }
 
@@ -181,7 +212,7 @@ func TestTryInteractivePAT_RejectedPATFallsThrough(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateHome(t)
 			resetLoginFlags(t)
-			stubPrompts(t, "u@corp", "bad-pat")
+			stubHandshake(t, sessionCredential{Token: "bad-pat", Username: "u@corp"}, nil)
 			stubAuthMode(t, facetsAuthMode)
 			stubOpenBrowser(t)
 			readStderr := captureStderr(t)
@@ -336,8 +367,8 @@ func TestFetchAuthMode(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			if got := fetchAuthMode(srv.URL); got != tc.want {
-				t.Errorf("fetchAuthMode = %q, want %q", got, tc.want)
+			if got := fetchAuthStatus(srv.URL).Mode; got != tc.want {
+				t.Errorf("fetchAuthStatus().Mode = %q, want %q", got, tc.want)
 			}
 			if tc.wantHit && path != "/ai-api/auth/status" {
 				t.Errorf("probed %q, want /ai-api/auth/status", path)
@@ -352,28 +383,36 @@ func TestFetchAuthMode_UnreachableIsEmpty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	url := srv.URL
 	srv.Close()
-	if got := fetchAuthMode(url); got != "" {
-		t.Errorf("fetchAuthMode on a closed server = %q, want \"\"", got)
+	if got := fetchAuthStatus(url).Mode; got != "" {
+		t.Errorf("fetchAuthStatus on a closed server = %q, want \"\"", got)
 	}
 }
 
-func TestRunLoginDryRun_ReportsPATPrompt(t *testing.T) {
-	// --dry-run exists to predict login. Once the PAT prompt sits in front of
-	// the api-key browser, a report that still says "browser" is wrong.
+func TestRunLoginDryRun_ReportsControlPlaneSignIn(t *testing.T) {
+	// --dry-run exists to predict login. It shares interactivePATEligible with
+	// the real chain, so this pins that they cannot drift.
+	//
+	// The assertion is on the whole `action:` line, not a substring: "browser"
+	// is a substring of "control-plane sign-in (browser), else browser", so a
+	// Contains check passes for either answer and proves nothing.
 	tests := []struct {
-		name     string
-		asJSON   bool
-		tty      bool
-		authMode string
-		want     string
+		name      string
+		asJSON    bool
+		tty       bool
+		authMode  string
+		handshake bool
+		want      string
 	}{
-		{name: "human at a tty on a facets deployment", tty: true, authMode: facetsAuthMode,
-			want: "control-plane PAT prompt, else browser"},
-		{name: "not a facets deployment", tty: true, authMode: "general", want: "browser"},
-		{name: "no tty means login would not prompt either", tty: false, authMode: facetsAuthMode, want: "browser"},
-		// JSON output means an AI host is calling, and login skips the prompt
-		// there too — so the report must keep saying browser.
-		{name: "json output", asJSON: true, tty: true, authMode: facetsAuthMode, want: "browser"},
+		{name: "facets deployment serving the handshake", tty: true, authMode: facetsAuthMode, handshake: true,
+			want: "control-plane sign-in (browser), else browser"},
+		// Neither of these gates the tier any more: the user types nothing, so
+		// an AI host takes the same path and gets raptor configured with it.
+		{name: "no tty is no longer a skip", tty: false, authMode: facetsAuthMode, handshake: true,
+			want: "control-plane sign-in (browser), else browser"},
+		{name: "json output is no longer a skip", asJSON: true, tty: true, authMode: facetsAuthMode, handshake: true,
+			want: "control-plane sign-in (browser), else browser"},
+		{name: "not a facets deployment", tty: true, authMode: "general", handshake: true, want: "browser"},
+		{name: "deployment predates the handshake", tty: true, authMode: facetsAuthMode, handshake: false, want: "browser"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -381,7 +420,7 @@ func TestRunLoginDryRun_ReportsPATPrompt(t *testing.T) {
 			resetLoginFlags(t)
 			t.Cleanup(func() { loginDryRun = false })
 			stubPostAuth(t)
-			stubAuthMode(t, tc.authMode)
+			stubAuthStatus(t, authStatus{Mode: tc.authMode, PATHandshake: tc.handshake})
 			origTTY := stdinIsTTY
 			stdinIsTTY = func() bool { return tc.tty }
 			t.Cleanup(func() { stdinIsTTY = origTTY })
@@ -394,11 +433,33 @@ func TestRunLoginDryRun_ReportsPATPrompt(t *testing.T) {
 			if err := runLoginDryRun(&buf, tc.asJSON, "default", "https://cp.test", false); err != nil {
 				t.Fatalf("dry run err: %v", err)
 			}
-			if !strings.Contains(buf.String(), tc.want) {
-				t.Errorf("report = %q, want it to contain %q", buf.String(), tc.want)
+			if got := dryRunAction(t, buf.String(), tc.asJSON); got != tc.want {
+				t.Errorf("action = %q, want %q", got, tc.want)
 			}
 		})
 	}
+}
+
+// dryRunAction pulls the single action value out of either report format, so
+// the assertion is an equality check rather than a substring search.
+func dryRunAction(t *testing.T, report string, asJSON bool) string {
+	t.Helper()
+	if asJSON {
+		var payload struct {
+			Action string `json:"action"`
+		}
+		if err := json.Unmarshal([]byte(report), &payload); err != nil {
+			t.Fatalf("decode dry-run JSON: %v (report %q)", err, report)
+		}
+		return payload.Action
+	}
+	for _, line := range strings.Split(report, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "action:"); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	t.Fatalf("no action line in report %q", report)
+	return ""
 }
 
 func TestPatTransportOK(t *testing.T) {

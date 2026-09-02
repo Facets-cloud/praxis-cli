@@ -99,8 +99,8 @@ func TestPollSessionKey_ReturnsKeyOn200(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "sk_live_FAKE_TEST_KEY" {
-		t.Errorf("got %q, want sk_live_FAKE_TEST_KEY", got)
+	if got.Token != "sk_live_FAKE_TEST_KEY" {
+		t.Errorf("got %q, want sk_live_FAKE_TEST_KEY", got.Token)
 	}
 }
 
@@ -123,8 +123,8 @@ func TestPollSessionKey_KeepsPollingOn204ThenSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "sk_live_AFTER_RETRY" {
-		t.Errorf("got %q, want sk_live_AFTER_RETRY", got)
+	if got.Token != "sk_live_AFTER_RETRY" {
+		t.Errorf("got %q, want sk_live_AFTER_RETRY", got.Token)
 	}
 	if calls.Load() < 3 {
 		t.Errorf("expected at least 3 polls before success, got %d", calls.Load())
@@ -150,8 +150,8 @@ func TestPollSessionKey_KeepsPollingOn5xx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transient 5xx should not be fatal, got err = %v", err)
 	}
-	if got != "k" {
-		t.Errorf("got %q, want k", got)
+	if got.Token != "k" {
+		t.Errorf("got %q, want k", got.Token)
 	}
 }
 
@@ -200,8 +200,8 @@ func TestPollSessionKey_SlowRequestIsTransientNotTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a single stalled request should be transient, got err = %v", err)
 	}
-	if got != "sk_live_AFTER_STALL" {
-		t.Errorf("got %q, want sk_live_AFTER_STALL", got)
+	if got.Token != "sk_live_AFTER_STALL" {
+		t.Errorf("got %q, want sk_live_AFTER_STALL", got.Token)
 	}
 	if calls.Load() < 2 {
 		t.Errorf("expected a retry after the stalled request, got %d calls", calls.Load())

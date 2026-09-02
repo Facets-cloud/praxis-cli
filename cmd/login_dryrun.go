@@ -101,11 +101,10 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		action = "unknown (server unreachable)"
 	}
 
-	// Every path that lands on the API-key browser now passes through the
-	// control-plane PAT prompt first, so the report has to say so or it claims
-	// a browser where login would ask for a token.
+	// Every path that lands on the API-key browser tries the control-plane
+	// sign-in first, so the report has to say so or it names the wrong page.
 	if strings.HasPrefix(action, "browser") && interactivePATEligible(baseURL, asJSON) {
-		action = "control-plane PAT prompt, else " + action
+		action = "control-plane sign-in (browser), else " + action
 	}
 
 	// A control-plane PAT is also saved as a raptor profile; an API key is not.
@@ -118,8 +117,8 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 	case strings.HasPrefix(action, "facets-pat"),
 		strings.HasPrefix(action, "reuse-token") && prof.AuthMode == credentials.AuthModeBasic:
 		raptorEffect = raptorTarget
-	case strings.HasPrefix(action, "control-plane PAT prompt"):
-		raptorEffect = raptorTarget + " if a control-plane PAT is pasted"
+	case strings.HasPrefix(action, "control-plane sign-in"):
+		raptorEffect = raptorTarget + " once the sign-in completes"
 	}
 
 	skillsEffect := fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)
