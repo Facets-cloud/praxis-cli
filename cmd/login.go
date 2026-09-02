@@ -589,6 +589,10 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 // on reuse) and a displayName used only for the human/JSON "logged in as" line.
 func persistAndSetup(out io.Writer, asJSON bool, profileName string, prof credentials.Profile, displayName string, local bool) error {
 	baseURL := prof.URL
+	// Before resolveRaptorPairing, so its "profile not found" warning judges
+	// the seeded state rather than telling the user to run `raptor login` for
+	// credentials praxis just supplied.
+	seedRaptorProfile(prof, raptorPin(profileName))
 	prof.RaptorProfile = resolveRaptorPairing(profileName, baseURL)
 	if err := credentials.Put(profileName, prof); err != nil {
 		return fmt.Errorf("save credentials: %w", err)
@@ -826,4 +830,23 @@ var openBrowser = func(rawURL string) error {
 		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
 	return cmd.Start()
+}
+
+// seedRaptorProfile hands a verified control-plane PAT to raptor when raptor
+// has no section for it yet, so one token creation leaves BOTH CLIs working.
+// Gated on the credential itself (AuthModeBasic — only credentials.FacetsProfile
+// sets it), not on which login tier called: a Praxis API key is not a
+// control-plane credential and would leave raptor holding a token the CP
+// rejects. Best-effort — raptor's store is not praxis's to require.
+func seedRaptorProfile(prof credentials.Profile, pin string) {
+	if prof.AuthMode != credentials.AuthModeBasic {
+		return
+	}
+	wrote, err := raptorstate.SeedProfile(pin, prof.URL, prof.Username, prof.Token)
+	switch {
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "Couldn't save raptor credentials (%v); run `raptor login` if you need raptor too.\n", err)
+	case wrote:
+		fmt.Fprintf(os.Stderr, "Saved raptor credentials too — `raptor` is now logged in to %s.\n", prof.URL)
+	}
 }

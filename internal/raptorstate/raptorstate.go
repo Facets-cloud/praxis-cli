@@ -1,10 +1,12 @@
-// Package raptorstate is a READ-ONLY view of the raptor CLI's auth
+// Package raptorstate mirrors the raptor CLI's auth
 // configuration (~/.facets/credentials + FACETS_* env vars), so `praxis
 // status` can report which control plane raptor commands will hit and
 // whether that matches the active praxis profile's URL.
 //
-// praxis and raptor keep deliberately independent credential stores; this
-// package never writes raptor's file. It is the only reader of it: it mirrors
+// praxis and raptor keep deliberately independent credential stores. This
+// package is the only place that touches raptor's file, and it only ever ADDS
+// to it: SeedProfile adds a section that is absent, and nothing here ever
+// edits or removes one that exists. Otherwise it reads: it mirrors
 // raptor's own profile-resolution rules (raptor/pkg/config.Config.GetProfile)
 // for status reporting, and PAT() hands `praxis login` the control-plane token
 // of a resolved profile (see PAT for why that is not a State field):
@@ -25,6 +27,7 @@
 package raptorstate
 
 import (
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
@@ -227,4 +230,85 @@ func MatchesHost(praxisURL, cpURL string) bool {
 		return false
 	}
 	return strings.EqualFold(a.Host, b.Host)
+}
+
+// SeedProfile writes the control-plane PAT praxis just verified into raptor's
+// credentials file, under the section raptor would READ (pin > FACETS_PROFILE >
+// [default] — resolve()'s order, minus the env override that bypasses the file).
+// Returns wrote=false when that section already exists: it may hold a
+// credential for another control plane, which praxis has no standing to replace.
+func SeedProfile(pinnedProfile, cpURL, username, token string) (bool, error) {
+	path, err := DefaultPath()
+	if err != nil {
+		return false, err
+	}
+	return seedProfile(path, seedTarget(pinnedProfile), cpURL, username, token)
+}
+
+// seedTarget names the section to write. It must agree with resolve() above, or
+// praxis writes [default] while a FACETS_PROFILE shell reads somewhere else.
+func seedTarget(pinnedProfile string) string {
+	if pinnedProfile != "" {
+		return pinnedProfile
+	}
+	if name := os.Getenv("FACETS_PROFILE"); name != "" {
+		return name
+	}
+	return "default"
+}
+
+// seedProfile is the testable core — the path is explicit so tests never touch
+// the real ~/.facets.
+func seedProfile(path, name, cpURL, username, token string) (bool, error) {
+	if name == "" || cpURL == "" || username == "" || token == "" {
+		return false, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	if _, exists := credentials.ParseRawINI(data)[name]; exists {
+		return false, nil
+	}
+
+	// Separator only when appending to existing content, and a newline first if
+	// the file did not end with one.
+	sep := ""
+	if n := len(data); n > 0 {
+		sep = "\n"
+		if data[n-1] != '\n' {
+			sep = "\n\n"
+		}
+	}
+	section := fmt.Sprintf("%s[%s]\ncontrol_plane_url = %s\nusername = %s\ntoken = %s\n",
+		sep, name, cpURL, username, token)
+	return true, writeAtomic(path, append(data, section...))
+}
+
+// writeAtomic mirrors credentials.Save: a partial write here would truncate
+// raptor's OTHER profiles, which is the loss the never-overwrite rule exists to
+// prevent. 0600 because the file holds a control-plane token.
+func writeAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".credentials-*.tmp")
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }

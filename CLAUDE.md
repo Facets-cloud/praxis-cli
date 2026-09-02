@@ -97,10 +97,12 @@ internal/             pure logic, unit-tested
                        becomes ActiveRoot for the receipt/snapshot/skills.
   duties/             REST client for Agent Schedules (duties): runs,
                        findings, artifacts — mirrors internal/memory
-  raptorstate/        READ-ONLY mirror of raptor's profile resolution
+  raptorstate/        mirror of raptor's profile resolution
                        (~/.facets/credentials + FACETS_* env) so `status`
                        can cross-check raptor's control plane against the
-                       praxis profile URL; never writes raptor's store
+                       praxis profile URL. Read-only except SeedProfile,
+                       which ADDS an absent section and never edits or
+                       removes an existing one
   selfupdate/         GitHub Releases fetch, checksum, atomic replace
   hosthooks/          merges praxis's hooks into each AI host's hook config.
                        ONE JSON merge engine, per-host differences in a Host
@@ -146,6 +148,24 @@ Invariants to preserve when touching this area:
 
 - **Credentials are always global.** `paths.Credentials()` is pinned to
   the HOME root; never route it through `ActiveRoot()`.
+- **Seeding raptor's store only ever ADDS, and is gated on the CREDENTIAL.**
+  `raptorstate.SeedProfile` hands a verified control-plane PAT to raptor,
+  because otherwise a successful login leaves `raptor whoami` failing and the
+  only documented recovery (`raptor login`) needs a TTY an AI host can't give
+  it. Three things to keep:
+  - It writes only an ABSENT section — an existing one may hold a credential
+    for another control plane. The write is atomic (temp + rename), because a
+    partial write truncates raptor's OTHER profiles, which is the loss the
+    never-overwrite rule exists to prevent.
+  - The call sits in `persistAndSetup`, the tail EVERY tier converges on, and
+    self-gates on `prof.AuthMode == AuthModeBasic`. Gating by call site instead
+    is how the first version shipped a hole: tier (a) reuses a stored CP PAT
+    without re-prompting, so "re-run praxis login" never restored raptor. A
+    Praxis API key is excluded by the field, not by where the call sits.
+  - The section name comes from `seedTarget`, which mirrors `resolve()`'s order
+    (pin > `FACETS_PROFILE` > `default`). Writing `[default]` while a
+    `FACETS_PROFILE` shell reads `[acme]` leaves raptor broken by exactly the
+    amount this fixes.
 - **A bare or foreign `.praxis` must stay inert.** Local mode activates
   only via `LocalModeActive` (pointer names a known profile). Don't switch
   any state on mere directory presence — that's what protects a user who

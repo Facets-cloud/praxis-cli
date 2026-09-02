@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 )
 
 // ─── test helpers ────────────────────────────────────────────────────────
@@ -420,5 +421,149 @@ func TestPatTransportOK(t *testing.T) {
 				t.Errorf("patTransportOK(%q) = %v, want %v", tc.url, got, tc.want)
 			}
 		})
+	}
+}
+
+// ─── seeding raptor's store ──────────────────────────────────────────────
+
+// raptorSeeded reads back through raptorstate's own accessors, which resolve
+// $HOME the same way the writer does (isolateHome redirects both).
+func raptorSeeded(t *testing.T, section string) (url, username string, ok bool) {
+	t.Helper()
+	found, cpURL := raptorstate.HasProfile(section)
+	if !found {
+		return "", "", false
+	}
+	user, token, hasPAT := raptorstate.PAT(section)
+	if !hasPAT || token == "" {
+		t.Errorf("section %q written without a usable token", section)
+	}
+	return cpURL, user, true
+}
+
+// The bug: a user created a control-plane PAT at praxis's prompt and finished
+// with praxis authenticated but `raptor whoami` still failing.
+func TestLogin_SeedsRaptorFromPastedPAT(t *testing.T) {
+	isolateHome(t)
+	resetLoginFlags(t)
+	stubPostAuth(t)
+	stubPrompts(t, "u@corp", "pat-pasted")
+	stubAuthMode(t, facetsAuthMode)
+	stubOpenBrowser(t)
+	restoreStderr := captureStderr(t)
+	stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
+		return &authMeResponse{Email: "u@corp"}, nil
+	})
+
+	handled, err := tryInteractivePAT(io.Discard, false, "default", "https://cp.test", false)
+	restoreStderr()
+	if !handled || err != nil {
+		t.Fatalf("handled=%v err=%v, want true/nil", handled, err)
+	}
+
+	url, user, ok := raptorSeeded(t, "default")
+	if !ok {
+		t.Fatal("raptor's credentials file has no [default] — the seed did not happen")
+	}
+	if url != "https://cp.test" || user != "u@corp" {
+		t.Errorf("seeded (%q, %q), want (https://cp.test, u@corp)", url, user)
+	}
+}
+
+// Tier (a): re-running login reuses the STORED control-plane PAT without
+// re-prompting. Seeding must happen there too, or "re-run praxis login" — the
+// documented recovery — never restores raptor on a machine that lost the file.
+func TestLogin_SeedsRaptorWhenReusingStoredPAT(t *testing.T) {
+	isolateHome(t)
+	resetLoginFlags(t)
+	stubPostAuth(t)
+	restoreStderr := captureStderr(t)
+	stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
+		return &authMeResponse{Email: "u@corp"}, nil
+	})
+	if err := credentials.Put("default",
+		credentials.FacetsProfile("https://cp.test", "u@corp", "stored-pat")); err != nil {
+		t.Fatal(err)
+	}
+
+	handled, err := tryReuseStoredToken(io.Discard, false, "default", "https://cp.test", false)
+	restoreStderr()
+	if !handled || err != nil {
+		t.Fatalf("handled=%v err=%v, want true/nil", handled, err)
+	}
+
+	if _, _, ok := raptorSeeded(t, "default"); !ok {
+		t.Error("reusing a stored control-plane PAT did not seed raptor")
+	}
+}
+
+// The gate is the credential, not the call site: a Praxis API key is not a
+// control-plane credential, and seeding one would leave raptor holding a token
+// the control plane rejects.
+func TestLogin_ApiKeyNeverSeedsRaptor(t *testing.T) {
+	isolateHome(t)
+	resetLoginFlags(t)
+	stubPostAuth(t)
+	restoreStderr := captureStderr(t)
+
+	err := persistAndSetup(io.Discard, false, "default",
+		credentials.Profile{URL: "https://cp.test", Token: "praxis-api-key"}, "u@corp", false)
+	restoreStderr()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, ok := raptorSeeded(t, "default"); ok {
+		t.Error("seeded raptor with a Praxis API key")
+	}
+}
+
+// A --raptor-profile pin names the section login authenticates through, so it
+// must name the section login seeds.
+func TestLogin_SeedsPinnedRaptorProfile(t *testing.T) {
+	isolateHome(t)
+	resetLoginFlags(t)
+	stubPostAuth(t)
+	stubPrompts(t, "u@corp", "pat-pasted")
+	stubAuthMode(t, facetsAuthMode)
+	stubOpenBrowser(t)
+	restoreStderr := captureStderr(t)
+	stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
+		return &authMeResponse{Email: "u@corp"}, nil
+	})
+	loginRaptorProfile = "acme"
+
+	if _, err := tryInteractivePAT(io.Discard, false, "default", "https://cp.test", false); err != nil {
+		t.Fatal(err)
+	}
+	restoreStderr()
+
+	if _, _, ok := raptorSeeded(t, "acme"); !ok {
+		t.Error("pinned section \"acme\" was not seeded")
+	}
+	if _, _, ok := raptorSeeded(t, "default"); ok {
+		t.Error("wrote [default] despite a --raptor-profile pin")
+	}
+}
+
+// A PAT the control plane refuses must never reach raptor's store.
+func TestLogin_RejectedPATNeverSeedsRaptor(t *testing.T) {
+	isolateHome(t)
+	resetLoginFlags(t)
+	stubPrompts(t, "u@corp", "bad-pat")
+	stubAuthMode(t, facetsAuthMode)
+	stubOpenBrowser(t)
+	restoreStderr := captureStderr(t)
+	stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
+		return nil, errTokenRejected
+	})
+
+	handled, err := tryInteractivePAT(io.Discard, false, "default", "https://cp.test", false)
+	restoreStderr()
+	if handled || err != nil {
+		t.Fatalf("handled=%v err=%v, want false/nil", handled, err)
+	}
+	if _, _, ok := raptorSeeded(t, "default"); ok {
+		t.Error("seeded raptor with a rejected PAT")
 	}
 }
