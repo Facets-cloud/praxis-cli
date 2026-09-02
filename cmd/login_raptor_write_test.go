@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
@@ -45,8 +46,8 @@ func driveInteractivePAT(t *testing.T, username, token string) {
 	stubAuthMode(t, facetsAuthMode)
 	stubOpenBrowser(t)
 	orig := interactivePATFn
-	interactivePATFn = func(out io.Writer, _ bool, profileName, baseURL string, local bool) (bool, error) {
-		return tryInteractivePAT(out, false, profileName, baseURL, local)
+	interactivePATFn = func(out io.Writer, _ bool, profileName, baseURL string, timeout time.Duration, local bool) (bool, error) {
+		return tryInteractivePAT(out, false, profileName, baseURL, time.Minute, local)
 	}
 	t.Cleanup(func() { interactivePATFn = orig })
 	browsed := stubBrowserLogin(t)
@@ -267,7 +268,7 @@ func TestPromptLoginURL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stubPrompts(t, tt.typed, "")
+			stubPrompts(t, tt.typed)
 			stdinIsTTY = func() bool { return tt.tty }
 			if got := promptLoginURL(tt.asJSON); got != tt.want {
 				t.Errorf("promptLoginURL() = %q, want %q", got, tt.want)
@@ -281,7 +282,7 @@ func TestLogin_NoURL_MachineMode_StillUsageError(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
 	clearFacetsEnv(t)
-	stubPrompts(t, "https://cp.test", "")
+	stubPrompts(t, "https://cp.test")
 
 	if _, err := runLoginRunE(t); err == nil || !strings.Contains(err.Error(), "--url") {
 		t.Errorf("err = %v, want the --url usage error", err)

@@ -103,7 +103,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 
 	// Every path that lands on the API-key browser tries the control-plane
 	// sign-in first, so the report has to say so or it names the wrong page.
-	if strings.HasPrefix(action, "browser") && interactivePATEligible(baseURL, asJSON) {
+	if strings.HasPrefix(action, "browser") && interactivePATEligible(baseURL) {
 		action = "control-plane sign-in (browser), else " + action
 	}
 

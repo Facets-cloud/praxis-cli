@@ -49,17 +49,14 @@ var (
 	loginDryRun        bool
 )
 
-// browserLoginFn and postAuthSetup are package-level seams so tests can
-// exercise login's path selection (reuse vs. browser) and persistence
-// without opening a browser, hitting the network, or installing skills.
+// Package-level seams so tests can exercise login's path selection (reuse vs.
+// browser), its waits, and persistence without opening a browser, hitting the
+// network, or installing skills.
 var (
 	browserLoginFn   = browserSessionPollLogin
 	interactivePATFn = tryInteractivePAT
 	postAuthSetup    = runPostAuthSetup
-	// pollSessionFn is the browser handshake's wait. A seam because both
-	// callers otherwise block for the full --timeout against a host that does
-	// not exist, which is a 90s hang per test.
-	pollSessionFn = pollSessionKey
+	pollSessionFn    = pollSessionKey
 )
 
 // osExit is a seam over os.Exit so tests can exercise the fatal-exit paths
@@ -190,7 +187,7 @@ installed skills — then exits without changing anything.`,
 			}
 		}
 		// A control-plane PAT beats a Praxis API key even when raptor left none.
-		if handled, perr := interactivePATFn(out, asJSON, profileName, baseURL, loginLocal); handled {
+		if handled, perr := interactivePATFn(out, asJSON, profileName, baseURL, loginTimeout, loginLocal); handled {
 			return perr
 		}
 		return browserLoginFn(out, asJSON, profileName, baseURL, loginTimeout, loginLocal)
@@ -377,9 +374,8 @@ func pollSessionKey(ctx context.Context, baseURL, nonce string, interval time.Du
 }
 
 // sessionCredential is what the browser deposited under the nonce. Username is
-// set only by the control-plane-PAT deposit: a PAT does not identify its owner,
-// so it must travel with the X-Facets-Username the server resolved. An API-key
-// deposit leaves it empty, which is what tells the two apart.
+// set only by a control-plane-PAT deposit, which cannot authenticate without
+// it; empty marks an API-key deposit.
 type sessionCredential struct {
 	Token    string
 	Username string

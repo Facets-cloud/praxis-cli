@@ -20,13 +20,12 @@ import (
 // stubPrompts makes the interactive PAT path answerable from a test: a TTY is
 // claimed, the line prompt reads from `username`, and the masked prompt returns
 // `token`.
-func stubPrompts(t *testing.T, username, token string) {
+func stubPrompts(t *testing.T, line string) {
 	t.Helper()
-	origTTY, origSecret, origLine := stdinIsTTY, readSecret, readLine
+	origTTY, origLine := stdinIsTTY, readLine
 	stdinIsTTY = func() bool { return true }
-	readLine = func() (string, error) { return username, nil }
-	readSecret = func() (string, error) { return token, nil }
-	t.Cleanup(func() { stdinIsTTY, readSecret, readLine = origTTY, origSecret, origLine })
+	readLine = func() (string, error) { return line, nil }
+	t.Cleanup(func() { stdinIsTTY, readLine = origTTY, origLine })
 }
 
 // stubAuthMode swaps the /auth/status probe, reporting a deployment that
@@ -94,7 +93,6 @@ func TestPatPageURL(t *testing.T) {
 func TestTryInteractivePAT_Skips(t *testing.T) {
 	tests := []struct {
 		name      string
-		asJSON    bool
 		authMode  string
 		handshake bool
 		baseURL   string
@@ -111,13 +109,19 @@ func TestTryInteractivePAT_Skips(t *testing.T) {
 			isolateHome(t)
 			resetLoginFlags(t)
 			stubAuthStatus(t, authStatus{Mode: tc.authMode, PATHandshake: tc.handshake})
-			stubHandshake(t, sessionCredential{}, errors.New("must not poll"))
+			stubOpenBrowser(t) // a regression here would open a real tab under `go test`
+			origPoll := pollSessionFn
+			pollSessionFn = func(context.Context, string, string, time.Duration) (sessionCredential, error) {
+				t.Fatal("polled on a path that should have been skipped")
+				return sessionCredential{}, nil
+			}
+			t.Cleanup(func() { pollSessionFn = origPoll })
 			stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
 				t.Fatal("verified a PAT on a path that should have been skipped")
 				return nil, nil
 			})
 
-			handled, err := tryInteractivePAT(io.Discard, tc.asJSON, "default", tc.baseURL, false)
+			handled, err := tryInteractivePAT(io.Discard, false, "default", tc.baseURL, time.Minute, false)
 			if handled || err != nil {
 				t.Errorf("handled=%v err=%v, want false/nil so the API-key flow runs", handled, err)
 			}
@@ -149,7 +153,7 @@ func TestTryInteractivePAT_IncompleteHandshakeFallsThrough(t *testing.T) {
 				return nil, nil
 			})
 
-			handled, err := tryInteractivePAT(io.Discard, false, "default", "https://cp.test", false)
+			handled, err := tryInteractivePAT(io.Discard, false, "default", "https://cp.test", time.Minute, false)
 			if handled || err != nil {
 				t.Errorf("handled=%v err=%v, want false/nil", handled, err)
 			}
@@ -174,7 +178,7 @@ func TestTryInteractivePAT_PersistsHandshakePAT(t *testing.T) {
 		return &authMeResponse{Email: "u@corp"}, nil
 	})
 
-	handled, err := tryInteractivePAT(io.Discard, false, "default", "https://cp.test", false)
+	handled, err := tryInteractivePAT(io.Discard, false, "default", "https://cp.test", time.Minute, false)
 	restoreStderr()
 	if !handled || err != nil {
 		t.Fatalf("handled=%v err=%v, want true/nil", handled, err)
@@ -220,7 +224,7 @@ func TestTryInteractivePAT_RejectedPATFallsThrough(t *testing.T) {
 				return nil, tc.authErr
 			})
 
-			handled, err := tryInteractivePAT(io.Discard, false, "default", "https://cp.test", false)
+			handled, err := tryInteractivePAT(io.Discard, false, "default", "https://cp.test", time.Minute, false)
 			stderr := readStderr()
 			if handled || err != nil {
 				t.Fatalf("handled=%v err=%v, want false/nil so the api-key flow runs", handled, err)
@@ -244,7 +248,7 @@ func stubInteractivePAT(t *testing.T, handled bool) *bool {
 	t.Helper()
 	called := false
 	orig := interactivePATFn
-	interactivePATFn = func(_ io.Writer, _ bool, _, _ string, _ bool) (bool, error) {
+	interactivePATFn = func(_ io.Writer, _ bool, _, _ string, _ time.Duration, _ bool) (bool, error) {
 		called = true
 		return handled, nil
 	}
@@ -343,7 +347,7 @@ func TestLoginRunE_RaptorPATBeatsInteractivePrompt(t *testing.T) {
 
 // ─── the auth-mode probe against a real server ───────────────────────────
 
-func TestFetchAuthMode(t *testing.T) {
+func TestFetchAuthStatus(t *testing.T) {
 	tests := []struct {
 		name    string
 		status  int
@@ -377,7 +381,7 @@ func TestFetchAuthMode(t *testing.T) {
 	}
 }
 
-func TestFetchAuthMode_UnreachableIsEmpty(t *testing.T) {
+func TestFetchAuthStatus_UnreachableIsEmpty(t *testing.T) {
 	// A closed port must not be reported as any mode — "" keeps the API-key
 	// flow, which is the pre-probe behavior.
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
@@ -479,6 +483,37 @@ func TestPatTransportOK(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := patTransportOK(tc.url); got != tc.want {
 				t.Errorf("patTransportOK(%q) = %v, want %v", tc.url, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFetchAuthStatus_DecodesCapability is the only test that decodes
+// cli_pat_handshake from real JSON — everywhere else injects authStatus
+// directly. A typo in the struct tag would disable the whole tier, and it would
+// fail silently: login would just keep using the API-key flow.
+func TestFetchAuthStatus_DecodesCapability(t *testing.T) {
+	tests := []struct {
+		name, body string
+		want       bool
+	}{
+		{name: "deployment serves it", body: `{"auth_mode":"facets","cli_pat_handshake":true}`, want: true},
+		{name: "deployment declines it", body: `{"auth_mode":"facets","cli_pat_handshake":false}`, want: false},
+		{name: "older deployment omits the field", body: `{"auth_mode":"facets"}`, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			st := fetchAuthStatus(srv.URL)
+			if st.PATHandshake != tc.want {
+				t.Errorf("PATHandshake = %v, want %v", st.PATHandshake, tc.want)
+			}
+			if st.Mode != facetsAuthMode {
+				t.Errorf("Mode = %q, want %q", st.Mode, facetsAuthMode)
 			}
 		})
 	}
