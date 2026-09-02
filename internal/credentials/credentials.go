@@ -86,9 +86,11 @@ type Profile struct {
 	Token    string
 	// RaptorProfile optionally names the ~/.facets/credentials profile this
 	// praxis profile is paired with (INI key `raptor_profile`, set via
-	// `praxis login --raptor-profile`). praxis never uses it to authenticate —
-	// it exists so `praxis status` (and the AI host reading it) can point
-	// raptor at the matching control plane via FACETS_PROFILE.
+	// `praxis login --raptor-profile`, or by a PAT login under a non-default
+	// profile name, which writes that raptor section itself). praxis never
+	// uses it to authenticate — it exists so `praxis status` (and the AI host
+	// reading it) can point raptor at the matching control plane via
+	// FACETS_PROFILE.
 	RaptorProfile string
 	// AuthMode selects how Token is presented on outbound requests.
 	// "basic" → facets mode: control-plane PAT sent as Bearer plus an
@@ -620,9 +622,9 @@ func parseRawINI(data []byte) map[string]map[string]string {
 	return out
 }
 
-// ParseRawINI exposes the flat-INI parser for other packages that read
-// credentials-shaped files (e.g. internal/raptorstate reading raptor's
-// ~/.facets/credentials, which praxis deliberately never writes).
+// ParseRawINI exposes the flat-INI parser for other packages that handle
+// credentials-shaped files (internal/raptorstate, for raptor's
+// ~/.facets/credentials).
 func ParseRawINI(data []byte) map[string]map[string]string {
 	return parseRawINI(data)
 }

@@ -41,10 +41,12 @@ Once logged in, you (the AI host) can, on the user's behalf:
    token they create there. **The prompt is in their terminal, so hand the
    terminal back to them for this step.** If `raptor` is already logged in on
    the machine, login reuses that token instead and there is nothing to do.
-   Either way it then saves the credential, installs the org's skills, and
-   writes the MCP tool snapshot. For multiple orgs use `--profile <name>`; for
-   CI/non-interactive use `--token <key>`. Once a profile is authenticated,
-   switch to it later with `praxis profiles use <name>` — no browser needed.
+   Either way it then saves the credential, saves the same token as a
+   `raptor` profile (so `raptor` needs no separate login), installs the
+   org's skills, and writes the MCP tool snapshot. For multiple orgs use
+   `--profile <name>`; for CI/non-interactive use `--token <key>`. Once a
+   profile is authenticated, switch to it later with
+   `praxis profiles use <name>` — no browser needed.
 
 ## After login
 

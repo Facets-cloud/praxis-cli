@@ -1,13 +1,14 @@
-// Package raptorstate is a READ-ONLY view of the raptor CLI's auth
+// Package raptorstate is praxis's view of the raptor CLI's auth
 // configuration (~/.facets/credentials + FACETS_* env vars), so `praxis
 // status` can report which control plane raptor commands will hit and
 // whether that matches the active praxis profile's URL.
 //
-// praxis and raptor keep deliberately independent credential stores; this
-// package never writes raptor's file. It is the only reader of it: it mirrors
-// raptor's own profile-resolution rules (raptor/pkg/config.Config.GetProfile)
-// for status reporting, and PAT() hands `praxis login` the control-plane token
-// of a resolved profile (see PAT for why that is not a State field):
+// It is the only package that touches raptor's file. Resolve mirrors raptor's
+// own profile-resolution rules (raptor/pkg/config.Config.GetProfile) for
+// status reporting, PAT() hands `praxis login` the control-plane token of a
+// resolved profile (see PAT for why that is not a State field), and Write
+// saves the PAT a login ended with as a raptor profile, so one login serves
+// both CLIs. Resolution order:
 //
 //  1. env override — CONTROL_PLANE_URL set (FACETS_USERNAME/FACETS_TOKEN
 //     optional with FACETS_HEADERS)
@@ -68,8 +69,8 @@ type State struct {
 // installed" without depending on the machine's PATH.
 var lookPath = exec.LookPath
 
-// DefaultPath returns raptor's credentials file location,
-// $HOME/.facets/credentials.
+// DefaultPath returns raptor's home credentials file,
+// $HOME/.facets/credentials — where a global login writes.
 func DefaultPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -78,12 +79,43 @@ func DefaultPath() (string, error) {
 	return filepath.Join(home, ".facets", "credentials"), nil
 }
 
+// getwd is a seam for the working directory (see raptorPath).
+var getwd = os.Getwd
+
+// SetGetwdForTest overrides the working directory the raptor-file walk starts
+// from and returns a restore func. Test-only: the walk otherwise climbs through
+// the developer's real home and reads their live ~/.facets/credentials.
+func SetGetwdForTest(fn func() (string, error)) func() {
+	prev := getwd
+	getwd = fn
+	return func() { getwd = prev }
+}
+
+// raptorPath is the file raptor itself would read from this directory: the
+// first <dir>/.facets/credentials walking up from cwd to the filesystem root
+// (raptor/pkg/config.getCredentialsPath), else the home file. A found local
+// file shadows the home file completely — that is raptor's rule, mirrored.
+func raptorPath() (string, error) {
+	if cwd, err := getwd(); err == nil {
+		for dir := cwd; ; dir = filepath.Dir(dir) {
+			p := filepath.Join(dir, ".facets", "credentials")
+			if _, err := os.Stat(p); err == nil {
+				return p, nil
+			}
+			if filepath.Dir(dir) == dir {
+				break
+			}
+		}
+	}
+	return DefaultPath()
+}
+
 // Resolve reports raptor's effective auth state. pinnedProfile is the active
 // praxis profile's raptor_profile pairing ("" when unset). It never fails:
 // an unreadable or missing credentials file simply yields Found=false (plus
 // whatever the env override provides).
 func Resolve(pinnedProfile string) State {
-	path, err := DefaultPath()
+	path, err := raptorPath()
 	if err != nil {
 		path = ""
 	}
@@ -169,7 +201,7 @@ func resolve(pinnedProfile, credentialsPath string) State {
 // API key. Deliberately a separate call rather than a State field, so the token
 // can't ride along into anything that prints State (e.g. `praxis status`).
 func PAT(profile string) (username, token string, ok bool) {
-	path, err := DefaultPath()
+	path, err := raptorPath()
 	if err != nil {
 		return "", "", false
 	}
@@ -183,7 +215,7 @@ func PAT(profile string) (username, token string, ok bool) {
 // HasProfile reports whether raptor's credentials file contains the named
 // profile. Used by `praxis login --raptor-profile` validation.
 func HasProfile(name string) (bool, string) {
-	path, err := DefaultPath()
+	path, err := raptorPath()
 	if err != nil {
 		return false, ""
 	}

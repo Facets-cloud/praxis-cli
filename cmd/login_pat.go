@@ -146,6 +146,24 @@ func tryInteractivePAT(out io.Writer, asJSON bool, profileName, baseURL string, 
 	return true, persistVerified(out, asJSON, profileName, prof, user, username, local)
 }
 
+// promptLoginURL asks for the control-plane URL when no flag, saved profile or
+// raptor profile supplied one — the first thing `raptor login` asks. Returns ""
+// (caller keeps its usage error) on --json, without a TTY, or on an empty
+// answer. A bare host gets https://.
+func promptLoginURL(asJSON bool) string {
+	if asJSON || !stdinIsTTY() {
+		return ""
+	}
+	u := prompt("Control plane URL (e.g. https://<account-id>.console.facets.cloud): ", readLine)
+	if u == "" {
+		return ""
+	}
+	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+		u = "https://" + u
+	}
+	return normalizeBaseURL(u)
+}
+
 // prompt writes the label to stderr — never stdout, which a caller may be
 // parsing — and returns the trimmed answer. A read error reads as an empty
 // answer, which is the caller's "skip this tier" signal.
