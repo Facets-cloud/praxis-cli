@@ -263,10 +263,14 @@ func TestLogin_Local_WritesProjectFacetsFile(t *testing.T) {
 	if facets := readFacetsFile(t, home); facets != nil {
 		t.Errorf("home facets file written by a --local login: %v", facets)
 	}
-	// Inside the tree, praxis reads the local file — the same one raptor does.
+	if got["token"] != readFacetsFile(t, repo)["default"]["token"] {
+		t.Errorf("tree file lacks a [default] copy: %v", readFacetsFile(t, repo))
+	}
+	// Inside the tree, praxis reads the local file — the same one raptor does —
+	// and its [default] is acme.
 	t.Cleanup(credentials.SetGetwdForTest(func() (string, error) { return repo, nil }))
-	if a, _ := credentials.ResolveActive(""); a.Name != "acme" || !a.Loaded || a.Profile.Store != credentials.StoreFacets {
-		t.Errorf("in-repo resolution = %+v, want acme from the local facets file", a)
+	if a, _ := credentials.ResolveActive(""); a.Name != "default" || !a.Loaded || a.Profile.URL != "https://acme.test" || a.Profile.Store != credentials.StoreFacets {
+		t.Errorf("in-repo resolution = %+v, want default with acme's credentials from the local file", a)
 	}
 }
 
@@ -405,9 +409,6 @@ func TestLogout_RemovesSharedSectionAndSaysSo(t *testing.T) {
 	isolateHome(t)
 	clearFacetsEnv(t)
 	seedRaptorCreds(t, "[default]\ncontrol_plane_url = https://cp.test\nusername = u\ntoken = pat\n\n[keep]\ncontrol_plane_url = https://keep.test\nusername = k\ntoken = kt\n")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	logoutAll, logoutJSON = false, true
 	t.Cleanup(func() { logoutAll, logoutJSON = false, false })
 

@@ -26,25 +26,12 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 	store, _ := credentials.Load()
 	prof, exists := store[profileName]
 
-	// The profile whose org skills are on disk right now — which is a question
-	// about POINTERS, not about this invocation. $PRAXIS_PROFILE changes where
-	// commands route; it does not change which catalog was installed, so
-	// resolving through it made the report claim "no profile switch" for a login
-	// that was about to move the pointer and wipe the previous profile's skills.
-	//
-	// Scope still mirrors login's: a global login owns the home root, so only the
-	// persisted global pointer can have put skills there; --local installs into
-	// the project root, whose pointer wins when the tree is pinned.
-	var activeName string
-	if local {
-		pinned, perr := credentials.PointerActiveName()
-		if perr != nil {
-			return perr
-		}
-		activeName = pinned
-	} else {
-		activeName = credentials.PersistedActiveName()
-	}
+	// The profile whose org skills are on disk right now — the store's own
+	// answer, not this invocation's. $PRAXIS_PROFILE changes where commands
+	// route; it does not change which catalog was installed, so resolving
+	// through it made the report claim "no profile switch" for a login that was
+	// about to replace [default] and wipe the previous profile's skills.
+	activeName := credentials.OnDiskActiveName()
 
 	var probeAuth map[string]string
 	tokenSource := "none"
@@ -124,7 +111,11 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 	}
 
 	skillsEffect := fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)
-	if activeName != profileName {
+	sameCreds := false
+	for _, n := range credentials.SameAs(store, profileName) {
+		sameCreds = sameCreds || n == activeName
+	}
+	if activeName != profileName && !sameCreds {
 		skillsEffect = fmt.Sprintf("active profile switches %q → %q; %q's praxis-* org skills are wiped and %q's catalog installed",
 			activeName, profileName, activeName, profileName)
 	}

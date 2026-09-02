@@ -9,28 +9,20 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
-// TestLogin_Local_PinsProjectAndLeavesGlobalAlone is the core of the
-// `praxis login --local` flow: it pins the profile to the current directory
-// tree (project pointer) and installs project-scoped, WITHOUT touching the
-// global active-profile pointer. Uses the token-reuse path so no browser /
-// network is involved.
+// `praxis login --local` pins the profile to the current directory tree by
+// writing <cwd>/.facets/credentials — raptor's own local mode — with the
+// section and a [default] copy, and installs project-scoped. The home store
+// is left alone. Uses the token-reuse path so no browser / network is involved.
 func TestLogin_Local_PinsProjectAndLeavesGlobalAlone(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	resetLoginFlags(t)
+	clearFacetsEnv(t)
 
-	// A global profile is active; a separate profile will be pinned locally.
-	seedProfile(t, "globalprof", "https://g.test", "tg")
-	seedProfile(t, "aurva", "https://aurva.test", "tok")
-	if err := credentials.SetActive("globalprof"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Reuse path: stored token validates without a browser.
-	stubAuthMe(t, func(baseURL string, auth map[string]string) (*authMeResponse, error) {
-		return &authMeResponse{Email: "u@x", canonicalBaseURL: baseURL}, nil
-	})
-	stubPostAuth(t) // record-only; we're testing pointer/scoping, not install
+	seedPAT(t, "default", "https://g.test", "tg")
+	seedPAT(t, "aurva", "https://aurva.test", "tok")
+	stubAuthMeOK(t)
+	stubPostAuth(t) // record-only; we're testing pinning/scoping, not install
 
 	repo := filepath.Join(home, "repo")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
@@ -44,40 +36,62 @@ func TestLogin_Local_PinsProjectAndLeavesGlobalAlone(t *testing.T) {
 		t.Fatalf("login --local err = %v", err)
 	}
 
-	// Project pointer written under the repo.
-	if _, err := os.Stat(filepath.Join(repo, ".praxis", "config.json")); err != nil {
-		t.Errorf("project pointer should exist: %v", err)
+	tree := readFacetsFile(t, repo)
+	if tree["aurva"]["token"] != "tok" || tree["default"]["token"] != "tok" {
+		t.Errorf("tree file = %v, want aurva and a default copy", tree)
 	}
-	// From inside the repo, the active profile is the locally-pinned one.
-	if a, _ := credentials.ResolveActive(""); a.Name != "aurva" || a.Source != credentials.SourceProject {
-		t.Errorf("in-repo resolution = %+v, want aurva/project", a)
+	if _, err := os.Stat(filepath.Join(repo, ".praxis")); err != nil {
+		t.Errorf("project receipt dir should exist: %v", err)
 	}
-	// The GLOBAL pointer is untouched — login --local must not switch it.
-	if g, _ := credentials.ResolveActiveGlobal(); g.Name != "globalprof" {
-		t.Errorf("global pointer changed to %q; login --local must leave it alone", g.Name)
+	// Inside the repo both CLIs read the tree file, so default IS aurva there.
+	t.Cleanup(credentials.SetGetwdForTest(func() (string, error) { return repo, nil }))
+	if a, _ := credentials.ResolveActive(""); a.Name != "default" || a.Profile.URL != "https://aurva.test" {
+		t.Errorf("in-repo resolution = %+v, want default with aurva's credentials", a)
+	}
+	// The home store is untouched — login --local must not switch it.
+	if got := homeFacetsURL(t); got != "https://g.test" {
+		t.Errorf("home [default] = %q; login --local must leave it alone", got)
 	}
 }
 
-// TestLogin_Local_OutsideHome_Errors verifies login --local fails clearly
-// (and does not flip any pointer) when run outside the home subtree.
+// login --local fails clearly (and pins nothing) when run outside the home
+// subtree, where discovery could never find the tree again.
 func TestLogin_Local_OutsideHome_Errors(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	resetLoginFlags(t)
+	clearFacetsEnv(t)
 
-	seedProfile(t, "aurva", "https://aurva.test", "tok")
-	stubAuthMe(t, func(baseURL string, auth map[string]string) (*authMeResponse, error) {
-		return &authMeResponse{Email: "u@x", canonicalBaseURL: baseURL}, nil
-	})
+	seedPAT(t, "aurva", "https://aurva.test", "tok")
+	stubAuthMeOK(t)
 	stubPostAuth(t)
 
-	// cwd outside the faked home → SetActiveLocal must refuse.
 	outside := t.TempDir()
 	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return outside, nil }))
 
 	rootProfile = "aurva"
 	loginLocal = true
-	_, err := runLoginRunE(t)
-	if err == nil {
+	if _, err := runLoginRunE(t); err == nil {
 		t.Fatal("login --local outside home should return an error")
+	}
+	if _, err := os.Stat(filepath.Join(outside, ".facets")); !os.IsNotExist(err) {
+		t.Error("nothing should be written outside home")
+	}
+}
+
+// An API key cannot be pinned: raptor's file cannot hold it.
+func TestLogin_Local_APIKeyIsRefused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	resetLoginFlags(t)
+	clearFacetsEnv(t)
+	seedProfile(t, "key", "https://k.test", "sk")
+	stubAuthMeOK(t)
+	stubPostAuth(t)
+	repoUnderHome(t, home)
+
+	rootProfile = "key"
+	loginLocal = true
+	if _, err := runLoginRunE(t); err == nil {
+		t.Fatal("login --local with an API-key profile should fail")
 	}
 }

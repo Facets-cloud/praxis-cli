@@ -2,16 +2,16 @@
 //
 // Two roots exist:
 //
-//   - The HOME root (~/.praxis) holds the shared, user-global state:
-//     credentials and the global active-profile pointer. Credentials ALWAYS
-//     live here regardless of the working directory.
-//   - A PROJECT root (<repo>/.praxis) is discovered by walking up from the
-//     working directory, git-style. When present it becomes the ActiveRoot
-//     for everything that should follow a working directory: the skill
-//     receipt, the MCP snapshot, and a project-local active-profile pointer.
-//     This lets a developer pin a profile (and its skills) to one repo while
-//     other repos use other profiles — without the profiles clobbering each
-//     other's skills.
+//   - The HOME root (~/.praxis) holds the user-global praxis state: the
+//     API-key credentials file and the update-check cache.
+//   - A PROJECT root (<repo>/.praxis) exists wherever a <repo>/.facets/credentials
+//     file does — raptor's local-mode marker, written by `raptor login --local`
+//     and `praxis login --local`. It is discovered by walking up from the
+//     working directory and becomes the ActiveRoot for everything that should
+//     follow a working directory: the skill receipt and the MCP snapshot. This
+//     lets a developer pin a profile (and its skills) to one repo while other
+//     repos use other profiles — without the profiles clobbering each other's
+//     skills.
 package paths
 
 import (
@@ -59,17 +59,6 @@ func RootIsPinned() bool {
 	return activeRootOverride != ""
 }
 
-// LocalModeActive, when set, decides whether a discovered project root should
-// actually be treated as the ActiveRoot — i.e. whether local mode is GENUINELY
-// active there (its pointer names a profile this machine has). It is injected
-// by the credentials package (which paths can't import without a cycle) so a
-// bare .praxis (no pointer) or a foreign one (pointer to a profile you don't
-// have, e.g. a teammate's committed marker) does NOT silently divert the
-// receipt/snapshot/skill location for a user who never opted in. When nil
-// (low-level tests with no credentials wired up), discovery falls back to
-// presence-only.
-var LocalModeActive func(projectRoot string) bool
-
 // Dir returns the HOME root ~/.praxis (does not create it).
 func Dir() (string, error) {
 	home, err := os.UserHomeDir()
@@ -79,10 +68,13 @@ func Dir() (string, error) {
 	return filepath.Join(home, dirName), nil
 }
 
-// ProjectRoot discovers a project-local .praxis directory by walking up from
-// the working directory to — but NOT including — the home directory. It
-// returns ("", false, nil) when none is found, when the working directory is
-// not under the home directory, or when the home directory can't be resolved.
+// ProjectRoot discovers a local-mode tree by walking up from the working
+// directory to — but NOT including — the home directory, looking for raptor's
+// marker, <dir>/.facets/credentials. It returns <dir>/.praxis (the receipt and
+// snapshot live beside the marker), or ("", false, nil) when none is found,
+// when the working directory is not under the home directory, or when the
+// home directory can't be resolved. A stray <dir>/.praxis on its own means
+// nothing: the credentials file IS the opt-in, and it is never committed.
 //
 // The walk stops below home, so the global ~/.praxis is never returned and
 // can't be mistaken for a project root. Restricting discovery to the home
@@ -108,9 +100,9 @@ func ProjectRoot() (string, bool, error) {
 	// Both are in the same namespace now, so this bound really does stop at
 	// home instead of walking past it to / and finding a stray .praxis.
 	for dir != home {
-		candidate := filepath.Join(dir, dirName)
-		if fi, statErr := os.Stat(candidate); statErr == nil && fi.IsDir() {
-			return candidate, true, nil
+		marker := filepath.Join(dir, ".facets", "credentials")
+		if fi, statErr := os.Stat(marker); statErr == nil && !fi.IsDir() {
+			return filepath.Join(dir, dirName), true, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -124,7 +116,8 @@ func ProjectRoot() (string, bool, error) {
 // ActiveRoot returns the project root if one is discovered (or pinned via
 // OverrideActiveRoot), else the home root. The skill receipt and MCP snapshot
 // follow this root so a project-local session keeps its skills, receipt, and
-// snapshot together while credentials stay global.
+// snapshot together. The project .praxis directory is created on demand: the
+// marker that defines the tree is the credentials file beside it.
 func ActiveRoot() (string, error) {
 	if activeRootOverride != "" {
 		return activeRootOverride, nil
@@ -133,12 +126,8 @@ func ActiveRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// A discovered .praxis only becomes the active root when local mode is
-	// genuinely active there (see LocalModeActive). Otherwise — a bare or
-	// foreign marker — fall back to home so a stray directory can't divert a
-	// normal user's receipt/snapshot/skills.
-	if ok && (LocalModeActive == nil || LocalModeActive(root)) {
-		return root, nil
+	if ok {
+		return root, os.MkdirAll(root, 0o700)
 	}
 	return Dir()
 }
@@ -174,18 +163,57 @@ func EnsureProjectRoot() (string, error) {
 	return root, nil
 }
 
-// Credentials is the bearer-token store. ALWAYS under the home root — never
-// project-local — so a single login is shared across every working directory.
+// Credentials is the praxis file (Praxis API keys, loopback PATs). ALWAYS
+// under the home root — never project-local. Control-plane PATs live in
+// raptor's file instead (see credentials.FacetsPath).
 func Credentials() (string, error) {
 	d, err := Dir()
 	return filepath.Join(d, "credentials"), err
 }
 
-// Config is the GLOBAL active-profile pointer (set by `praxis login`). Always
-// under the home root. The project-local pointer is ProjectConfig.
-func Config() (string, error) {
+// LegacyConfig is where praxis before v1.11 kept its active-profile pointer.
+// It is read once to migrate and then removed; nothing writes it.
+func LegacyConfig() (string, error) {
 	d, err := Dir()
 	return filepath.Join(d, "config.json"), err
+}
+
+// LegacyProjectPointer reports a pre-v1.11 per-directory pointer
+// (<dir>/.praxis/config.json) in the tree with no <dir>/.facets/credentials
+// beside it. Such a tree is no longer local mode; callers print a hint.
+func LegacyProjectPointer() (path, profile string, ok bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", false
+	}
+	cwd, err := getwd()
+	if err != nil {
+		return "", "", false
+	}
+	home, dir, aligned := alignUnder(home, cwd)
+	if !aligned {
+		return "", "", false
+	}
+	for dir != home {
+		if _, err := os.Stat(filepath.Join(dir, ".facets", "credentials")); err == nil {
+			return "", "", false // a real local tree; nothing legacy about it
+		}
+		p := filepath.Join(dir, dirName, "config.json")
+		if data, err := os.ReadFile(p); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				if k, v, found := strings.Cut(line, "="); found && strings.TrimSpace(k) == "profile" {
+					return p, strings.TrimSpace(v), true
+				}
+			}
+			return p, "", true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "", "", false
 }
 
 // UpdateCheckCache is the throttle cache for the background version check.
@@ -195,18 +223,6 @@ func Config() (string, error) {
 func UpdateCheckCache() (string, error) {
 	d, err := Dir()
 	return filepath.Join(d, "last-update-check.json"), err
-}
-
-// ProjectConfig returns the project-local active-profile pointer
-// (<projectRoot>/config.json) and whether a project root exists. Used to
-// resolve the active profile for a working directory ahead of the global
-// pointer.
-func ProjectConfig() (string, bool, error) {
-	root, ok, err := ProjectRoot()
-	if err != nil || !ok {
-		return "", false, err
-	}
-	return filepath.Join(root, "config.json"), true, nil
 }
 
 // Installed is the JSON receipt of skills installed across AI hosts. Follows

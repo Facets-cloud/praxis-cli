@@ -79,7 +79,7 @@ func TestPraxisMetaSkill_ExplainsLocalMode(t *testing.T) {
 		"## Per-directory profiles (local mode)",
 		"praxis login --profile acme --local",
 		"praxis refresh-skills --project",
-		".praxis/config.json",
+		".facets/credentials",
 		"project_root",
 	} {
 		if !strings.Contains(body, want) {

@@ -136,7 +136,7 @@ This meta-skill survives every switch. Only the catalog skills cycle.
 // the host to pass `-p` at the one profile it already resolves to.
 const praxisSkillMultiProfile = `### Scope yourself instead of switching
 
-` + "`profiles use`" + ` is MACHINE-GLOBAL. It rewrites the active-profile pointer
+` + "`profiles use`" + ` is MACHINE-GLOBAL. It rewrites the [default] section
 AND replaces the installed praxis-* skills, so it changes every other shell
 and agent session on this machine — including skill files a concurrent session
 has already read. **If you might not be the only session running, don't
@@ -164,8 +164,9 @@ your shell tool's env, or ` + "`export`" + ` it if your shell state persists.
 | this whole session works in one deployment | ` + "`PRAXIS_PROFILE=<name>`" + ` |
 | the USER asked to switch and owns the machine | ` + "`profiles use <name>`" + ` |
 
-Precedence: ` + "`-p`" + ` > ` + "`PRAXIS_PROFILE`" + ` > a repo's ` + "`.praxis`" + ` pointer >
-the global pointer. The flag works before or after the command name
+Precedence: ` + "`-p`" + ` > ` + "`PRAXIS_PROFILE`" + ` > ` + "`FACETS_PROFILE`" + ` > the
+store's ` + "`[default]`" + ` (a repo's own ` + "`.facets/credentials`" + ` inside a local
+tree, else home) > the sole section. The flag works before or after the command name
 (` + "`praxis -p x status`" + ` == ` + "`praxis status -p x`" + `).
 
 **Limitation worth knowing:** ` + "`-p`" + ` and ` + "`PRAXIS_PROFILE`" + ` route commands
@@ -205,14 +206,16 @@ praxis profiles use acme --local        # already authenticated: just pin
 praxis refresh-skills --project         # same scope, no re-auth
 ` + "```" + `
 
-  - Writes a pointer at ` + "`<dir>/.praxis/config.json`" + `; discovery is
-    git-style, walking up from cwd (bounded to ` + "`$HOME`" + `).
+  - Writes ` + "`<dir>/.facets/credentials`" + ` (the profile plus a ` + "`[default]`" + `
+    copy) — the same file ` + "`raptor login --local`" + ` writes, so BOTH CLIs
+    resolve that profile inside the tree with no env var. Discovery is
+    git-style, walking up from cwd (bounded to ` + "`$HOME`" + `). Only a
+    control-plane PAT profile can be pinned this way.
   - Skills/agents install project-scoped (` + "`<dir>/.claude/skills`" + `, …),
     so several orgs' skills coexist on one machine without wiping each
-    other. Credentials always stay global in ` + "`~/.praxis/credentials`" + `.
-  - ` + "`praxis status`" + ` inside the tree shows
-    ` + "`profile_source: \"project\"`" + ` plus ` + "`project_root`" + `; outside
-    it, the global profile applies as usual.
+    other. The receipt and MCP snapshot live in ` + "`<dir>/.praxis`" + `.
+  - ` + "`praxis status`" + ` inside the tree shows ` + "`project_root`" + `; outside
+    it, the home store applies as usual.
 
 ## Output convention
 
@@ -318,10 +321,11 @@ tree). A ` + "`praxis login`" + ` that ends with a control-plane PAT writes the
 section raptor reads, and a ` + "`raptor login`" + ` is already a praxis login.
 Only Praxis API keys live apart, in ` + "`~/.praxis/credentials`" + `.
 
-What differs is SELECTION. praxis follows ` + "`-p`" + ` → ` + "`PRAXIS_PROFILE`" + ` →
-` + "`FACETS_PROFILE`" + ` → pointers; a bare raptor command follows ONLY
-` + "`FACETS_PROFILE`" + `, else its ` + "`[default]`" + ` section, else the sole section.
-So ` + "`praxis profiles use acme`" + ` does not move raptor.
+Selection is the same rule for both: ` + "`FACETS_PROFILE`" + `, else the
+` + "`[default]`" + ` section, else the sole section (praxis also honors ` + "`-p`" + ` and
+` + "`PRAXIS_PROFILE`" + ` first). ` + "`praxis profiles use acme`" + ` copies acme over
+` + "`[default]`" + `, so it moves raptor too. The only way the two diverge is a
+praxis-only selector (` + "`-p`" + `, ` + "`PRAXIS_PROFILE`" + `) in this session.
 
 ` + "`praxis status --json`" + ` cross-checks them in the ` + "`raptor`" + ` block.
 Act on it:

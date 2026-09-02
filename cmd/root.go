@@ -9,6 +9,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"github.com/spf13/cobra"
@@ -37,8 +38,8 @@ Run 'praxis <command> --help' for details on any command.`,
 
 // rootProfile is the global --profile flag: the credentials profile this one
 // invocation should use. It sits at the top of the resolution chain in
-// credentials.resolveName (flag → $PRAXIS_PROFILE → $FACETS_PROFILE → project
-// pointer → global pointer → "default"), so it overrides a local-mode tree without touching any pointer
+// credentials.resolveName (flag → $PRAXIS_PROFILE → $FACETS_PROFILE → [default]
+// → sole section), so it overrides a local-mode tree without touching anything
 // on disk — nothing is persisted and the next invocation resolves normally.
 // Empty means "resolve normally". Commands consume it via activeOrAuthExit or
 // by passing it to credentials.ResolveActive.
@@ -92,7 +93,7 @@ func refusedProfileFlag(out io.Writer, asJSON bool, what, hintFmt, acts string) 
 //
 // Use it where the command rewrites state belonging to the ACTIVE profile:
 // `logout` deletes credentials and wipes org skills, `refresh-skills`
-// reinstalls them. Acting on any other profile would leave the pointer and the
+// reinstalls them. Acting on any other profile would leave [default] and the
 // skills on disk out of step. Ignoring a diverging selection is the dangerous
 // option, not the polite one — `praxis --profile acme logout` would delete the
 // ACTIVE profile's credentials while the user believed they had named acme.
@@ -100,7 +101,7 @@ func refusedProfileFlag(out io.Writer, asJSON bool, what, hintFmt, acts string) 
 // `acts` must be resolved WITHOUT the flag and the environment (see
 // credentials.PersistedActiveName / PointerActiveName), or the comparison is
 // against the selection itself and always matches. The CALLER must then act on
-// that same name — a guard checked against the pointer while the action
+// that same name — a guard checked against the store while the action
 // re-resolves the full chain is two different answers to "which profile?", and
 // the action's one wins.
 //
@@ -111,10 +112,13 @@ func refusedProfileFlag(out io.Writer, asJSON bool, what, hintFmt, acts string) 
 // logout` under PRAXIS_PROFILE=acme passed the check and deleted acme — the one
 // profile the user had not named.
 func refusedExplicitProfile(out io.Writer, asJSON bool, what, hintFmt, acts string) bool {
-	if rootProfile != "" && rootProfile != acts {
+	// A selection whose credentials equal the active section is the same
+	// deployment under another name — [default] after `profiles use X` — and
+	// is not a redirect.
+	if rootProfile != "" && !credentials.SameCreds(rootProfile, acts) {
 		return refuseSelection(out, asJSON, what, hintFmt, rootProfile, "--profile", acts)
 	}
-	if env := credentials.EnvProfileName(); env != "" && env != acts {
+	if env := credentials.EnvProfileName(); env != "" && !credentials.SameCreds(env, acts) {
 		return refuseSelection(out, asJSON, what, hintFmt, env, credentials.EnvProfile, acts)
 	}
 	return false
@@ -149,8 +153,17 @@ func Execute() {
 	// never blocks the command it precedes.
 	maybeFirstRunBootstrap(os.Args[1:])
 	// Control-plane PATs an older praxis kept in ~/.praxis/credentials move to
-	// raptor's file, the shared store. Silent and best-effort.
+	// raptor's file, the shared store; its active-profile pointer becomes the
+	// [default] section. Silent and best-effort.
 	_, _ = credentials.MigrateLegacyPATs()
+	_, _ = credentials.MigrateLegacyPointer()
+	// A pre-v1.11 per-directory pointer no longer pins anything; say so once
+	// per run to a human, so a repo that used to be local mode is not a mystery.
+	if render.IsTTY(os.Stderr) && !skipUpdateCheck(os.Args[1:]) {
+		if p, profile, ok := paths.LegacyProjectPointer(); ok {
+			fmt.Fprintf(os.Stderr, "Note: %s is an old per-directory pointer and is ignored. To pin this tree again run `praxis profiles use %s --local`, or delete that file.\n", p, profile)
+		}
+	}
 	// Fire a background check for a newer release, but only for an interactive
 	// human (stderr is a TTY). When praxis is spawned by an AI host or a script,
 	// stderr is piped — we skip entirely so the check never delays automation

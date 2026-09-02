@@ -2,13 +2,10 @@ package cmd
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
-	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
 // resetLogoutFlags clears flag state between tests since cobra commands
@@ -66,11 +63,9 @@ func TestLogoutCmd_RemovesActive(t *testing.T) {
 	}
 }
 
-// TestLogoutCmd_LeavesOtherProfilesAlone pins the v0.7 logout contract:
-// only the active profile's credentials are removed; sibling profiles
-// in the credentials file are untouched. v0.7 dropped --profile from
-// logout, so this test sets active to "acme" first via SetActive, then
-// runs logout and verifies "default" survives.
+// Only the active section — [default] — is removed; sibling profiles are
+// untouched. After `profiles use acme`, [default] is a copy of acme, so logout
+// removes the copy and acme itself survives.
 func TestLogoutCmd_LeavesOtherProfilesAlone(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	resetLogoutFlags()
@@ -78,64 +73,22 @@ func TestLogoutCmd_LeavesOtherProfilesAlone(t *testing.T) {
 
 	_ = credentials.Put("default", credentials.Profile{URL: "x", Token: "t1"})
 	_ = credentials.Put("acme", credentials.Profile{URL: "y", Token: "t2"})
-	_ = credentials.SetActive("acme")
+	_, _ = credentials.SetDefault("acme")
 
 	var buf bytes.Buffer
 	logoutCmd.SetOut(&buf)
 	if err := logoutCmd.RunE(logoutCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
-	if !strings.Contains(buf.String(), `"removed": "acme"`) {
-		t.Errorf("expected JSON acme removal, got %q", buf.String())
-	}
-	store, _ := credentials.Load()
-	if _, ok := store["acme"]; ok {
-		t.Errorf("acme should be gone")
-	}
-	if _, ok := store["default"]; !ok {
-		t.Errorf("default should remain")
-	}
-}
-
-// TestLogoutCmd_InProjectDir_RemovesGlobalNotProjectProfile is the
-// regression test for the local-mode logout fix: logout is a GLOBAL
-// operation, so run from inside a local-mode repo it must remove the
-// globally-active profile — never the project-pinned one — so a stray or
-// teammate-committed <repo>/.praxis can't redirect a destructive logout.
-func TestLogoutCmd_InProjectDir_RemovesGlobalNotProjectProfile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	resetLogoutFlags()
-	defer resetLogoutFlags()
-
-	_ = credentials.Put("default", credentials.Profile{URL: "x", Token: "t1"})
-	_ = credentials.Put("acme", credentials.Profile{URL: "y", Token: "t2"})
-	_ = credentials.SetActive("default") // global active = default
-
-	repo := filepath.Join(home, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return repo, nil }))
-	if _, err := credentials.SetActiveLocal("acme"); err != nil { // project pinned to acme
-		t.Fatal(err)
-	}
-
-	var buf bytes.Buffer
-	logoutCmd.SetOut(&buf)
-	if err := logoutCmd.RunE(logoutCmd, nil); err != nil {
-		t.Fatalf("RunE err = %v", err)
-	}
-	// Must remove the GLOBAL profile (default), not the project pointer (acme).
 	if !strings.Contains(buf.String(), `"removed": "default"`) {
-		t.Errorf("logout in a project dir must remove the global profile; got %q", buf.String())
+		t.Errorf("expected JSON default removal, got %q", buf.String())
 	}
 	store, _ := credentials.Load()
 	if _, ok := store["default"]; ok {
-		t.Error("global profile 'default' should have been removed")
+		t.Errorf("default (the active copy) should be gone")
 	}
 	if _, ok := store["acme"]; !ok {
-		t.Error("project-pinned profile 'acme' must NOT be removed by a global logout")
+		t.Errorf("acme should remain")
 	}
 }
 
@@ -145,7 +98,7 @@ func TestLogoutCmd_All_WipesEverything(t *testing.T) {
 
 	_ = credentials.Put("default", credentials.Profile{URL: "x", Token: "t1"})
 	_ = credentials.Put("acme", credentials.Profile{URL: "y", Token: "t2"})
-	_ = credentials.SetActive("acme")
+	_, _ = credentials.SetDefault("acme")
 
 	logoutAll = true
 	defer resetLogoutFlags()
@@ -160,5 +113,43 @@ func TestLogoutCmd_All_WipesEverything(t *testing.T) {
 	store, _ := credentials.Load()
 	if len(store) != 0 {
 		t.Errorf("store should be empty, got %d", len(store))
+	}
+}
+
+// Inside a local-mode tree the store is the tree's own credentials file, for
+// praxis and raptor alike, so logout there removes the tree's [default] and
+// leaves the home store alone.
+func TestLogoutCmd_InProjectDir_RemovesTreeDefaultNotHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	resetLogoutFlags()
+	defer resetLogoutFlags()
+	clearFacetsEnv(t)
+
+	seedPAT(t, "default", "https://home.test", "t1")
+	seedPAT(t, "acme", "https://acme.test", "t2")
+	repo := repoUnderHome(t, home)
+	if err := credentials.SetDefaultLocal("acme", repo); err != nil {
+		t.Fatal(err)
+	}
+	inDir(t, repo)
+
+	var buf bytes.Buffer
+	logoutCmd.SetOut(&buf)
+	if err := logoutCmd.RunE(logoutCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	if !strings.Contains(buf.String(), `"removed": "default"`) {
+		t.Errorf("logout in a local tree must remove the tree's default; got %q", buf.String())
+	}
+	tree := readFacetsFile(t, repo)
+	if _, still := tree["default"]; still {
+		t.Error("tree [default] should have been removed")
+	}
+	if tree["acme"]["token"] != "t2" {
+		t.Error("tree [acme] must survive")
+	}
+	if got := homeFacetsURL(t); got != "https://home.test" {
+		t.Errorf("home [default] = %q; a logout inside a tree must not touch the home store", got)
 	}
 }

@@ -59,15 +59,17 @@ current staleness.`,
 			"username":       active.Profile.Username,
 		}
 		// Surface project (local) mode so AI hosts and users can see that
-		// skills/receipt are scoped to this directory tree, not global.
-		// Only when the active profile actually RESOLVED from the project
-		// pointer — a bare/stray .praxis dir (or one whose pointer named a
-		// profile we don't have) must not masquerade as local mode.
+		// skills/receipt are scoped to this directory tree, not global. A tree
+		// is local mode exactly when it has its own .facets/credentials.
 		projectRoot := ""
-		if active.Source == credentials.SourceProject {
-			if root, ok, _ := paths.ProjectRoot(); ok {
-				projectRoot = root
-				state["project_root"] = root
+		if root, ok, _ := paths.ProjectRoot(); ok {
+			projectRoot = root
+			state["project_root"] = root
+		}
+		// After `profiles use X`, [default] is a copy of X: say so.
+		if store, serr := credentials.Load(); serr == nil {
+			if same := credentials.SameAs(store, active.Name); len(same) > 0 {
+				state["same_as"] = same
 			}
 		}
 

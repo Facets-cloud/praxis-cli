@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
-	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 )
 
@@ -25,17 +24,13 @@ func TestStatusCmd_LocalMode_ReportsProjectRootAndSource(t *testing.T) {
 	t.Setenv("HOME", home)
 	resetStatusFlags()
 
-	if err := credentials.Put("acme", credentials.Profile{URL: "https://acme.test", Username: "u@acme", Token: "tok"}); err != nil {
+	isolateRaptorEnv(t)
+	seedPAT(t, "acme", "https://acme.test", "tok")
+	repo := repoUnderHome(t, home)
+	if err := credentials.SetDefaultLocal("acme", repo); err != nil {
 		t.Fatal(err)
 	}
-	repo := filepath.Join(home, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return repo, nil }))
-	if _, err := credentials.SetActiveLocal("acme"); err != nil {
-		t.Fatal(err)
-	}
+	inDir(t, repo)
 
 	var buf bytes.Buffer
 	statusCmd.SetOut(&buf)
@@ -43,7 +38,7 @@ func TestStatusCmd_LocalMode_ReportsProjectRootAndSource(t *testing.T) {
 		t.Fatalf("RunE err = %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{`"profile": "acme"`, `"profile_source": "project"`, `"project_root"`} {
+	for _, want := range []string{`"profile": "default"`, `"url": "https://acme.test"`, `"project_root"`, `"same_as"`, `"acme"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status in local mode missing %q\nfull: %s", want, out)
 		}
@@ -186,7 +181,7 @@ func TestStatusCmd_HonorsActiveProfileFromUseConfig(t *testing.T) {
 
 	_ = credentials.Put("default", credentials.Profile{URL: "https://default.test", Token: "td"})
 	_ = credentials.Put("acme", credentials.Profile{URL: "https://acme.test", Token: "ta"})
-	if err := credentials.SetActive("acme"); err != nil {
+	if _, err := credentials.SetDefault("acme"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -195,8 +190,11 @@ func TestStatusCmd_HonorsActiveProfileFromUseConfig(t *testing.T) {
 	if err := statusCmd.RunE(statusCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
-	if !strings.Contains(buf.String(), `"profile": "acme"`) ||
-		!strings.Contains(buf.String(), `"url": "https://acme.test"`) {
+	// `profiles use acme` copies acme over [default]; status shows the active
+	// section and names the copy's source.
+	if !strings.Contains(buf.String(), `"profile": "default"`) ||
+		!strings.Contains(buf.String(), `"url": "https://acme.test"`) ||
+		!strings.Contains(buf.String(), `"same_as"`) {
 		t.Errorf("`praxis use acme` not honored, got %q", buf.String())
 	}
 }
@@ -376,9 +374,9 @@ func TestStatusCmd_RaptorBlock_SharedProfileNeedsPrefix(t *testing.T) {
 	stubStatusFreshness(t)
 
 	writeRaptorCreds(t, "[default]\ncontrol_plane_url = https://root.test\nusername = u@x\ntoken = pat\n\n[acme]\ncontrol_plane_url = https://acme.test\nusername = u@x\ntoken = pat2\n")
-	if err := credentials.SetActive("acme"); err != nil {
-		t.Fatal(err)
-	}
+	// Bare commands share [default], so a mismatch only arises from an explicit
+	// selection: this session works on acme via -p.
+	setRootProfile(t, "acme")
 
 	var buf bytes.Buffer
 	statusCmd.SetOut(&buf)

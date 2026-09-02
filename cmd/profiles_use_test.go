@@ -86,6 +86,8 @@ func decodeMap(t *testing.T, s string) map[string]any {
 }
 
 // repoUnderHome creates <home>/repo and points project-root discovery at it.
+// The credentials walk is left at HOME (see TestMain); tests that need the
+// tree's store visible call inDir.
 func repoUnderHome(t *testing.T, home string) string {
 	t.Helper()
 	repo := filepath.Join(home, "repo")
@@ -105,9 +107,6 @@ func TestProfilesUse_GlobalSwitch_FlipsPointerAndSyncs(t *testing.T) {
 
 	seedProfile(t, "default", "https://d.test", "td")
 	seedProfile(t, "acme", "https://acme.test", "ta")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	okAuthMe(t, "u@x")
 	call := stubPostAuthCapture(t)
 
@@ -116,8 +115,8 @@ func TestProfilesUse_GlobalSwitch_FlipsPointerAndSyncs(t *testing.T) {
 		t.Fatalf("RunE err = %v", err)
 	}
 
-	if g, _ := credentials.ResolveActiveGlobal(); g.Name != "acme" {
-		t.Errorf("global pointer = %q, want acme", g.Name)
+	if got := onDiskActiveURL(t); got != "https://acme.test" {
+		t.Errorf("active control plane = %q, want acme's", got)
 	}
 	// The sync must run against the NEW profile's deployment and token —
 	// otherwise the pointer and the installed skills disagree.
@@ -155,7 +154,7 @@ func TestProfilesUse_SameProfile_ReSyncs(t *testing.T) {
 	resetProfilesUseFlags(t)
 
 	seedProfile(t, "acme", "https://acme.test", "ta")
-	if err := credentials.SetActive("acme"); err != nil {
+	if _, err := credentials.SetDefault("acme"); err != nil {
 		t.Fatal(err)
 	}
 	okAuthMe(t, "u@x")
@@ -177,12 +176,10 @@ func TestProfilesUse_Local_PinsTreeAndLeavesGlobalAlone(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	resetProfilesUseFlags(t)
+	clearFacetsEnv(t)
 
-	seedProfile(t, "default", "https://d.test", "td")
-	seedProfile(t, "acme", "https://acme.test", "ta")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
+	seedPAT(t, "default", "https://d.test", "td")
+	seedPAT(t, "acme", "https://acme.test", "ta")
 	repo := repoUnderHome(t, home)
 	okAuthMe(t, "u@x")
 	call := stubPostAuthCapture(t)
@@ -193,14 +190,16 @@ func TestProfilesUse_Local_PinsTreeAndLeavesGlobalAlone(t *testing.T) {
 		t.Fatalf("RunE err = %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(repo, ".praxis", "config.json")); err != nil {
-		t.Errorf("project pointer should exist: %v", err)
+	tree := readFacetsFile(t, repo)
+	if tree["acme"]["token"] != "ta" || tree["default"]["token"] != "ta" {
+		t.Errorf("tree file = %v, want acme and a default copy", tree)
 	}
-	if a, _ := credentials.ResolveActive(""); a.Name != "acme" || a.Source != credentials.SourceProject {
-		t.Errorf("in-repo resolution = %+v, want acme/project", a)
+	inDir(t, repo)
+	if a, _ := credentials.ResolveActive(""); a.Name != "default" || a.Profile.URL != "https://acme.test" {
+		t.Errorf("in-repo resolution = %+v, want default with acme's credentials", a)
 	}
-	if g, _ := credentials.ResolveActiveGlobal(); g.Name != "default" {
-		t.Errorf("global pointer = %q; --local must not switch it", g.Name)
+	if got := homeFacetsURL(t); got != "https://d.test" {
+		t.Errorf("home [default] = %q; --local must not switch it", got)
 	}
 	// Skills must install project-scoped, i.e. the receipt follows the repo.
 	if want := filepath.Join(repo, ".praxis"); call.activeRoot != want {
@@ -217,22 +216,23 @@ func TestProfilesUse_Local_PinsTreeAndLeavesGlobalAlone(t *testing.T) {
 
 // A global switch made from inside a local-mode tree must (a) still install
 // user-level — never into the repo pinned to another profile — and (b) tell
-// the user their cwd still resolves to the project-pinned profile.
+// the user their cwd still resolves to the tree's profile. Inside the tree the
+// shared store is the tree's file, so the target has to be visible there: a
+// Praxis API key (always global) is.
 func TestProfilesUse_GlobalSwitch_InsideLocalTree_IsScopedToHomeAndFlagged(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	resetProfilesUseFlags(t)
+	clearFacetsEnv(t)
 
-	seedProfile(t, "default", "https://d.test", "td")
-	seedProfile(t, "acme", "https://acme.test", "ta")
+	seedPAT(t, "default", "https://d.test", "td")
+	seedPAT(t, "acme", "https://acme.test", "ta")
 	seedProfile(t, "vymo", "https://vymo.test", "tv")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	repo := repoUnderHome(t, home)
-	if _, err := credentials.SetActiveLocal("acme"); err != nil {
+	if err := credentials.SetDefaultLocal("acme", repo); err != nil {
 		t.Fatal(err)
 	}
+	inDir(t, repo)
 	okAuthMe(t, "u@x")
 	call := stubPostAuthCapture(t)
 
@@ -241,12 +241,13 @@ func TestProfilesUse_GlobalSwitch_InsideLocalTree_IsScopedToHomeAndFlagged(t *te
 		t.Fatalf("RunE err = %v", err)
 	}
 
-	if g, _ := credentials.ResolveActiveGlobal(); g.Name != "vymo" {
-		t.Errorf("global pointer = %q, want vymo", g.Name)
+	// The HOME default is now vymo (an API key, in the praxis file)...
+	if praxis := readPraxisFile(t); praxis["default"]["token"] != "tv" {
+		t.Errorf("home default = %v, want vymo's API key", praxis["default"])
 	}
-	// The repo stays pinned to acme — a global switch must not repin it.
-	if a, _ := credentials.ResolveActive(""); a.Name != "acme" {
-		t.Errorf("in-repo resolution = %q, want acme (project pointer wins)", a.Name)
+	// ...and the repo stays pinned to acme — a global switch must not repin it.
+	if a, _ := credentials.ResolveActive(""); a.Profile.URL != "https://acme.test" {
+		t.Errorf("in-repo resolution = %+v, want acme (the tree's file wins)", a)
 	}
 	if want := filepath.Join(home, ".praxis"); call.activeRoot != want {
 		t.Errorf("activeRoot during sync = %q, want home root %q — a global switch must not install into a repo pinned to another profile", call.activeRoot, want)
@@ -255,8 +256,9 @@ func TestProfilesUse_GlobalSwitch_InsideLocalTree_IsScopedToHomeAndFlagged(t *te
 	if got["shadowed_by_project_root"] != filepath.Join(repo, ".praxis") {
 		t.Errorf("shadowed_by_project_root = %v, want %s", got["shadowed_by_project_root"], filepath.Join(repo, ".praxis"))
 	}
-	if got["effective_profile"] != "acme" {
-		t.Errorf("effective_profile = %v, want acme", got["effective_profile"])
+	// The tree's own [default] (a copy of acme) is what commands here use.
+	if got["effective_profile"] != "default" {
+		t.Errorf("effective_profile = %v, want default (the tree's section)", got["effective_profile"])
 	}
 }
 
@@ -369,9 +371,6 @@ func TestProfilesUse_Refusals_LeaveStateUntouched(t *testing.T) {
 			resetProfilesUseFlags(t)
 
 			seedProfile(t, "default", "https://d.test", "td")
-			if err := credentials.SetActive("default"); err != nil {
-				t.Fatal(err)
-			}
 			tc.seed(t)
 			tc.authMe(t)
 			call := stubPostAuthCapture(t)
@@ -388,8 +387,8 @@ func TestProfilesUse_Refusals_LeaveStateUntouched(t *testing.T) {
 				t.Errorf("error = %v, want it to mention %q", got["error"], tc.wantMsg)
 			}
 			// The two things that must not move.
-			if g, _ := credentials.ResolveActiveGlobal(); g.Name != "default" {
-				t.Errorf("pointer moved to %q on a refused switch", g.Name)
+			if got := onDiskActiveURL(t); got != "https://d.test" {
+				t.Errorf("active control plane moved to %q on a refused switch", got)
 			}
 			if call.count != 0 {
 				t.Errorf("postAuthSetup ran %d times; a refused switch must not touch installed skills", call.count)
@@ -404,9 +403,6 @@ func TestProfilesUse_Local_OutsideHome_Refuses(t *testing.T) {
 
 	seedProfile(t, "default", "https://d.test", "td")
 	seedProfile(t, "acme", "https://acme.test", "ta")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	// Project-root discovery is bounded to the home subtree.
 	outside := t.TempDir()
 	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return outside, nil }))
@@ -425,8 +421,8 @@ func TestProfilesUse_Local_OutsideHome_Refuses(t *testing.T) {
 	if call.count != 0 {
 		t.Error("no skills should be synced when the pin fails")
 	}
-	if g, _ := credentials.ResolveActiveGlobal(); g.Name != "default" {
-		t.Errorf("global pointer = %q; a failed --local must not switch it", g.Name)
+	if got := onDiskActiveURL(t); got != "https://d.test" {
+		t.Errorf("active control plane = %q; a failed --local must not switch it", got)
 	}
 	if got := decodeMap(t, out); !strings.Contains(fmt.Sprint(got["hint"]), "home directory") {
 		t.Errorf("hint = %v, want the home-directory guidance", got["hint"])
@@ -555,7 +551,7 @@ func TestRenderProfileSwitchText(t *testing.T) {
 				Profile: "vymo", Previous: "acme", URL: "https://vymo.test",
 				ShadowedRoot: "/h/repo/.praxis", MultiProfile: true,
 			},
-			contains: []string{`Switched to profile "vymo"`, "Note:", "/h/repo/.praxis", `still use "acme"`, "--local"},
+			contains: []string{`Switched to profile "vymo"`, "Note:", "/h/repo/.facets/credentials", `still use "acme"`, "--local"},
 		},
 	}
 	for _, tc := range tests {
@@ -583,7 +579,8 @@ func TestRenderProfileSwitchText(t *testing.T) {
 func TestActivateProfile_PairsPointerAndRoot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	seedProfile(t, "acme", "https://acme.test", "ta")
+	clearFacetsEnv(t)
+	seedPAT(t, "acme", "https://acme.test", "ta")
 	repo := repoUnderHome(t, home)
 
 	t.Run("global pins home", func(t *testing.T) {
@@ -601,8 +598,8 @@ func TestActivateProfile_PairsPointerAndRoot(t *testing.T) {
 		if paths.RootIsPinned() {
 			t.Error("restore() must unpin ActiveRoot")
 		}
-		if g, _ := credentials.ResolveActiveGlobal(); g.Name != "acme" {
-			t.Errorf("global pointer = %q, want acme", g.Name)
+		if got := onDiskActiveURL(t); got != "https://acme.test" {
+			t.Errorf("active control plane = %q, want acme's", got)
 		}
 	})
 

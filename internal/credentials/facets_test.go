@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
 // seedFacets writes a raptor-style credentials file at path.
@@ -269,18 +271,12 @@ func TestDeleteAll_WipesBothHomeFiles(t *testing.T) {
 	if err := Put("key", Profile{URL: "https://x", Token: "sk"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetActive("acme"); err != nil {
-		t.Fatal(err)
-	}
 	if err := DeleteAll(); err != nil {
 		t.Fatal(err)
 	}
 	store, _ := Load()
 	if len(store) != 0 {
 		t.Errorf("Load() after DeleteAll = %v", store)
-	}
-	if PersistedActiveName() != DefaultProfileName {
-		t.Error("pointer not cleared")
 	}
 }
 
@@ -291,7 +287,7 @@ func TestRename_FollowsTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Rename("acme", "acme2"); err != nil {
+	if err := Rename("acme", "acme2"); err != nil {
 		t.Fatal(err)
 	}
 	facets := loadFacets(homeFacets(t))
@@ -302,14 +298,14 @@ func TestRename_FollowsTheStore(t *testing.T) {
 		t.Errorf("extra key lost on rename: %v", kv)
 	}
 
-	if _, err := Rename("key", "key2"); err != nil {
+	if err := Rename("key", "key2"); err != nil {
 		t.Fatal(err)
 	}
 	praxis, _ := loadPraxis()
 	if _, old := praxis["key"]; old || praxis["key2"].Token != "sk" {
 		t.Errorf("praxis after rename = %v", praxis)
 	}
-	if _, err := Rename("key2", "default"); err == nil {
+	if err := Rename("key2", "default"); err == nil {
 		t.Error("rename onto an existing facets section should fail")
 	}
 }
@@ -350,9 +346,6 @@ func TestMigrateLegacyPATs(t *testing.T) {
 func TestResolveActive_FacetsProfileEnvAndOverride(t *testing.T) {
 	withHome(t)
 	seedFacets(t, homeFacets(t), twoRaptorSections)
-	if err := SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 
 	t.Run("FACETS_PROFILE selects after PRAXIS_PROFILE", func(t *testing.T) {
 		t.Setenv(FacetsEnvProfile, "acme")
@@ -387,4 +380,50 @@ func TestResolveActive_FacetsProfileEnvAndOverride(t *testing.T) {
 			t.Errorf("CONTROL_PLANE_URL alone must not make a profile: %+v", a)
 		}
 	})
+}
+
+func TestMigrateLegacyPointer(t *testing.T) {
+	tests := []struct {
+		name         string
+		pointer      string // "" = no file
+		wantPromoted string
+		wantDefault  string // URL of [default] afterwards
+	}{
+		{name: "no pointer is a no-op", wantDefault: "https://root.test"},
+		{name: "pointer to default changes nothing", pointer: "default", wantDefault: "https://root.test"},
+		{name: "pointer to another profile becomes the default copy", pointer: "acme", wantPromoted: "acme", wantDefault: "https://acme.test"},
+		{name: "pointer to a missing profile is dropped", pointer: "ghost", wantDefault: "https://root.test"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withHome(t)
+			seedFacets(t, homeFacets(t), twoRaptorSections)
+			legacy, _ := paths.LegacyConfig()
+			if tt.pointer != "" {
+				if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(legacy, []byte("[default]\nprofile = "+tt.pointer+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			promoted, err := MigrateLegacyPointer()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if promoted != tt.wantPromoted {
+				t.Errorf("promoted = %q, want %q", promoted, tt.wantPromoted)
+			}
+			if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+				t.Error("legacy pointer file still exists")
+			}
+			if got := mustLoad(t)["default"].URL; got != tt.wantDefault {
+				t.Errorf("[default] = %q, want %q", got, tt.wantDefault)
+			}
+			// Idempotent.
+			if p, err := MigrateLegacyPointer(); err != nil || p != "" {
+				t.Errorf("second run = %q, %v", p, err)
+			}
+		})
+	}
 }

@@ -31,23 +31,23 @@ var profilesRenameCmd = &cobra.Command{
 	Use:   "rename OLD NEW",
 	Short: "Rename a profile (credentials only — no browser, no skill changes)",
 	Long: `Rename a profile section in ~/.praxis/credentials, keeping its URL,
-username, and token, in whichever file holds it. If the global active-profile pointer
+username, and token, in whichever file holds it. If the global active-profile
 named OLD it follows to NEW automatically.
 
 Installed skills are not touched: they belong to the profile's org, not its
 name. No browser opens and no API key is created — this fixes the "re-login
 just to rename" workaround that minted an orphaned key each time.
 
-Directory trees pinned with 'praxis login --profile OLD --local' keep a
-project pointer naming OLD; those trees silently fall back to the global
-profile until re-pinned with 'praxis login --profile NEW --local'.`,
+A [default] section that is a copy of OLD is not renamed; it stays the
+active profile. Directory trees pinned with --local have their own
+credentials file and are not touched.`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(profilesRenameJSON, false, out)
 		oldName, newName := args[0], args[1]
 
-		pointerUpdated, err := credentials.Rename(oldName, newName)
+		err := credentials.Rename(oldName, newName)
 		if err != nil {
 			render.PrintError(out, asJSON, err.Error(),
 				"run `praxis profiles` to see what exists", exitcode.Usage)
@@ -57,16 +57,12 @@ profile until re-pinned with 'praxis login --profile NEW --local'.`,
 
 		if asJSON {
 			return render.JSON(out, map[string]any{
-				"ok":                     true,
-				"renamed_from":           oldName,
-				"renamed_to":             newName,
-				"active_pointer_updated": pointerUpdated,
+				"ok":           true,
+				"renamed_from": oldName,
+				"renamed_to":   newName,
 			})
 		}
 		fmt.Fprintf(out, "✓ Renamed profile %q → %q\n", oldName, newName)
-		if pointerUpdated {
-			fmt.Fprintf(out, "  Active-profile pointer updated to %q.\n", newName)
-		}
 		return nil
 	},
 }
@@ -87,14 +83,12 @@ so there is no double skill-cycle from switching just to delete.`,
 		asJSON := render.UseJSON(profilesRmJSON, false, out)
 		name := args[0]
 
-		// The PERSISTED pointer decides what "active" means here -- not
-		// ResolveActiveGlobal, and not the project pointer. --profile and
-		// $PRAXIS_PROFILE select which deployment a session TALKS to, while the
-		// pointer is what owns the org skills on disk, so it alone decides which
-		// profile can't be deleted out from under them. Resolving through an
-		// override would make `PRAXIS_PROFILE=B praxis profiles rm A` delete the
-		// profile the pointer and the installed skills still refer to.
-		if name == credentials.PersistedActiveName() {
+		// The store's own active profile decides what "active" means here, not
+		// the environment. --profile and $PRAXIS_PROFILE select which deployment
+		// a session TALKS to, while [default] is what owns the org skills on
+		// disk, so it alone decides which profile can't be deleted out from under
+		// them.
+		if name == credentials.OnDiskActiveName() {
 			msg := fmt.Sprintf("%q is the active profile", name)
 			render.PrintError(out, asJSON, msg,
 				"use `praxis logout` to remove the active profile (it also removes its installed org skills)",

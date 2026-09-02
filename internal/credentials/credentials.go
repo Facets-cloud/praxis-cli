@@ -29,38 +29,26 @@
 //     credential, a complete profile named "env"
 //  3. $PRAXIS_PROFILE (scoped to one shell or agent session)
 //  4. $FACETS_PROFILE — raptor's selector, so one variable drives both CLIs
-//  5. <cwd>/.praxis/config.json project pointer (set by
-//     `praxis profiles use X --local` or `praxis login --profile X --local`),
-//     discovered by walking up from the working directory to home
-//  6. ~/.praxis/config.json "default profile" pointer (set by
-//     `praxis profiles use X` or `praxis login --profile X`)
-//  7. literal "default" section
+//  5. the [default] section — raptor's own rule
+//  6. the sole section, when exactly one exists — raptor's own rule
 //
-// Rationale, and note the env var OUTRANKS the project pointer: the two
-// pointers are machine-global state, so moving one repoints every other shell
-// and agent session on the box — and rewrites the installed praxis-* skill
-// files a concurrent session may already have read. The environment writes
-// nothing and is invisible to other sessions, which makes it the only
-// concurrency-safe way to scope one session, and the reason a pinned repo stays
-// per-session overridable. The flag is the same argument narrowed to a single
-// command. Between the two pointers the project one still wins over the global
-// one: being inside that directory tree IS the intent.
+// There is no pointer file. `praxis profiles use X` copies X's section over
+// [default], so both CLIs move together; `--local` writes the tree's
+// .facets/credentials, which both CLIs read first from inside that tree.
+// The environment is the only per-session scope: it writes nothing and is
+// invisible to other sessions, which is what makes it concurrency-safe.
 //
-// Single-profile users never see steps 1–6 — everything resolves to
-// "default" automatically.
+// Single-profile users never see steps 1–4 — everything resolves to their one
+// section automatically.
 //
-// Two deliberate exceptions, for callers asking a question about STATE rather
-// than about this invocation — "which profile owns the skills on disk?", or
-// "what would this command act on if the invocation named nothing?":
-// PersistedActiveName reads only the global pointer, and PointerActiveName only
-// the applicable one (project, else global). Both ignore the flag and the
-// environment. Resolving those questions through the full chain is what made
-// `login --dry-run` mispredict, and what makes a divergence check compare a
-// selection with itself.
+// OnDiskActiveName answers "what would a bare command act on?" for callers
+// that must compare an explicit selection against the profile whose org skills
+// are installed (logout, refresh-skills, profiles rm).
 package credentials
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -150,9 +138,8 @@ const (
 	SourceEnvOverride Source = "env-override" // CONTROL_PLANE_URL + FACETS_USERNAME + FACETS_TOKEN
 	SourceEnv         Source = "env"          // PRAXIS_PROFILE
 	SourceFacetsEnv   Source = "facets-env"   // FACETS_PROFILE
-	SourceProject     Source = "project"
-	SourceConfig      Source = "config"
-	SourceDefault     Source = "default"
+	SourceDefault     Source = "default"      // the [default] section
+	SourceSole        Source = "sole"         // the only section in the store
 )
 
 // EnvProfile selects the active profile for one PROCESS TREE — i.e. one shell
@@ -180,6 +167,10 @@ type Active struct {
 // ResolveActive walks the priority chain and returns the active profile.
 // The Profile field is zeroed if the named section doesn't exist; callers
 // should check Loaded before using URL/Token.
+//
+// With nothing explicit, the active profile is raptor's: the [default]
+// section, else the sole section when exactly one exists. There is no pointer
+// file — `praxis profiles use X` copies X into [default], so both CLIs move.
 func ResolveActive(flagProfile string) (Active, error) {
 	if a, ok := envOverride(flagProfile); ok {
 		return a, nil
@@ -189,15 +180,8 @@ func ResolveActive(flagProfile string) (Active, error) {
 		return Active{}, err
 	}
 	name, src := resolveName(flagProfile)
-	if src == SourceProject {
-		if _, ok := store[name]; !ok {
-			// The project pointer names a profile this machine doesn't have
-			// — e.g. a <repo>/.praxis committed by a teammate, or a stale
-			// pointer left after `logout`. Don't hijack the user into a
-			// profile they never created (which would just hard-fail every
-			// command); fall back to the global resolution.
-			name, src = resolveGlobalName(flagProfile)
-		}
+	if src == SourceDefault {
+		name, src = onDiskActive(store)
 	}
 	p, ok := store[name]
 	return Active{
@@ -208,37 +192,40 @@ func ResolveActive(flagProfile string) (Active, error) {
 	}, nil
 }
 
-// ResolveActiveGlobal resolves the active profile IGNORING any project-local
-// pointer — flag → global config → "default". Lifecycle
-// commands that are global by definition (e.g. `praxis logout`, mirroring
-// `praxis login`) use this so a stray/leftover <cwd>/.praxis can't redirect a
-// destructive operation at a profile the user didn't mean.
-func ResolveActiveGlobal() (Active, error) {
-	if a, ok := envOverride(""); ok {
-		return a, nil
-	}
-	store, err := Load()
-	if err != nil {
-		return Active{}, err
-	}
-	name, src := resolveGlobalName("")
-	p, ok := store[name]
-	return Active{Name: name, Source: src, Profile: p, Loaded: ok}, nil
-}
-
+// resolveName is the explicit part of the chain: flag, then environment.
+// SourceDefault means "nothing explicit" — the caller applies raptor's rule.
 func resolveName(flagProfile string) (string, Source) {
 	if flagProfile != "" {
 		return flagProfile, SourceFlag
 	}
-	// Env outranks both pointers: it is this session's explicit choice, and a
-	// repo pinned via .praxis must still be overridable per session.
 	if name, src := envProfile(); name != "" {
 		return name, src
 	}
-	if name := projectProfile(); name != "" {
-		return name, SourceProject
+	return DefaultProfileName, SourceDefault
+}
+
+// onDiskActive is raptor's rule for a bare command: [default] if it exists,
+// else the sole section, else the literal "default" (which then fails to load).
+func onDiskActive(store map[string]Profile) (string, Source) {
+	if _, ok := store[DefaultProfileName]; ok || len(store) != 1 {
+		return DefaultProfileName, SourceDefault
 	}
-	return resolveGlobalName(flagProfile)
+	for name := range store {
+		return name, SourceSole
+	}
+	return DefaultProfileName, SourceDefault
+}
+
+// OnDiskActiveName is the profile a bare command acts on, ignoring --profile
+// and the environment — the one whose org skills are installed. Destructive
+// commands compare an explicit selection against this.
+func OnDiskActiveName() string {
+	store, err := Load()
+	if err != nil {
+		return DefaultProfileName
+	}
+	name, _ := onDiskActive(store)
+	return name
 }
 
 // EnvProfileName returns the profile named by $PRAXIS_PROFILE, else by
@@ -280,95 +267,119 @@ func envOverride(flagProfile string) (Active, bool) {
 	return Active{Name: "env", Source: SourceEnvOverride, Profile: p, Loaded: true}, true
 }
 
-// PersistedActiveName returns the profile named by the persisted global
-// pointer (~/.praxis/config.json), ignoring --profile and $PRAXIS_PROFILE.
-//
-// Destructive credentials operations MUST use this rather than
-// ResolveActiveGlobal. An override picks which deployment a SESSION talks to;
-// the pointer is what owns the org skills installed on disk. Resolving through
-// an override would let `PRAXIS_PROFILE=B praxis profiles rm A` delete the very
-// profile the pointer and those skills still belong to, leaving both dangling.
-func PersistedActiveName() string {
-	if cfg, _ := loadConfig(); cfg.Profile != "" {
-		return cfg.Profile
+// SameAs returns the other sections whose URL, username and token equal
+// profile `name` — after `profiles use X`, [default] is a copy of X, and
+// listings say so.
+func SameAs(store map[string]Profile, name string) []string {
+	p, ok := store[name]
+	if !ok {
+		return nil
 	}
-	return DefaultProfileName
+	var out []string
+	for _, other := range sortedKeys(store) {
+		q := store[other]
+		if other != name && q.URL == p.URL && q.Username == p.Username && q.Token == p.Token {
+			out = append(out, other)
+		}
+	}
+	return out
 }
 
-// PointerActiveName returns the profile named by whichever on-disk pointer
-// applies here — the project pointer when this tree is pinned to a profile that
-// exists, else the persisted global one, else "default". Like
-// PersistedActiveName it ignores --profile and $PRAXIS_PROFILE, so it answers
-// "what would this command act on if the invocation named nothing?".
+// SameCreds reports whether two profile names hold identical credentials —
+// true after `profiles use X` for X and "default". A guard that refuses a
+// selection diverging from the active profile must not refuse its own copy.
+func SameCreds(a, b string) bool {
+	if a == b {
+		return true
+	}
+	store, err := Load()
+	if err != nil {
+		return false
+	}
+	for _, n := range SameAs(store, a) {
+		if n == b {
+			return true
+		}
+	}
+	return false
+}
+
+// SetDefault makes `name` the active profile for both CLIs by copying its
+// section over [default], in whichever file holds it (Put routes). A no-op
+// for "default" itself.
 //
-// That is what an explicit selection has to be measured against. A command that
-// refuses a redirect is protecting against DIVERGENCE between the named profile
-// and the one whose skills are on disk; `-p X` where X is already the answer is
-// a no-op, not a conflict, and refusing it turns the single-profile user's only
-// profile name into an error.
-func PointerActiveName() (string, error) {
-	if name := projectProfile(); name != "" {
-		store, err := Load()
-		if err != nil {
+// A [default] that no other section duplicates — a bare first login writes
+// only [default] — would be lost by the copy, so it is kept first under a
+// name derived from its host (see keepName); the returned string names it.
+func SetDefault(name string) (kept string, err error) {
+	if name == DefaultProfileName {
+		return "", nil
+	}
+	store, err := Load()
+	if err != nil {
+		return "", err
+	}
+	p, ok := store[name]
+	if !ok {
+		return "", fmt.Errorf("profile %q does not exist", name)
+	}
+	if def, has := store[DefaultProfileName]; has && len(SameAs(store, DefaultProfileName)) == 0 &&
+		(def.URL != p.URL || def.Username != p.Username || def.Token != p.Token) {
+		kept = keepName(store, def.URL)
+		if err := Put(kept, def); err != nil {
 			return "", err
 		}
-		// Same guard as ResolveActive: a pointer naming a profile this machine
-		// doesn't have (a teammate-committed .praxis, a stale post-logout
-		// pointer) is inert and falls through to the global resolution.
-		if _, ok := store[name]; ok {
-			return name, nil
-		}
 	}
-	return PersistedActiveName(), nil
+	return kept, Put(DefaultProfileName, p)
 }
 
-// resolveGlobalName is resolveName without the project-pointer step.
-func resolveGlobalName(flagProfile string) (string, Source) {
-	if flagProfile != "" {
-		return flagProfile, SourceFlag
-	}
-	if name, src := envProfile(); name != "" {
-		return name, src
-	}
-	if cfg, _ := loadConfig(); cfg.Profile != "" {
-		return cfg.Profile, SourceConfig
-	}
-	return DefaultProfileName, SourceDefault
-}
-
-// init wires the paths package's local-mode gate to the credentials store:
-// a discovered <repo>/.praxis is only the active root when its pointer names
-// a profile that actually exists here. This is what makes a bare or
-// teammate-committed .praxis inert for a user who never opted in, while
-// keeping paths free of a credentials import (which would be a cycle).
-func init() {
-	paths.LocalModeActive = func(projectRoot string) bool {
-		cfg, err := readConfigFile(filepath.Join(projectRoot, "config.json"))
-		if err != nil || cfg.Profile == "" {
-			return false
+// keepName picks a free section name for a displaced [default]: the first
+// DNS label of its control plane ("facetsdemo" for facetsdemo.console…),
+// with a numeric suffix on collision, and "previous" when the URL is unusable.
+func keepName(store map[string]Profile, rawURL string) string {
+	base := "previous"
+	if u, err := url.Parse(rawURL); err == nil && u.Hostname() != "" {
+		if label := strings.Split(u.Hostname(), ".")[0]; ValidateProfileName(label) == nil {
+			base = label
 		}
-		store, err := Load()
-		if err != nil {
-			return false
+	}
+	name := base
+	for i := 2; ; i++ {
+		if _, taken := store[name]; !taken && name != DefaultProfileName {
+			return name
 		}
-		_, ok := store[cfg.Profile]
-		return ok
+		name = fmt.Sprintf("%s-%d", base, i)
 	}
 }
 
-// projectProfile returns the profile named in the project-local pointer
-// (<projectRoot>/.praxis/config.json), or "" when there's no project root or
-// no profile recorded there.
-func projectProfile() string {
-	path, ok, err := paths.ProjectConfig()
-	if err != nil || !ok {
-		return ""
-	}
-	cfg, err := readConfigFile(path)
+// SetDefaultLocal pins `name` to a directory tree the way `raptor login
+// --local` does: <dir>/.facets/credentials gets [name] and a [default] copy,
+// so both CLIs resolve it there with no env var. Only a control-plane PAT can
+// live in that file.
+func SetDefaultLocal(name, dir string) error {
+	store, err := Load()
 	if err != nil {
-		return ""
+		return err
 	}
-	return cfg.Profile
+	p, ok := store[name]
+	if !ok {
+		// A --local login wrote the section into the tree's file, which the
+		// walk from the caller's directory may not have reached yet.
+		p, ok = loadFacets(FacetsPathIn(dir))[name]
+	}
+	if !ok {
+		return fmt.Errorf("profile %q does not exist", name)
+	}
+	if !isFacetsCredential(p) {
+		return fmt.Errorf("profile %q is a Praxis API key; local mode needs a control-plane PAT", name)
+	}
+	if err := PutLocal(name, p, dir); err != nil {
+		return err
+	}
+	if name == DefaultProfileName {
+		return nil
+	}
+	return PutLocal(DefaultProfileName, p, dir)
 }
 
 // Load returns every profile praxis can use: the praxis file's API keys plus
@@ -476,7 +487,9 @@ func put(name string, p Profile, dir string) error {
 	if err := savePraxis(praxis); err != nil {
 		return err
 	}
-	fpath, err := FacetsPath()
+	// The praxis file is global, so the section it displaces is the HOME
+	// facets one — never a tree's file the command merely ran inside.
+	fpath, err := FacetsHome()
 	if err != nil {
 		return err
 	}
@@ -491,53 +504,47 @@ func put(name string, p Profile, dir string) error {
 // one is inert by design (LocalModeActive requires the pointer to name an
 // existing profile, so it falls back to the global resolution).
 // Returns whether the global pointer was updated.
-func Rename(oldName, newName string) (pointerUpdated bool, err error) {
+func Rename(oldName, newName string) error {
 	if err := validateProfileName(oldName); err != nil {
-		return false, err
+		return err
 	}
 	if err := validateProfileName(newName); err != nil {
-		return false, err
+		return err
 	}
 	if oldName == newName {
-		return false, fmt.Errorf("old and new profile names are both %q", oldName)
+		return fmt.Errorf("old and new profile names are both %q", oldName)
 	}
 	store, err := Load()
 	if err != nil {
-		return false, err
+		return err
 	}
 	p, ok := store[oldName]
 	if !ok {
-		return false, fmt.Errorf("profile %q does not exist", oldName)
+		return fmt.Errorf("profile %q does not exist", oldName)
 	}
 	if _, exists := store[newName]; exists {
-		return false, fmt.Errorf("profile %q already exists", newName)
+		return fmt.Errorf("profile %q already exists", newName)
 	}
 	if p.Store == StoreFacets {
 		fpath, err := FacetsPath()
 		if err != nil {
-			return false, err
+			return err
 		}
 		if _, err := renameFacets(fpath, oldName, newName); err != nil {
-			return false, err
+			return err
 		}
 	} else {
 		praxis, err := loadPraxis()
 		if err != nil {
-			return false, err
+			return err
 		}
 		praxis[newName] = praxis[oldName]
 		delete(praxis, oldName)
 		if err := savePraxis(praxis); err != nil {
-			return false, err
+			return err
 		}
 	}
-	if cfg, _ := loadConfig(); cfg.Profile == oldName {
-		if err := SetActive(newName); err != nil {
-			return false, fmt.Errorf("profile renamed, but updating the active-profile pointer failed: %w", err)
-		}
-		return true, nil
-	}
-	return false, nil
+	return nil
 }
 
 // Deleted reports which files Delete removed a profile from. Facets means
@@ -594,8 +601,13 @@ func DeleteAll() error {
 	if err := os.Remove(home); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	// Also clear the active-profile pointer so a fresh login can re-bootstrap.
-	return ClearActive()
+	// Also drop a legacy pointer file, if one is still around.
+	if legacy, err := paths.LegacyConfig(); err == nil {
+		if err := os.Remove(legacy); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // List returns sorted profile names ("default" first if present, then
@@ -625,111 +637,43 @@ func sortedKeys(m map[string]Profile) []string {
 	return out
 }
 
-// ─── Active-profile pointer (~/.praxis/config.json) ──────────────────────
+// ─── Legacy pointer (~/.praxis/config.json) ──────────────────────────────
 
-// configFile is the on-disk shape of ~/.praxis/config.json (INI-formatted
-// despite the filename — the .json suffix predates the format choice).
-type configFile struct {
-	Profile string
-}
-
-// SetActive writes the GLOBAL active-profile pointer (kubectl-style "use").
-func SetActive(name string) error {
-	if err := validateProfileName(name); err != nil {
-		return err
-	}
-	path, err := paths.Config()
-	if err != nil {
-		return err
-	}
-	return writeConfigPointer(path, name)
-}
-
-// SetActiveLocal pins the active profile to the current working-directory
-// tree by writing a project-local pointer. If a project root (a .praxis dir)
-// already exists at or above the working directory it is reused; otherwise
-// <cwd>/.praxis is created. Returns the project root written to. Credentials
-// are NOT touched — they stay global in ~/.praxis/credentials.
-func SetActiveLocal(name string) (string, error) {
-	if err := validateProfileName(name); err != nil {
-		return "", err
-	}
-	root, ok, err := paths.ProjectRoot()
+// MigrateLegacyPointer retires the active-profile pointer an older praxis
+// kept at ~/.praxis/config.json. The profile it named becomes [default] (a
+// copy, so raptor follows too), then the file is removed. Returns the profile
+// promoted, or "" when the pointer named default, a missing profile, or was
+// absent.
+func MigrateLegacyPointer() (string, error) {
+	path, err := paths.LegacyConfig()
 	if err != nil {
 		return "", err
 	}
-	if !ok {
-		root, err = paths.EnsureProjectRoot()
-		if err != nil {
-			return "", err
-		}
-	}
-	if err := writeConfigPointer(filepath.Join(root, "config.json"), name); err != nil {
-		return "", err
-	}
-	return root, nil
-}
-
-// writeConfigPointer atomically writes a "[default]\nprofile = <name>"
-// pointer file at path (temp + rename, chmod 0600).
-func writeConfigPointer(path, name string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	body := fmt.Sprintf("[default]\nprofile = %s\n", name)
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
-	if err != nil {
-		return err
-	}
-	if _, err := tmp.Write([]byte(body)); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	_ = os.Chmod(tmp.Name(), 0600)
-	return os.Rename(tmp.Name(), path)
-}
-
-// ClearActive removes the active-profile pointer file. After this, the
-// fallback "default" applies.
-func ClearActive() error {
-	path, err := paths.Config()
-	if err != nil {
-		return err
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
-func loadConfig() (configFile, error) {
-	path, err := paths.Config()
-	if err != nil {
-		return configFile{}, err
-	}
-	return readConfigFile(path)
-}
-
-// readConfigFile parses a pointer file (the [default] profile = <name>
-// shape). A missing file is not an error — it yields a zero configFile.
-func readConfigFile(path string) (configFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return configFile{}, nil
+			return "", nil
 		}
-		return configFile{}, err
+		return "", err
 	}
-	raw := parseRawINI(data)
-	if def, ok := raw[DefaultProfileName]; ok {
-		return configFile{Profile: def["profile"]}, nil
+	name := ""
+	if def, ok := parseRawINI(data)[DefaultProfileName]; ok {
+		name = def["profile"]
 	}
-	return configFile{}, nil
+	promoted := ""
+	if name != "" && name != DefaultProfileName {
+		store, err := Load()
+		if err != nil {
+			return "", err
+		}
+		if _, ok := store[name]; ok {
+			if _, err := SetDefault(name); err != nil {
+				return "", err
+			}
+			promoted = name
+		}
+	}
+	return promoted, os.Remove(path)
 }
 
 // ─── Hand-rolled INI parser (flat sections, key=value, # or ; comments) ──

@@ -19,7 +19,7 @@ var (
 )
 
 func init() {
-	logoutCmd.Flags().BoolVar(&logoutAll, "all", false, "remove ALL profiles + active-profile pointer")
+	logoutCmd.Flags().BoolVar(&logoutAll, "all", false, "remove ALL profiles (both credentials files)")
 	logoutCmd.Flags().BoolVar(&logoutJSON, "json", false, "JSON output")
 	rootCmd.AddCommand(logoutCmd)
 }
@@ -59,16 +59,16 @@ exactly what a bare logout does.`,
 		// different profile's credentials without leaving the two out of step —
 		// which is why $PRAXIS_PROFILE is refused here too, not only the flag.
 		//
-		// Compared against the PERSISTED pointer, not ResolveActiveGlobal: the
-		// pointer is what owns the org skills on disk, and resolving through the
-		// environment would compare $PRAXIS_PROFILE with itself. Naming the
-		// profile logout would remove anyway is not a redirect, so it proceeds.
+		// Compared against the store's own active profile ([default], else the
+		// sole section), never through the environment, which would compare
+		// $PRAXIS_PROFILE with itself. Naming the profile logout would remove
+		// anyway is not a redirect, so it proceeds.
 		//
 		// Resolved ONCE, here, and used as the deletion target below. Letting the
-		// action re-resolve was a destructive bug: the guard compared the pointer
+		// action re-resolve was a destructive bug: the guard compared one answer
 		// while the deletion read the full chain, so `-p default logout` under
 		// PRAXIS_PROFILE=acme passed the check and deleted acme.
-		target := credentials.PersistedActiveName()
+		target := credentials.OnDiskActiveName()
 		if refusedExplicitProfile(out, asJSON, "logout",
 			"run `praxis profiles rm %s` to remove that profile's credentials "+
 				"(no skill cycle) — logout only ever removes the active profile",
@@ -76,15 +76,9 @@ exactly what a bare logout does.`,
 			return nil
 		}
 
-		// logout is a GLOBAL lifecycle operation, mirroring login: pin the
-		// active root to home so the org-skill wipe and snapshot removal
-		// always target the user-level state, never a project root that
-		// happens to be in the current directory's ancestry. To leave local
-		// mode, delete the repo's .praxis dir instead.
-		if home, herr := paths.Dir(); herr == nil {
-			restore := paths.OverrideActiveRoot(home)
-			defer restore()
-		}
+		// logout acts on the store visible from here — the tree's own
+		// credentials inside a local-mode tree, else home — and on the skills
+		// installed for that same root, so the two never go out of step.
 
 		if logoutAll {
 			if err := credentials.DeleteAll(); err != nil {
@@ -140,7 +134,7 @@ exactly what a bare logout does.`,
 			return nil
 		}
 
-		// `target` is the persisted global pointer, resolved above alongside the
+		// `target` is the store's own active profile, resolved above alongside the
 		// guard — the same name, by construction. logout is global (see the home
 		// pin above), so a project pointer in the cwd can't redirect it, and
 		// neither can $PRAXIS_PROFILE: the pointer is what owns the credentials

@@ -19,9 +19,6 @@ func TestProfilesRename_HappyPath(t *testing.T) {
 	isolateHome(t)
 	resetProfilesManageFlags(t)
 	seedProfile(t, "test-x", "https://cp.test", "tok")
-	if err := credentials.SetActive("test-x"); err != nil {
-		t.Fatal(err)
-	}
 
 	var buf bytes.Buffer
 	profilesRenameCmd.SetOut(&buf)
@@ -30,7 +27,7 @@ func TestProfilesRename_HappyPath(t *testing.T) {
 		t.Fatalf("rename err: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{`"ok": true`, `"renamed_to": "acme-prod"`, `"active_pointer_updated": true`} {
+	for _, want := range []string{`"ok": true`, `"renamed_to": "acme-prod"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rename output missing %q\nfull: %s", want, out)
 		}
@@ -39,9 +36,9 @@ func TestProfilesRename_HappyPath(t *testing.T) {
 	if _, ok := store["acme-prod"]; !ok {
 		t.Error("renamed profile missing from store")
 	}
-	active, _ := credentials.ResolveActiveGlobal()
-	if active.Name != "acme-prod" {
-		t.Errorf("active = %s, want acme-prod", active.Name)
+	// The sole section is the active one, whatever it is called.
+	if active, _ := credentials.ResolveActive(""); active.Name != "acme-prod" || active.Source != credentials.SourceSole {
+		t.Errorf("active = %s (%s), want acme-prod (sole)", active.Name, active.Source)
 	}
 }
 
@@ -66,9 +63,6 @@ func TestProfilesRm_NonActive(t *testing.T) {
 	resetProfilesManageFlags(t)
 	seedProfile(t, "default", "https://cp.test", "tok")
 	seedProfile(t, "stale", "https://old.test", "tok2")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 
 	var buf bytes.Buffer
 	profilesRmCmd.SetOut(&buf)
@@ -118,9 +112,6 @@ func TestProfilesRm_EnvOverrideCannotUnprotectActive(t *testing.T) {
 	resetProfilesManageFlags(t)
 	seedProfile(t, "default", "https://cp.test", "tok")
 	seedProfile(t, "other", "https://other.test", "tok2")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	t.Setenv(credentials.EnvProfile, "other")
 	exit := stubOsExit(t)
 
@@ -147,9 +138,6 @@ func TestProfilesRm_EnvOverrideDoesNotProtectNonActive(t *testing.T) {
 	resetProfilesManageFlags(t)
 	seedProfile(t, "default", "https://cp.test", "tok")
 	seedProfile(t, "other", "https://other.test", "tok2")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	t.Setenv(credentials.EnvProfile, "other")
 
 	var buf bytes.Buffer

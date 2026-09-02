@@ -96,10 +96,11 @@ var loginCmd = &cobra.Command{
      Login walks the chain until one works. Use --token to supply a
      Praxis API key directly, or --force to skip (a) and
      re-authenticate.
-  3. Save credentials and flip the active profile pointer. A control-plane
-     PAT is saved to ~/.facets/credentials — raptor's store, read by both
-     CLIs — as the section named after this profile, so raptor needs no
-     second login. A Praxis API key goes to ~/.praxis/credentials.
+  3. Save credentials and make the profile active. A control-plane PAT is
+     saved to ~/.facets/credentials — raptor's store, read by both CLIs —
+     as the section named after this profile, and copied over [default],
+     which is what a bare praxis or raptor command uses. A Praxis API key
+     goes to ~/.praxis/credentials.
   4. Wipe any praxis-* org skills from the previous profile.
   5. Fetch this profile's skill catalog from the server and install
      each entry as praxis-<name> across all detected AI hosts.
@@ -136,9 +137,7 @@ installed skills — then exits without changing anything.`,
 
 		// Honor an explicit selection (-p, else $PRAXIS_PROFILE) so a session
 		// scoped to one profile logs into that one. With neither, login targets
-		// "default": it deliberately does NOT fall back to the active profile,
-		// so it can't silently re-auth another profile just because a project
-		// pointer names one.
+		// "default" — the section a bare command of either CLI uses.
 		profileName, _ := explicitProfile()
 		if profileName == "" {
 			profileName = credentials.DefaultProfileName
@@ -599,8 +598,8 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 	return persistAndSetup(out, asJSON, profileName, prof, user.Email, local)
 }
 
-// persistAndSetup saves the verified token under profileName, sets the
-// active-profile pointer (global, or project-local when `local` is set),
+// persistAndSetup saves the verified token under profileName, makes it the
+// active profile (a [default] copy globally, or the tree's file when `local`),
 // runs post-auth setup (meta-skill + catalog + MCP manifest), and renders
 // the result. It is the shared tail of both the verify-then-save path
 // (saveAndVerifyToken) and the reuse path (tryReuseStoredToken). Returning an
@@ -609,14 +608,13 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 //
 // The profile is saved where credentials.Put routes it: a control-plane PAT
 // to raptor's store, a Praxis API key to the praxis file. What `local` changes
-// is the active-profile pointer, the install scope, and — for a PAT — the
-// facets file:
-//   - global (default): flip ~/.praxis/config.json and install user-level,
-//     pinning the active root to home so being inside a project tree doesn't
-//     accidentally scope the install. A PAT goes to ~/.facets/credentials.
-//   - local: write <cwd>/.praxis/config.json and install project-scoped,
-//     leaving the global pointer untouched. A PAT goes to
-//     <cwd>/.facets/credentials, raptor's own local mode.
+// is which file, and the install scope:
+//   - global (default): the home store, with [default] made a copy of the
+//     profile; install user-level, pinning the active root to home so being
+//     inside a project tree doesn't accidentally scope the install.
+//   - local: <cwd>/.facets/credentials (raptor's own local mode) gets the
+//     section and a [default] copy; install project-scoped. The home store
+//     is untouched.
 //
 // persistAndSetup takes the fully-built profile to save (its URL/Username/
 // Token/AuthMode are authoritative — e.g. a facets profile keeps its
@@ -624,20 +622,27 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 // on reuse) and a displayName used only for the human/JSON "logged in as" line.
 func persistAndSetup(out io.Writer, asJSON bool, profileName string, prof credentials.Profile, displayName string, local bool) error {
 	baseURL := prof.URL
-	projectRoot, restore, err := activateProfile(profileName, local)
-	if err != nil {
-		return err
-	}
-	defer restore()
-
+	// Save the section first (so activateProfile can copy it), then make it
+	// the active one: [default] globally, or the tree's file for --local. A
+	// --local login writes the tree only, like `raptor login --local`.
+	var err error
 	if local {
-		err = credentials.PutLocal(profileName, prof, filepath.Dir(projectRoot))
+		root, rerr := paths.EnsureProjectRoot()
+		if rerr != nil {
+			return fmt.Errorf("pin profile to this directory: %w", rerr)
+		}
+		err = credentials.PutLocal(profileName, prof, filepath.Dir(root))
 	} else {
 		err = credentials.Put(profileName, prof)
 	}
 	if err != nil {
 		return fmt.Errorf("save credentials: %w", err)
 	}
+	projectRoot, restore, err := activateProfile(profileName, local)
+	if err != nil {
+		return err
+	}
+	defer restore()
 	storePath, shared := storedAt(prof, projectRoot)
 
 	// Post-auth: install meta-skill, wipe previous org skills, install
@@ -678,34 +683,42 @@ func storedAt(prof credentials.Profile, projectRoot string) (string, bool) {
 	return p, false
 }
 
-// activateProfile makes profileName the active profile and pins
+// activateProfile makes profileName the active profile for BOTH CLIs and pins
 // paths.ActiveRoot to the matching scope, returning the project root (empty
 // when global) and a restore func the caller MUST defer.
 //
 // The two halves are inseparable, which is why they live in one helper: the
-// pointer decides which profile is active, and ActiveRoot decides where that
+// store decides which profile is active, and ActiveRoot decides where that
 // profile's skills, receipt, and MCP snapshot land. Flipping one without the
 // other is how you end up with profile A active and profile B's org skills on
 // disk — the exact invariant runPostAuthSetup exists to keep.
 //
-//   - local: write the project pointer (<cwd>/.praxis, created if needed and
-//     required to be under home) and pin the root there, so the install is
-//     project-scoped. The global pointer is left alone.
-//   - global: flip ~/.praxis/config.json and pin the root to home, so the
-//     install stays user-level even when run from inside a project tree.
+//   - local: write <cwd>/.facets/credentials with the section and a [default]
+//     copy (raptor's own local mode; cwd must be under home), create
+//     <cwd>/.praxis for the receipt, and pin the root there.
+//   - global: copy the section over [default] in the home store and pin the
+//     root to home, so the install stays user-level even when run from inside
+//     a project tree.
 //
-// Shared by `praxis login` and `praxis profiles use`.
+// Shared by `praxis login`, `praxis profiles use`, and `refresh-skills --project`.
 func activateProfile(profileName string, local bool) (string, func(), error) {
 	noop := func() {}
 	if local {
-		root, err := credentials.SetActiveLocal(profileName)
+		root, err := paths.EnsureProjectRoot()
 		if err != nil {
+			return "", noop, fmt.Errorf("pin profile to this directory: %w", err)
+		}
+		if err := credentials.SetDefaultLocal(profileName, filepath.Dir(root)); err != nil {
 			return "", noop, fmt.Errorf("pin profile to this directory: %w", err)
 		}
 		return root, paths.OverrideActiveRoot(root), nil
 	}
-	if err := credentials.SetActive(profileName); err != nil {
+	kept, err := credentials.SetDefault(profileName)
+	if err != nil {
 		return "", noop, fmt.Errorf("set active profile: %w", err)
+	}
+	if kept != "" {
+		fmt.Fprintf(os.Stderr, "Kept the previous default profile as [%s].\n", kept)
 	}
 	home, err := paths.Dir()
 	if err != nil {
