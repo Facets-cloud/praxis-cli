@@ -187,7 +187,9 @@ praxis login [--profile X] [--url Y] [--token Z] [--local]
    --local pins this profile to the CURRENT directory tree (writes
    <cwd>/.praxis, and the raptor profile to <cwd>/.facets/credentials)
    and installs its skills project-scoped, instead of switching the
-   global profile. See "Local mode" below.
+   global profile. See "Local mode" below. On a machine with several
+   profiles and no -p, --local asks which one on a terminal (a number,
+   a name, or a new name) and exits 2 with the list otherwise.
    --dry-run reports what login would do — resolved profile + URL,
    server reachability, browser vs stored-token reuse, and what
    happens to installed skills — then exits. No browser, no API key,

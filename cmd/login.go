@@ -105,7 +105,11 @@ var loginCmd = &cobra.Command{
      each entry as praxis-<name> across all detected AI hosts.
   6. Refresh ~/.praxis/mcp-tools.json from the server's MCP manifest.
 
-Multiple deployments? Use --profile to keep them separate:
+Multiple deployments? Use --profile to keep them separate. With more than
+one profile on this machine, --local (or a --url that is not default's
+control plane) asks which profile to use on a terminal — a number, a
+name, or a new name — and refuses with the list otherwise, so a
+directory is never pinned to a guess. A bare login keeps "default".
 
   praxis login --url https://acme.console.facets.cloud → "default"
   praxis login --profile acme --url https://...   → "acme"
@@ -138,6 +142,15 @@ installed skills — then exits without changing anything.`,
 		profileName, _ := explicitProfile()
 		if profileName == "" {
 			profileName = credentials.DefaultProfileName
+			// On a multi-profile machine, --local (or a --url that is not
+			// default's control plane) must not guess: ask, or refuse.
+			picked, perr := pickProfile(out, asJSON, loginLocal, loginURL)
+			if perr != nil {
+				return perr
+			}
+			if picked != "" {
+				profileName = picked
+			}
 		}
 
 		baseURL, err := resolveLoginURL(profileName, loginURL)
@@ -152,6 +165,17 @@ installed skills — then exits without changing anything.`,
 				"pass --url https://<account-id>.console.facets.cloud to create this profile",
 				exitcode.Usage)
 			return err
+		}
+
+		// Say what was chosen before the install output buries it.
+		if !asJSON {
+			scope := ""
+			if loginLocal {
+				if cwd, cerr := os.Getwd(); cerr == nil {
+					scope = " — pinning to " + cwd
+				}
+			}
+			fmt.Fprintf(os.Stderr, "Profile %s → %s%s\n", profileName, baseURL, scope)
 		}
 
 		// --dry-run: report the plan and exit before ANY side effect —

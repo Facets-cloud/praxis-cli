@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
@@ -425,5 +426,80 @@ func TestLogout_RemovesSharedSectionAndSaysSo(t *testing.T) {
 	facets := readFacetsFile(t, os.Getenv("HOME"))
 	if _, gone := facets["default"]; gone || facets["keep"]["token"] != "kt" {
 		t.Errorf("facets after logout = %v, want only keep", facets)
+	}
+}
+
+const threeSections = "[default]\ncontrol_plane_url = https://root.test\nusername = u\ntoken = t\n\n" +
+	"[acme]\ncontrol_plane_url = https://acme.test\nusername = u\ntoken = t\n\n" +
+	"[zed]\ncontrol_plane_url = https://zed.test\nusername = u\ntoken = t\n"
+
+func TestPickProfile_WhenItStepsIn(t *testing.T) {
+	tests := []struct {
+		name    string
+		creds   string
+		local   bool
+		flagURL string
+		tty     bool
+		answer  string
+		want    string
+		wantErr bool // exit 2 path
+	}{
+		{name: "single profile never asks, even --local", creds: "[default]\ncontrol_plane_url = https://root.test\nusername = u\ntoken = t\n", local: true, tty: false},
+		{name: "bare global login keeps default silently", creds: threeSections, tty: false},
+		{name: "--url matching default's host keeps default silently", creds: threeSections, flagURL: "https://root.test/", tty: false},
+		{name: "--local without a terminal refuses", creds: threeSections, local: true, tty: false, wantErr: true},
+		{name: "--url for another host without a terminal refuses", creds: threeSections, flagURL: "https://new.test", tty: false, wantErr: true},
+		{name: "enter picks default", creds: threeSections, local: true, tty: true, answer: "", want: "default"},
+		{name: "a number picks by position", creds: threeSections, local: true, tty: true, answer: "2", want: "acme"},
+		{name: "an existing name picks it", creds: threeSections, local: true, tty: true, answer: "zed", want: "zed"},
+		{name: "a new name creates a profile", creds: threeSections, local: true, tty: true, answer: "newcp", want: "newcp"},
+		{name: "an invalid new name is refused", creds: threeSections, local: true, tty: true, answer: "has space", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateHome(t)
+			resetLoginFlags(t)
+			clearFacetsEnv(t)
+			seedRaptorCreds(t, tt.creds)
+			stubPrompts(t, tt.answer, "")
+			stdinIsTTY = func() bool { return tt.tty }
+			code := stubOsExit(t)
+
+			got, err := pickProfile(io.Discard, false, tt.local, tt.flagURL)
+			if tt.wantErr {
+				if err == nil || *code != exitcode.Usage {
+					t.Errorf("want exit %d, got err=%v code=%d", exitcode.Usage, err, *code)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Errorf("pickProfile() = %q, %v; want %q", got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestLogin_Local_MultiProfile_RefusesWithoutTerminal(t *testing.T) {
+	// The machine-mode contract: an AI host running `praxis login --local` on a
+	// multi-profile box gets exit 2 and the profile list, not a guess.
+	isolateHome(t)
+	resetLoginFlags(t)
+	clearFacetsEnv(t)
+	seedRaptorCreds(t, threeSections)
+	code := stubOsExit(t)
+	stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
+		t.Fatal("login proceeded past the picker")
+		return nil, nil
+	})
+
+	loginLocal = true
+	out, err := runLoginRunE(t)
+	if err == nil || *code != exitcode.Usage {
+		t.Fatalf("err=%v code=%d, want a usage exit", err, *code)
+	}
+	for _, want := range []string{"default", "acme", "zed", "-p"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("hint missing %q:\n%s", want, out)
+		}
 	}
 }

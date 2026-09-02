@@ -168,6 +168,12 @@ Invariants to preserve when touching this area:
   still follows raptor's own resolution (default, else sole profile).
 - **Logout is shared.** Removing a PAT profile removes raptor's section;
   `logout --all` removes both home files.
+- **Never pin a directory to a guess.** On a multi-profile machine, `login
+  --local` (or `login --url <host≠default's>`) with no `-p` goes through
+  `pickProfile`: a terminal gets the list and may type a new name; `--json`
+  or no TTY exits 2 with the list. A bare global `login` still means
+  `default`, and single-profile machines never see the picker. Login prints
+  `Profile <name> → <url>` to stderr before any install output.
 - **A bare or foreign `.praxis` must stay inert.** Local mode activates
   only via `LocalModeActive` (pointer names a known profile). Don't switch
   any state on mere directory presence — that's what protects a user who

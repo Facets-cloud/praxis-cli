@@ -88,6 +88,9 @@ func validateProfileName(name string) error {
 	return nil
 }
 
+// ValidateProfileName reports whether name can be an INI section header.
+func ValidateProfileName(name string) error { return validateProfileName(name) }
+
 // DefaultProfileName is the literal section name used when no other
 // signal selects a profile.
 const DefaultProfileName = "default"
