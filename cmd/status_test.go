@@ -405,8 +405,10 @@ func TestStatusCmd_RaptorBlock_SharedProfileNeedsPrefix(t *testing.T) {
 			t.Errorf("raptor[%q] = %v, want %v", k, got, want)
 		}
 	}
-	if s["setup_complete"] != true {
-		t.Errorf("setup_complete = %v; a shared PAT profile is usable via FACETS_PROFILE", s["setup_complete"])
+	// A shared PAT profile is usable via FACETS_PROFILE, so setup is complete
+	// whenever raptor is on PATH (CI has no raptor; the developer's machine does).
+	if want := rb["installed"] == true; s["setup_complete"] != want {
+		t.Errorf("setup_complete = %v, want %v (raptor installed: %v)", s["setup_complete"], want, rb["installed"])
 	}
 }
 
