@@ -99,10 +99,11 @@ that does everything you need:
    - Failing both, it opens your browser to create a **Praxis API key**
      (you click "Create" once; the CLI polls the deployment for the new
      key and picks it up).
-   A control-plane token is also saved as a **raptor profile** in
-   `~/.facets/credentials` (section named after the praxis profile), so
-   `raptor` works with no second login. A Praxis API key is not a raptor
-   credential and writes nothing there.
+   A control-plane token is saved to `~/.facets/credentials` — **raptor's
+   store, read by both CLIs** — as the section named after the praxis
+   profile, so `raptor` works with no second login and a `raptor login`
+   is already a praxis login. A Praxis API key is not a raptor
+   credential; it goes to `~/.praxis/credentials`.
 3. **Wipes any leftover org skills** from a previous profile.
 4. **Fetches your org's catalog of skills** from the Praxis server
    and installs each one as `praxis-<name>` across every AI host.
@@ -179,7 +180,7 @@ PRAXIS_PROFILE=<name>
 ```
 
 ```text
-praxis login [--profile X] [--url Y] [--token Z] [--local] [--raptor-profile R]
+praxis login [--profile X] [--url Y] [--token Z] [--local]
    The one-stop setup command. Idempotent. Re-run to refresh skills
    or switch profiles. The only command that's human-only — opens a
    browser (unless a stored token is still valid, or --token is given).
@@ -187,9 +188,6 @@ praxis login [--profile X] [--url Y] [--token Z] [--local] [--raptor-profile R]
    <cwd>/.praxis, and the raptor profile to <cwd>/.facets/credentials)
    and installs its skills project-scoped, instead of switching the
    global profile. See "Local mode" below.
-   --raptor-profile pairs this praxis profile with a raptor profile
-   (~/.facets/credentials section). See "Pairing with raptor
-   profiles" below.
    --dry-run reports what login would do — resolved profile + URL,
    server reachability, browser vs stored-token reuse, and what
    happens to installed skills — then exits. No browser, no API key,
@@ -210,9 +208,9 @@ praxis profiles use <profile> [--local] [--json]
    switching globally. See "Local mode" below.
 
 praxis profiles rename OLD NEW [--json]
-   Rename a credentials section in place, keeping URL/username/token/
-   raptor pairing. The global active-profile pointer follows if it
-   named OLD. No browser, no new API key, no skill changes.
+   Rename a credentials section in place (in whichever file holds it),
+   keeping URL/username/token. The global active-profile pointer follows
+   if it named OLD. No browser, no new API key, no skill changes.
 
 praxis profiles rm NAME [--json]
    Delete a NON-active profile's credentials. Refuses the active
@@ -227,9 +225,9 @@ praxis logout [--all]
 
 praxis status [--refresh] [--json]
    Local-only snapshot of profile, auth, installed skills. Includes a
-   `raptor` block reporting which control plane the raptor CLI would
-   hit (its profile resolution mirrored read-only) and whether that
-   host matches the active praxis profile's URL.
+   `raptor` block reporting which section a bare raptor command would
+   use, whether that matches the active praxis profile, and whether the
+   AI host must prefix raptor commands with FACETS_PROFILE.
    --refresh adds a live /auth/me check (catches expired tokens).
 
 praxis mcp [<mcp> <fn>] [--json] [--arg k=v ...] [--body '<json>']
@@ -530,8 +528,8 @@ or you want to pick up new tools.
 praxis profiles rename test-x acme-prod
 ```
 
-Credentials-only: the section keeps its URL, username, token, and
-raptor pairing; the global active-profile pointer follows if it named
+Credentials-only: the section keeps its URL, username, and token; the
+global active-profile pointer follows if it named
 the old profile. No browser round-trip, no second API key, no skill
 churn. (Directory trees pinned via `--local` reference profiles by
 name — re-pin those with `praxis profiles use <new> --local`; until
@@ -561,52 +559,50 @@ To wipe every profile and every host:
 praxis logout --all
 ```
 
-### Pairing with raptor profiles
+### One store with raptor
 
-The `raptor` CLI keeps its **own** credential store
-(`~/.facets/credentials`) and selects its profile only via the
-`FACETS_PROFILE` env var — switching a praxis profile never moves
-raptor. For a single-profile user both default to the same control
-plane and nothing needs doing. With multiple profiles on each side the
-two can silently point at *different* control planes.
+Control-plane tokens live in **one place**: `~/.facets/credentials`,
+raptor's file. `praxis login` writes the section raptor reads, and a
+`raptor login` is already a praxis login. Only Praxis API keys live
+apart, in `~/.praxis/credentials`. `praxis profiles` shows which file
+each profile is in (`STORE` column / `store` field).
 
-praxis surfaces this instead of ignoring it:
+What the two CLIs do NOT share is profile **selection**:
 
-- `praxis status --json` includes a `raptor` block: raptor's resolved
-  profile, its `control_plane_url`, and `matches_praxis_url` (host
-  comparison against the active praxis profile). AI hosts are taught
-  (via the meta-skill) to check it and to ask before writing through a
-  mismatched raptor.
-- `praxis login --raptor-profile <name>` stores a durable pairing on
-  the praxis profile (INI key `raptor_profile`). Status then resolves
-  raptor via that pin (`"pinned": true`), and AI hosts prefix every
-  raptor command with `FACETS_PROFILE=<name>`. Validation is advisory:
-  a pairing to a missing or host-mismatched raptor profile logs a
-  warning but never fails login. Re-logins without the flag preserve
-  the pairing.
+- praxis: `-p` → `$PRAXIS_PROFILE` → `$FACETS_PROFILE` → project pointer
+  → global pointer → `default`. Raptor's environment credential
+  (`CONTROL_PLANE_URL` + `FACETS_USERNAME` + `FACETS_TOKEN`) is honored
+  too, as a profile named `env`.
+- raptor: `$FACETS_PROFILE`, else its `[default]` section, else the sole
+  section. No flag, no pointer file.
 
-The two stores share one token. A control-plane token raptor already
-holds is the first credential `praxis login` tries (step 2 above), and a
-control-plane token `praxis login` ends with is written back as a raptor
-profile: `praxis login` → `[default]`, `praxis login --profile acme` →
-`[acme]` plus the `raptor_profile = acme` pairing, `--raptor-profile R`
-→ `[R]`. An existing section with the same name is replaced, as `raptor
-login` would. `praxis logout` leaves raptor's file alone.
+So `praxis profiles use acme` does not move raptor. `praxis status --json`
+reports this in the `raptor` block: `profile` is what a bare raptor
+command would use, `shared_profile` is the active praxis profile when it
+is in the shared store, and `prefix_required` tells the AI host to run
+raptor as `FACETS_PROFILE=<shared_profile> raptor …`. Setting
+`FACETS_PROFILE` in your shell moves both CLIs together.
 
-In local mode (`--local`) the raptor profile goes to
-`<cwd>/.facets/credentials` (with a `.gitignore`), which is where `raptor
-login --local` writes and what raptor reads first from inside that tree.
+Logout is shared as well: `praxis logout` (or `profiles rm`) removes the
+section from `~/.facets/credentials`, so raptor is logged out of that
+profile too. `praxis logout --all` removes both files.
+
+In local mode (`--local`) the PAT goes to `<cwd>/.facets/credentials`
+(with a `.gitignore`), which is where `raptor login --local` writes and
+what BOTH CLIs read first from inside that tree.
+
+Upgrading from an older praxis: control-plane PATs it kept in
+`~/.praxis/credentials` move to `~/.facets/credentials` on the first run.
 
 ## Files
 
 ```text
-~/.praxis/credentials      INI, one [section] per profile (chmod 0600)
-                           — ALWAYS global; shared across every directory
+~/.facets/credentials      control-plane PATs, shared with raptor (chmod 0600)
+                           — or <cwd>/.facets/credentials inside a local tree
+~/.praxis/credentials      Praxis API keys only (chmod 0600) — ALWAYS global
 ~/.praxis/config.json      global active-profile pointer (set by `praxis login`)
 ~/.praxis/mcp-tools.json   manifest snapshot of gateway tools
 ~/.praxis/installed.json   receipt of skill files written across hosts
-~/.facets/credentials      raptor's store; a control-plane PAT login writes
-                           its section here (or <cwd>/.facets with --local)
 
 ~/.claude/skills/praxis/SKILL.md      meta-skill (always present)
 ~/.claude/skills/praxis-<name>/...    org skills (cycle on profile switch)

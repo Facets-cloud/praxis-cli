@@ -10,7 +10,6 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
-	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
 
@@ -21,7 +20,7 @@ func TestMain(m *testing.M) {
 	// raptor's credentials walk starts at cwd and climbs to /, which passes
 	// through the developer's real home. Start it at the (faked) HOME instead so
 	// no test reads a live ~/.facets/credentials.
-	restore := raptorstate.SetGetwdForTest(func() (string, error) { return os.Getenv("HOME"), nil })
+	restore := credentials.SetGetwdForTest(func() (string, error) { return os.Getenv("HOME"), nil })
 	code := m.Run()
 	restore()
 	os.Exit(code)

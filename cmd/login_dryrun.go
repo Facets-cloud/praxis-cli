@@ -108,18 +108,19 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		action = "control-plane PAT prompt, else " + action
 	}
 
-	// A control-plane PAT is also saved as a raptor profile; an API key is not.
-	raptorEffect := "unchanged (only a control-plane PAT is saved for raptor)"
-	raptorTarget := fmt.Sprintf("raptor profile [%s] written to ~/.facets/credentials", raptorSection(profileName, raptorPin(profileName)))
+	// Where the credential lands: a control-plane PAT in raptor's store (shared
+	// with raptor), a Praxis API key in the praxis file.
+	facetsFile := "~/.facets/credentials"
 	if local {
-		raptorTarget = fmt.Sprintf("raptor profile [%s] written to <cwd>/.facets/credentials", raptorSection(profileName, raptorPin(profileName)))
+		facetsFile = "<cwd>/.facets/credentials"
 	}
+	storeEffect := fmt.Sprintf("~/.praxis/credentials [%s] (Praxis API key; raptor unchanged)", profileName)
 	switch {
 	case strings.HasPrefix(action, "facets-pat"),
 		strings.HasPrefix(action, "reuse-token") && prof.AuthMode == credentials.AuthModeBasic:
-		raptorEffect = raptorTarget
+		storeEffect = fmt.Sprintf("%s [%s] (shared with raptor)", facetsFile, profileName)
 	case strings.HasPrefix(action, "control-plane PAT prompt"):
-		raptorEffect = raptorTarget + " if a control-plane PAT is pasted"
+		storeEffect = fmt.Sprintf("%s [%s] (shared with raptor) if a control-plane PAT is pasted, else ~/.praxis/credentials", facetsFile, profileName)
 	}
 
 	skillsEffect := fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)
@@ -141,7 +142,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 			"token_status":   tokenStatus,
 			"action":         action,
 			"skills_effect":  skillsEffect,
-			"raptor_effect":  raptorEffect,
+			"store_effect":   storeEffect,
 		}
 		if rerr := render.JSON(out, payload); rerr != nil {
 			return rerr
@@ -163,7 +164,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		fmt.Fprintf(out, "  token:    %s\n", tokenStatus)
 		fmt.Fprintf(out, "  action:   %s\n", action)
 		fmt.Fprintf(out, "  skills:   %s\n", skillsEffect)
-		fmt.Fprintf(out, "  raptor:   %s\n", raptorEffect)
+		fmt.Fprintf(out, "  store:    %s\n", storeEffect)
 	}
 
 	if !reachable {

@@ -441,11 +441,8 @@ func TestProfilesUse_JSONEnvelopeMatchesLogin(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	resetProfilesUseFlags(t)
 
-	// Seed a raptor pairing: raptor_profile is an OPTIONAL key, so parity
-	// against an unpaired profile would compare two envelopes that both omit
-	// it and prove nothing about the field login actually emits.
 	if err := credentials.Put("acme", credentials.Profile{
-		URL: "https://acme.test", Username: "u@x", Token: "ta", RaptorProfile: "acme-rap",
+		URL: "https://acme.test", Username: "u@x", Token: "ta",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -457,10 +454,7 @@ func TestProfilesUse_JSONEnvelopeMatchesLogin(t *testing.T) {
 		t.Fatalf("RunE err = %v", err)
 	}
 	got := decodeMap(t, out)
-	if got["raptor_profile"] != "acme-rap" {
-		t.Errorf("raptor_profile = %v, want the paired profile login reports", got["raptor_profile"])
-	}
-	for key := range setupPayload("acme", "u@x", "https://acme.test", "", "acme-rap", false, postAuthState{}) {
+	for key := range setupPayload("acme", "u@x", "https://acme.test", "", false, postAuthState{}) {
 		if _, ok := got[key]; !ok {
 			t.Errorf("key %q from login's envelope missing from `profiles use` output", key)
 		}

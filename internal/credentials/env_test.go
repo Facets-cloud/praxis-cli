@@ -10,8 +10,15 @@ import (
 // now outranks both pointers — so leaking it into the suite would make results
 // depend on the shell that launched `go test`. Clear it once for the package.
 func TestMain(m *testing.M) {
-	_ = os.Unsetenv(EnvProfile)
-	os.Exit(m.Run())
+	for _, k := range []string{EnvProfile, FacetsEnvProfile, "CONTROL_PLANE_URL", "FACETS_USERNAME", "FACETS_TOKEN"} {
+		_ = os.Unsetenv(k)
+	}
+	// The facets-file walk starts at cwd and climbs to /, which passes through
+	// the developer's real home. Start it at the (faked) HOME instead.
+	restore := SetGetwdForTest(func() (string, error) { return os.Getenv("HOME"), nil })
+	code := m.Run()
+	restore()
+	os.Exit(code)
 }
 
 // The point of the env var: a session picks its profile without writing any
@@ -147,7 +154,7 @@ func TestPointerActiveName_IgnoresFlagAndEnvButFollowsPointers(t *testing.T) {
 					if _, err := SetActiveLocal("gone"); err != nil {
 						t.Fatal(err)
 					}
-					if err := Delete("gone"); err != nil {
+					if _, err := Delete("gone"); err != nil {
 						t.Fatal(err)
 					}
 				} else if _, err := SetActiveLocal(tc.project); err != nil {

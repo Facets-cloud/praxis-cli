@@ -82,11 +82,11 @@ func resetLoginFlags(t *testing.T) {
 	// rootProfile is the global --profile flag (root.go); login reads it as the
 	// profile to create or update. It's package state shared with every other
 	// command, so it MUST be cleared or it leaks into later tests.
-	rootProfile, loginURL, loginToken, loginRaptorProfile = "", "", "", ""
+	rootProfile, loginURL, loginToken = "", "", ""
 	loginForce, loginLocal, loginJSON, loginDryRun = false, false, false, false
 	loginTimeout = 90 * time.Second
 	t.Cleanup(func() {
-		rootProfile, loginURL, loginToken, loginRaptorProfile = "", "", "", ""
+		rootProfile, loginURL, loginToken = "", "", ""
 		loginForce, loginLocal, loginJSON, loginDryRun = false, false, false, false
 		loginTimeout = 90 * time.Second
 	})

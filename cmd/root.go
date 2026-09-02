@@ -37,8 +37,8 @@ Run 'praxis <command> --help' for details on any command.`,
 
 // rootProfile is the global --profile flag: the credentials profile this one
 // invocation should use. It sits at the top of the resolution chain in
-// credentials.resolveName (flag → project pointer → global pointer →
-// "default"), so it overrides a local-mode tree without touching any pointer
+// credentials.resolveName (flag → $PRAXIS_PROFILE → $FACETS_PROFILE → project
+// pointer → global pointer → "default"), so it overrides a local-mode tree without touching any pointer
 // on disk — nothing is persisted and the next invocation resolves normally.
 // Empty means "resolve normally". Commands consume it via activeOrAuthExit or
 // by passing it to credentials.ResolveActive.
@@ -148,6 +148,9 @@ func Execute() {
 	// stat() after the first time) and skipped for machine-invoked commands;
 	// never blocks the command it precedes.
 	maybeFirstRunBootstrap(os.Args[1:])
+	// Control-plane PATs an older praxis kept in ~/.praxis/credentials move to
+	// raptor's file, the shared store. Silent and best-effort.
+	_, _ = credentials.MigrateLegacyPATs()
 	// Fire a background check for a newer release, but only for an interactive
 	// human (stderr is a TTY). When praxis is spawned by an AI host or a script,
 	// stderr is piped — we skip entirely so the check never delays automation

@@ -40,9 +40,10 @@ const ExecutionPreamble = "" +
 	"> `tool` is `raptor`; if that entry's `stale` is true, offer to run\n" +
 	"> `raptor upgrade` (ask first — never auto-run it).\n" +
 	">\n" +
-	"> Raptor's profile is NOT praxis's profile — check the `raptor` block in\n" +
-	"> `praxis status --json`. If `pinned` is true, prefix EVERY raptor command\n" +
-	"> with `FACETS_PROFILE=<profile>` (env vars don't persist across shell\n" +
+	"> praxis and raptor share one credential store but select profiles\n" +
+	"> separately — check the `raptor` block in `praxis status --json`. If\n" +
+	"> `prefix_required` is true, prefix EVERY raptor command with\n" +
+	"> `FACETS_PROFILE=<shared_profile>` (env vars don't persist across shell\n" +
 	"> calls). If `matches_praxis_url` is false unexpectedly, raptor is aimed at a\n" +
 	"> DIFFERENT control plane than praxis: ask the user before any write.\n" +
 	">\n" +

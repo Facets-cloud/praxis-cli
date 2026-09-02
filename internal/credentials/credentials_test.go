@@ -89,6 +89,7 @@ func TestPutLoadGet_RoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("acme profile missing after Put")
 	}
+	want.Store = StorePraxis // an API key lives in the praxis file
 	if got != want {
 		t.Errorf("round-trip mismatch: got %+v want %+v", got, want)
 	}
@@ -122,6 +123,7 @@ func TestAuth(t *testing.T) {
 
 func TestAuthMode_RoundTripsThroughINI(t *testing.T) {
 	withHome(t)
+	// An https PAT lands in the shared store, where AuthMode is implied.
 	want := Profile{URL: "https://cp.test", Username: "user@corp", Token: "pat123", AuthMode: "basic"}
 	if err := Put("facets", want); err != nil {
 		t.Fatal(err)
@@ -134,10 +136,13 @@ func TestAuthMode_RoundTripsThroughINI(t *testing.T) {
 	if !ok {
 		t.Fatal("facets profile missing after Put")
 	}
+	want.Store = StoreFacets
 	if got != want {
 		t.Errorf("round-trip mismatch: got %+v want %+v", got, want)
 	}
-	// A profile with no AuthMode must NOT emit an auth_mode line.
+	// A loopback PAT stays in the praxis file, so auth_mode must persist there;
+	// a profile with no AuthMode must NOT emit an auth_mode line.
+	_ = Put("dev", Profile{URL: "http://localhost:8000", Username: "user@corp", Token: "pat", AuthMode: "basic"})
 	_ = Put("bearer", Profile{URL: "https://x.test", Token: "sk"})
 	path, _ := paths.Credentials()
 	raw, _ := os.ReadFile(path)
@@ -145,7 +150,10 @@ func TestAuthMode_RoundTripsThroughINI(t *testing.T) {
 		t.Errorf("empty AuthMode should be omitted from INI; got:\n%s", raw)
 	}
 	if !strings.Contains(string(raw), "auth_mode = basic") {
-		t.Errorf("basic AuthMode not persisted; got:\n%s", raw)
+		t.Errorf("basic AuthMode not persisted for the loopback PAT; got:\n%s", raw)
+	}
+	if store, _ = Load(); store["dev"].AuthMode != "basic" || store["dev"].Store != StorePraxis {
+		t.Errorf("loopback PAT = %+v", store["dev"])
 	}
 }
 
@@ -170,7 +178,7 @@ func TestDelete_RemovesEntry(t *testing.T) {
 	withHome(t)
 	_ = Put("default", Profile{URL: "x", Token: "t"})
 	_ = Put("acme", Profile{URL: "y", Token: "t"})
-	if err := Delete("acme"); err != nil {
+	if _, err := Delete("acme"); err != nil {
 		t.Fatal(err)
 	}
 	store, _ := Load()
@@ -184,7 +192,7 @@ func TestDelete_RemovesEntry(t *testing.T) {
 
 func TestDelete_NonExistent_NoError(t *testing.T) {
 	withHome(t)
-	if err := Delete("never-there"); err != nil {
+	if _, err := Delete("never-there"); err != nil {
 		t.Errorf("delete of non-existent profile should not error: %v", err)
 	}
 }
@@ -307,7 +315,7 @@ func TestPutRejectsInvalidNames(t *testing.T) {
 			if err2 := SetActive(c.in); err2 == nil {
 				t.Errorf("SetActive(%q) returned nil error; want validation failure", c.in)
 			}
-			if err3 := Delete(c.in); err3 == nil {
+			if _, err3 := Delete(c.in); err3 == nil {
 				t.Errorf("Delete(%q) returned nil error; want validation failure", c.in)
 			}
 		})
@@ -524,47 +532,11 @@ func TestSetActiveLocal_OutsideHome_Errors(t *testing.T) {
 	}
 }
 
-func TestRaptorProfile_RoundTripAndValidation(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	// Round-trip: raptor_profile persists through Save/Load.
-	if err := Put("acme", Profile{URL: "https://acme.test", Username: "u@x", Token: "tok", RaptorProfile: "acme-raptor"}); err != nil {
-		t.Fatal(err)
-	}
-	store, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := store["acme"].RaptorProfile; got != "acme-raptor" {
-		t.Errorf("RaptorProfile = %q, want %q", got, "acme-raptor")
-	}
-
-	// A profile without the key stays empty (backwards compatibility).
-	if err := Put("plain", Profile{URL: "https://plain.test", Username: "u@x", Token: "tok"}); err != nil {
-		t.Fatal(err)
-	}
-	store, err = Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := store["plain"].RaptorProfile; got != "" {
-		t.Errorf("plain profile RaptorProfile = %q, want empty", got)
-	}
-
-	// An INI-corrupting raptor profile value is rejected at the store
-	// boundary — the same charset rules as section names.
-	for _, bad := range []string{"has space", "a\nb", "[bracket]", "a=b"} {
-		if err := Put("acme", Profile{URL: "https://acme.test", Token: "tok", RaptorProfile: bad}); err == nil {
-			t.Errorf("Put with RaptorProfile %q succeeded, want validation error", bad)
-		}
-	}
-}
-
 func TestRename(t *testing.T) {
 	seed := func(t *testing.T) {
 		t.Helper()
 		t.Setenv("HOME", t.TempDir())
-		if err := Put("old", Profile{URL: "https://old.test", Username: "u@x", Token: "tok", RaptorProfile: "rp"}); err != nil {
+		if err := Put("old", Profile{URL: "https://old.test", Username: "u@x", Token: "tok"}); err != nil {
 			t.Fatal(err)
 		}
 		if err := Put("other", Profile{URL: "https://other.test", Token: "tok2"}); err != nil {
@@ -586,7 +558,7 @@ func TestRename(t *testing.T) {
 			t.Error("old section still present")
 		}
 		got := store["new"]
-		want := Profile{URL: "https://old.test", Username: "u@x", Token: "tok", RaptorProfile: "rp"}
+		want := Profile{URL: "https://old.test", Username: "u@x", Token: "tok", Store: StorePraxis}
 		if got != want {
 			t.Errorf("renamed profile = %+v, want %+v", got, want)
 		}

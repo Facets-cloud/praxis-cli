@@ -31,7 +31,7 @@ var profilesRenameCmd = &cobra.Command{
 	Use:   "rename OLD NEW",
 	Short: "Rename a profile (credentials only — no browser, no skill changes)",
 	Long: `Rename a profile section in ~/.praxis/credentials, keeping its URL,
-username, token, and raptor pairing. If the global active-profile pointer
+username, and token, in whichever file holds it. If the global active-profile pointer
 named OLD it follows to NEW automatically.
 
 Installed skills are not touched: they belong to the profile's org, not its
@@ -113,15 +113,21 @@ so there is no double skill-cycle from switching just to delete.`,
 			osExit(exitcode.Usage)
 			return fmt.Errorf("%s", msg)
 		}
-		if err := credentials.Delete(name); err != nil {
+		deleted, err := credentials.Delete(name)
+		if err != nil {
 			return err
 		}
 
 		if asJSON {
 			return render.JSON(out, map[string]any{
-				"ok":      true,
-				"removed": name,
+				"ok":                true,
+				"removed":           name,
+				"raptor_logged_out": deleted.Facets,
 			})
+		}
+		if deleted.Facets {
+			fmt.Fprintf(out, "✓ Removed profile %q from %s (raptor is logged out of it too — installed skills untouched)\n", name, deleted.FacetsPath)
+			return nil
 		}
 		fmt.Fprintf(out, "✓ Removed profile %q (credentials only — installed skills untouched)\n", name)
 		return nil

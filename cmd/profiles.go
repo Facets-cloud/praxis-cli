@@ -32,11 +32,14 @@ type authCheckResult struct {
 
 // profileEntry is one row of the profiles listing.
 type profileEntry struct {
-	Name      string           `json:"name"`
-	URL       string           `json:"url"`
-	Username  string           `json:"username"`
-	Active    bool             `json:"active"`
-	LoggedIn  bool             `json:"logged_in"`
+	Name     string `json:"name"`
+	URL      string `json:"url"`
+	Username string `json:"username"`
+	Active   bool   `json:"active"`
+	LoggedIn bool   `json:"logged_in"`
+	// Store is "facets" for a control-plane PAT in ~/.facets/credentials
+	// (shared with raptor) or "praxis" for a Praxis API key.
+	Store     string           `json:"store,omitempty"`
 	AuthCheck *authCheckResult `json:"auth_check,omitempty"`
 }
 
@@ -95,6 +98,7 @@ the org skills so they match the profile you switched to.`,
 				Username: p.Username,
 				Active:   name == active.Name,
 				LoggedIn: p.Token != "",
+				Store:    p.Store,
 			}
 			// --refresh: live-verify only profiles that actually hold a
 			// token. A per-profile failure is recorded, never fatal — the
@@ -127,15 +131,15 @@ func renderProfilesText(out io.Writer, result profilesOutput) error {
 	}
 
 	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ACTIVE\tPROFILE\tURL\tUSERNAME\tLOGIN")
+	fmt.Fprintln(tw, "ACTIVE\tPROFILE\tURL\tUSERNAME\tLOGIN\tSTORE")
 	for _, p := range result.Profiles {
 		marker := ""
 		if p.Active {
 			marker = "*"
 		}
 		login := loginCell(p)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			marker, p.Name, dashIfEmpty(p.URL), dashIfEmpty(p.Username), login)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			marker, p.Name, dashIfEmpty(p.URL), dashIfEmpty(p.Username), login, dashIfEmpty(p.Store))
 	}
 	return tw.Flush()
 }

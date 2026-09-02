@@ -34,6 +34,10 @@ still knows how to log back in.
   praxis logout         active profile: creds + org skills + manifest
   praxis logout --all   every profile's creds + every host's org skills
 
+Credentials are shared with raptor: a control-plane PAT lives in
+~/.facets/credentials, so removing that profile logs raptor out of it
+as well. --all removes ~/.praxis/credentials AND ~/.facets/credentials.
+
 To remove a NON-active profile, use ` + "`praxis profiles rm NAME`" + ` — it
 touches credentials only, and skips the double skill-cycle of switching just
 to delete. Because at most one profile's org skills are on disk at a time,
@@ -147,9 +151,11 @@ exactly what a bare logout does.`,
 			credsPresent = true
 		}
 
+		var deleted credentials.Deleted
 		if credsPresent {
-			if err := credentials.Delete(target); err != nil {
-				return err
+			var derr error
+			if deleted, derr = credentials.Delete(target); derr != nil {
+				return derr
 			}
 		}
 
@@ -185,16 +191,19 @@ exactly what a bare logout does.`,
 
 		if asJSON {
 			envelope := map[string]any{
-				"removed":        ifTrue(credsPresent, target),
-				"removed_skills": liteResults(removed),
-				"removed_agents": agentLogoutLite(removedAgents),
+				"removed":           ifTrue(credsPresent, target),
+				"removed_skills":    liteResults(removed),
+				"removed_agents":    agentLogoutLite(removedAgents),
+				"raptor_logged_out": deleted.Facets,
 			}
 			if len(warnings) > 0 {
 				envelope["warnings"] = warnings
 			}
 			return render.JSON(out, envelope)
 		}
-		if credsPresent {
+		if deleted.Facets {
+			fmt.Fprintf(out, "✓ Removed profile %q from %s — raptor is logged out of it too.\n", target, deleted.FacetsPath)
+		} else if credsPresent {
 			fmt.Fprintf(out, "✓ Removed profile %q.\n", target)
 		} else {
 			fmt.Fprintf(out, "No credentials to remove for profile %q.\n", target)

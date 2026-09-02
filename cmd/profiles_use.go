@@ -68,7 +68,9 @@ else, but the output reports ` + "`shadowed_by_env`" + ` and
 A ` + "`-p`" + ` flag naming a different profile is refused here: this command's
 target is its argument.
 
-Credentials are never moved: every profile stays in ~/.praxis/credentials.`,
+Credentials are never moved: a control-plane PAT stays in
+~/.facets/credentials (shared with raptor), a Praxis API key in
+~/.praxis/credentials.`,
 	Args: cobra.ExactArgs(1),
 	// The one argument is a closed set the CLI already knows, so complete it
 	// from the store: a typo would otherwise cost a round trip through exit 2.
@@ -207,7 +209,7 @@ Credentials are never moved: every profile stays in ~/.praxis/credentials.`,
 		}
 
 		if asJSON {
-			payload := setupPayload(name, displayName, baseURL, projectRoot, prof.RaptorProfile, profilesUseLocal, state)
+			payload := setupPayload(name, displayName, baseURL, projectRoot, profilesUseLocal, state)
 			payload["previous_profile"] = summary.Previous
 			// A global switch is machine-wide: every other shell and agent
 			// session on this machine now resolves to it, and the org skills on

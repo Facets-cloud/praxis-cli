@@ -1,27 +1,40 @@
-// Package credentials manages the per-user, multi-profile credentials store
-// at ~/.praxis/credentials. INI format matching ~/.facets/credentials so
-// users coming from facets-cli have zero learning curve.
+// Package credentials manages the multi-profile credentials store praxis
+// shares with raptor. Two INI files make one store (see facets.go):
 //
-//	[default]
-//	url      = https://acme.console.facets.cloud
-//	username = anshul@facets.cloud
-//	token    = sk_live_…
+//   - ~/.facets/credentials — raptor's file. A section is a control-plane
+//     PAT; praxis sends it as Bearer + X-Facets-Username, raptor as Basic.
+//     Located by raptor's rule: the first .facets/credentials walking up
+//     from the working directory, else the home file.
 //
-//	[acme]
-//	url      = https://acme.console.facets.cloud
-//	username = support@acme.com
-//	token    = sk_live_…
+//   - ~/.praxis/credentials — what raptor cannot use: Praxis API keys, and
+//     PATs for a loopback developer server. Always global.
+//
+//     [default]                                  # ~/.facets/credentials
+//     control_plane_url = https://acme.console.facets.cloud
+//     username          = anshul@facets.cloud
+//     token             = <PAT>
+//
+//     [ci]                                       # ~/.praxis/credentials
+//     url      = https://acme.console.facets.cloud
+//     username = support@acme.com
+//     token    = sk_live_…
+//
+// Load merges both; a name in both resolves to the facets section. Put routes
+// by credential type so a profile lives in exactly one file.
 //
 // Active-profile resolution (highest priority first):
 //
 //  1. --profile/-p, the persistent root flag (scoped to one invocation)
-//  2. $PRAXIS_PROFILE (scoped to one shell or agent session)
-//  3. <cwd>/.praxis/config.json project pointer (set by
+//  2. CONTROL_PLANE_URL + FACETS_USERNAME + FACETS_TOKEN — raptor's env
+//     credential, a complete profile named "env"
+//  3. $PRAXIS_PROFILE (scoped to one shell or agent session)
+//  4. $FACETS_PROFILE — raptor's selector, so one variable drives both CLIs
+//  5. <cwd>/.praxis/config.json project pointer (set by
 //     `praxis profiles use X --local` or `praxis login --profile X --local`),
 //     discovered by walking up from the working directory to home
-//  4. ~/.praxis/config.json "default profile" pointer (set by
+//  6. ~/.praxis/config.json "default profile" pointer (set by
 //     `praxis profiles use X` or `praxis login --profile X`)
-//  5. literal "default" section
+//  7. literal "default" section
 //
 // Rationale, and note the env var OUTRANKS the project pointer: the two
 // pointers are machine-global state, so moving one repoints every other shell
@@ -33,7 +46,7 @@
 // command. Between the two pointers the project one still wins over the global
 // one: being inside that directory tree IS the intent.
 //
-// Single-profile users never see steps 1–4 — everything resolves to
+// Single-profile users never see steps 1–6 — everything resolves to
 // "default" automatically.
 //
 // Two deliberate exceptions, for callers asking a question about STATE rather
@@ -84,14 +97,10 @@ type Profile struct {
 	URL      string
 	Username string
 	Token    string
-	// RaptorProfile optionally names the ~/.facets/credentials profile this
-	// praxis profile is paired with (INI key `raptor_profile`, set via
-	// `praxis login --raptor-profile`, or by a PAT login under a non-default
-	// profile name, which writes that raptor section itself). praxis never
-	// uses it to authenticate — it exists so `praxis status` (and the AI host
-	// reading it) can point raptor at the matching control plane via
-	// FACETS_PROFILE.
-	RaptorProfile string
+	// Store says which file the profile was loaded from (StoreFacets,
+	// StorePraxis, StoreEnv). Not persisted; Put decides the file from
+	// AuthMode and URL (see isFacetsCredential).
+	Store string
 	// AuthMode selects how Token is presented on outbound requests.
 	// "basic" → facets mode: control-plane PAT sent as Bearer plus an
 	// X-Facets-Username identity header; anything else (including "") →
@@ -134,11 +143,13 @@ func (p Profile) Auth() map[string]string {
 type Source string
 
 const (
-	SourceFlag    Source = "flag"
-	SourceEnv     Source = "env"
-	SourceProject Source = "project"
-	SourceConfig  Source = "config"
-	SourceDefault Source = "default"
+	SourceFlag        Source = "flag"
+	SourceEnvOverride Source = "env-override" // CONTROL_PLANE_URL + FACETS_USERNAME + FACETS_TOKEN
+	SourceEnv         Source = "env"          // PRAXIS_PROFILE
+	SourceFacetsEnv   Source = "facets-env"   // FACETS_PROFILE
+	SourceProject     Source = "project"
+	SourceConfig      Source = "config"
+	SourceDefault     Source = "default"
 )
 
 // EnvProfile selects the active profile for one PROCESS TREE — i.e. one shell
@@ -167,6 +178,9 @@ type Active struct {
 // The Profile field is zeroed if the named section doesn't exist; callers
 // should check Loaded before using URL/Token.
 func ResolveActive(flagProfile string) (Active, error) {
+	if a, ok := envOverride(flagProfile); ok {
+		return a, nil
+	}
 	store, err := Load()
 	if err != nil {
 		return Active{}, err
@@ -197,6 +211,9 @@ func ResolveActive(flagProfile string) (Active, error) {
 // `praxis login`) use this so a stray/leftover <cwd>/.praxis can't redirect a
 // destructive operation at a profile the user didn't mean.
 func ResolveActiveGlobal() (Active, error) {
+	if a, ok := envOverride(""); ok {
+		return a, nil
+	}
 	store, err := Load()
 	if err != nil {
 		return Active{}, err
@@ -212,8 +229,8 @@ func resolveName(flagProfile string) (string, Source) {
 	}
 	// Env outranks both pointers: it is this session's explicit choice, and a
 	// repo pinned via .praxis must still be overridable per session.
-	if name := EnvProfileName(); name != "" {
-		return name, SourceEnv
+	if name, src := envProfile(); name != "" {
+		return name, src
 	}
 	if name := projectProfile(); name != "" {
 		return name, SourceProject
@@ -221,10 +238,43 @@ func resolveName(flagProfile string) (string, Source) {
 	return resolveGlobalName(flagProfile)
 }
 
-// EnvProfileName returns the profile named by $PRAXIS_PROFILE, or "" when it
-// is unset or blank. Read live on every resolution so a session can change it.
+// EnvProfileName returns the profile named by $PRAXIS_PROFILE, else by
+// raptor's $FACETS_PROFILE (one store, one selector for both CLIs), or "" when
+// neither is set. Read live on every resolution so a session can change it.
 func EnvProfileName() string {
-	return strings.TrimSpace(os.Getenv(EnvProfile))
+	name, _ := envProfile()
+	return name
+}
+
+// FacetsEnvProfile is raptor's profile selector, honored by praxis after
+// PRAXIS_PROFILE so one exported variable can drive both CLIs.
+const FacetsEnvProfile = "FACETS_PROFILE"
+
+func envProfile() (string, Source) {
+	if name := strings.TrimSpace(os.Getenv(EnvProfile)); name != "" {
+		return name, SourceEnv
+	}
+	if name := strings.TrimSpace(os.Getenv(FacetsEnvProfile)); name != "" {
+		return name, SourceFacetsEnv
+	}
+	return "", ""
+}
+
+// envOverride mirrors raptor's environment credential: CONTROL_PLANE_URL with
+// FACETS_USERNAME and FACETS_TOKEN all set is a complete PAT profile named
+// "env", ahead of every file. An explicit --profile still wins.
+func envOverride(flagProfile string) (Active, bool) {
+	if flagProfile != "" {
+		return Active{}, false
+	}
+	cpURL, user, token := strings.TrimSpace(os.Getenv("CONTROL_PLANE_URL")),
+		strings.TrimSpace(os.Getenv("FACETS_USERNAME")), strings.TrimSpace(os.Getenv("FACETS_TOKEN"))
+	if cpURL == "" || user == "" || token == "" {
+		return Active{}, false
+	}
+	p := FacetsProfile(strings.TrimRight(cpURL, "/"), user, token)
+	p.Store = StoreEnv
+	return Active{Name: "env", Source: SourceEnvOverride, Profile: p, Loaded: true}, true
 }
 
 // PersistedActiveName returns the profile named by the persisted global
@@ -274,8 +324,8 @@ func resolveGlobalName(flagProfile string) (string, Source) {
 	if flagProfile != "" {
 		return flagProfile, SourceFlag
 	}
-	if name := EnvProfileName(); name != "" {
-		return name, SourceEnv
+	if name, src := envProfile(); name != "" {
+		return name, src
 	}
 	if cfg, _ := loadConfig(); cfg.Profile != "" {
 		return cfg.Profile, SourceConfig
@@ -318,9 +368,27 @@ func projectProfile() string {
 	return cfg.Profile
 }
 
-// Load reads ~/.praxis/credentials. Missing file returns an empty store
-// (not an error) so first-run code can call Load freely.
+// Load returns every profile praxis can use: the praxis file's API keys plus
+// the facets store raptor would read from here (see FacetsPath). A name in
+// both files resolves to the facets section, so praxis and raptor never
+// disagree about a shared name. Missing files yield an empty store.
 func Load() (map[string]Profile, error) {
+	store, err := loadPraxis()
+	if err != nil {
+		return nil, err
+	}
+	path, err := FacetsPath()
+	if err != nil {
+		return nil, err
+	}
+	for name, p := range loadFacets(path) {
+		store[name] = p
+	}
+	return store, nil
+}
+
+// loadPraxis reads ~/.praxis/credentials only.
+func loadPraxis() (map[string]Profile, error) {
 	path, err := paths.Credentials()
 	if err != nil {
 		return nil, err
@@ -335,8 +403,13 @@ func Load() (map[string]Profile, error) {
 	return parseINI(data), nil
 }
 
-// Save writes the entire store atomically (temp + rename, chmod 0600).
+// Save replaces the praxis file (API keys and loopback PATs) atomically.
+// Facets-store profiles are never written here; use Put.
 func Save(store map[string]Profile) error {
+	return savePraxis(store)
+}
+
+func savePraxis(store map[string]Profile) error {
 	path, err := paths.Credentials()
 	if err != nil {
 		return err
@@ -344,50 +417,72 @@ func Save(store map[string]Profile) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	data := writeINI(store)
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".credentials-*.tmp")
-	if err != nil {
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), 0600); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return writeAtomic(path, ".credentials-*.tmp", writeINI(store))
 }
 
-// Put updates (or adds) one profile. Use case: a successful login.
+// Put saves one profile after a login. A control-plane PAT goes to the facets
+// home file, where raptor reads it too; anything else (a Praxis API key, a
+// PAT for a loopback developer server) goes to the praxis file. A profile
+// lives in exactly one file, so the same name is dropped from the other.
 func Put(name string, p Profile) error {
+	return put(name, p, "")
+}
+
+// PutLocal is Put for `login --local`: a PAT goes to <dir>/.facets/credentials
+// (raptor's local mode) with a .gitignore; the praxis file stays global.
+func PutLocal(name string, p Profile, dir string) error {
+	return put(name, p, dir)
+}
+
+func put(name string, p Profile, dir string) error {
 	if err := validateProfileName(name); err != nil {
 		return err
 	}
-	if p.RaptorProfile != "" {
-		// Same charset rules as section names: the value is written into the
-		// INI and later exported as FACETS_PROFILE — no room for whitespace,
-		// newlines, or bracket/equals corruption.
-		if err := validateProfileName(p.RaptorProfile); err != nil {
-			return fmt.Errorf("raptor profile: %w", err)
+	if isFacetsCredential(p) {
+		path, err := FacetsHome()
+		if dir != "" {
+			path, err = FacetsPathIn(dir), nil
 		}
+		if err != nil {
+			return err
+		}
+		if err := putFacets(path, name, p); err != nil {
+			return err
+		}
+		if dir != "" {
+			if err := ensureGitignore(path); err != nil {
+				return err
+			}
+		}
+		praxis, err := loadPraxis()
+		if err != nil {
+			return err
+		}
+		if _, dup := praxis[name]; dup {
+			delete(praxis, name)
+			return savePraxis(praxis)
+		}
+		return nil
 	}
-	store, err := Load()
+	praxis, err := loadPraxis()
 	if err != nil {
 		return err
 	}
-	store[name] = p
-	return Save(store)
+	p.Store = ""
+	praxis[name] = p
+	if err := savePraxis(praxis); err != nil {
+		return err
+	}
+	fpath, err := FacetsPath()
+	if err != nil {
+		return err
+	}
+	_, err = deleteFacets(fpath, name)
+	return err
 }
 
-// Rename moves a profile to a new section name, keeping every field
-// (URL, username, token, raptor_profile). If the GLOBAL active-profile
+// Rename moves a profile to a new section name in whichever file holds it,
+// keeping every field. If the GLOBAL active-profile
 // pointer named the old profile it is updated to follow; project-local
 // pointers can live in any directory tree and are NOT rewritten — a stale
 // one is inert by design (LocalModeActive requires the pointer to name an
@@ -414,10 +509,24 @@ func Rename(oldName, newName string) (pointerUpdated bool, err error) {
 	if _, exists := store[newName]; exists {
 		return false, fmt.Errorf("profile %q already exists", newName)
 	}
-	store[newName] = p
-	delete(store, oldName)
-	if err := Save(store); err != nil {
-		return false, err
+	if p.Store == StoreFacets {
+		fpath, err := FacetsPath()
+		if err != nil {
+			return false, err
+		}
+		if _, err := renameFacets(fpath, oldName, newName); err != nil {
+			return false, err
+		}
+	} else {
+		praxis, err := loadPraxis()
+		if err != nil {
+			return false, err
+		}
+		praxis[newName] = praxis[oldName]
+		delete(praxis, oldName)
+		if err := savePraxis(praxis); err != nil {
+			return false, err
+		}
 	}
 	if cfg, _ := loadConfig(); cfg.Profile == oldName {
 		if err := SetActive(newName); err != nil {
@@ -428,29 +537,58 @@ func Rename(oldName, newName string) (pointerUpdated bool, err error) {
 	return false, nil
 }
 
-// Delete removes one profile. No-op if it didn't exist.
-func Delete(name string) error {
-	if err := validateProfileName(name); err != nil {
-		return err
-	}
-	store, err := Load()
-	if err != nil {
-		return err
-	}
-	if _, ok := store[name]; !ok {
-		return nil
-	}
-	delete(store, name)
-	return Save(store)
+// Deleted reports which files Delete removed a profile from. Facets means
+// raptor lost that profile too.
+type Deleted struct {
+	Praxis bool
+	Facets bool
+	// FacetsPath is the facets file the section was removed from.
+	FacetsPath string
 }
 
-// DeleteAll wipes the credentials file entirely. Used by `praxis logout --all`.
+// Delete removes one profile from both files. No-op if it didn't exist.
+func Delete(name string) (Deleted, error) {
+	var d Deleted
+	if err := validateProfileName(name); err != nil {
+		return d, err
+	}
+	praxis, err := loadPraxis()
+	if err != nil {
+		return d, err
+	}
+	if _, ok := praxis[name]; ok {
+		delete(praxis, name)
+		if err := savePraxis(praxis); err != nil {
+			return d, err
+		}
+		d.Praxis = true
+	}
+	fpath, err := FacetsPath()
+	if err != nil {
+		return d, err
+	}
+	d.Facets, err = deleteFacets(fpath, name)
+	if d.Facets {
+		d.FacetsPath = fpath
+	}
+	return d, err
+}
+
+// DeleteAll wipes both home credentials files — the praxis file and raptor's —
+// and the active-profile pointer. Used by `praxis logout --all`.
 func DeleteAll() error {
 	path, err := paths.Credentials()
 	if err != nil {
 		return err
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	home, err := FacetsHome()
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(home); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	// Also clear the active-profile pointer so a fresh login can re-bootstrap.
@@ -633,11 +771,11 @@ func parseINI(data []byte) map[string]Profile {
 	out := map[string]Profile{}
 	for name, kv := range parseRawINI(data) {
 		out[name] = Profile{
-			URL:           kv["url"],
-			Username:      kv["username"],
-			Token:         kv["token"],
-			RaptorProfile: kv["raptor_profile"],
-			AuthMode:      kv["auth_mode"],
+			URL:      kv["url"],
+			Username: kv["username"],
+			Token:    kv["token"],
+			AuthMode: kv["auth_mode"],
+			Store:    StorePraxis,
 		}
 	}
 	return out
@@ -646,7 +784,7 @@ func parseINI(data []byte) map[string]Profile {
 func writeINI(store map[string]Profile) []byte {
 	var sb strings.Builder
 	sb.WriteString("# Praxis CLI credentials. Managed by `praxis login` / `praxis logout`.\n")
-	sb.WriteString("# Format matches facets-cli (~/.facets/credentials).\n\n")
+	sb.WriteString("# Praxis API keys only; control-plane PATs live in ~/.facets/credentials.\n\n")
 	for _, name := range sortedKeys(store) {
 		p := store[name]
 		fmt.Fprintf(&sb, "[%s]\n", name)
@@ -658,9 +796,6 @@ func writeINI(store map[string]Profile) []byte {
 		}
 		if p.Token != "" {
 			fmt.Fprintf(&sb, "token    = %s\n", p.Token)
-		}
-		if p.RaptorProfile != "" {
-			fmt.Fprintf(&sb, "raptor_profile = %s\n", p.RaptorProfile)
 		}
 		if p.AuthMode != "" {
 			fmt.Fprintf(&sb, "auth_mode = %s\n", p.AuthMode)

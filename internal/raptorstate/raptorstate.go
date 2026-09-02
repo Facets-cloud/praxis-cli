@@ -1,14 +1,9 @@
-// Package raptorstate is praxis's view of the raptor CLI's auth
-// configuration (~/.facets/credentials + FACETS_* env vars), so `praxis
-// status` can report which control plane raptor commands will hit and
-// whether that matches the active praxis profile's URL.
-//
-// It is the only package that touches raptor's file. Resolve mirrors raptor's
-// own profile-resolution rules (raptor/pkg/config.Config.GetProfile) for
-// status reporting, PAT() hands `praxis login` the control-plane token of a
-// resolved profile (see PAT for why that is not a State field), and Write
-// saves the PAT a login ended with as a raptor profile, so one login serves
-// both CLIs. Resolution order:
+// Package raptorstate reports which profile a BARE raptor command would use
+// from here, so `praxis status` can compare it with the active praxis profile
+// and tell the AI host when to prefix FACETS_PROFILE. The store itself is
+// shared (credentials.LoadFacets reads the same file raptor does); this
+// package only mirrors raptor's selection rules
+// (raptor/pkg/config.Config.GetProfile):
 //
 //  1. env override — CONTROL_PLANE_URL set (FACETS_USERNAME/FACETS_TOKEN
 //     optional with FACETS_HEADERS)
@@ -16,20 +11,12 @@
 //  3. the [default] section
 //  4. the sole profile, when exactly one exists
 //  5. none — raptor itself would error
-//
-// One praxis-side addition sits between 1 and 2: a praxis profile may pin a
-// raptor profile (`raptor_profile` key, set via `praxis login
-// --raptor-profile`). The pin does not change what a BARE raptor command
-// does — it is a contract with the AI host, which is instructed to prefix
-// every raptor command with `FACETS_PROFILE=<pin>`. That prefix beats a
-// bare FACETS_PROFILE in the environment, so the pin is reported above it.
 package raptorstate
 
 import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
@@ -41,7 +28,6 @@ type Source string
 
 const (
 	SourceEnv        Source = "env"         // CONTROL_PLANE_URL override
-	SourcePin        Source = "pin"         // praxis profile's raptor_profile
 	SourceEnvProfile Source = "env-profile" // FACETS_PROFILE
 	SourceDefault    Source = "default"     // [default] section
 	SourceSole       Source = "sole"        // the only profile in the file
@@ -51,80 +37,32 @@ const (
 type State struct {
 	// Installed reports whether the raptor binary is on PATH.
 	Installed bool
-	// Found reports whether a profile (or env override) resolved. When
-	// false with Pinned true, the praxis-side pin names a profile raptor
-	// doesn't have — Profile still carries the pinned name so callers can
-	// say WHICH profile is missing.
+	// Found reports whether a profile (or env override) resolved. When false
+	// with Profile set, FACETS_PROFILE names a section the store lacks.
 	Found           bool
 	Profile         string
 	Source          Source
 	ControlPlaneURL string
 	Username        string
-	// Pinned reports that resolution went through (or was attempted via)
-	// the praxis profile's raptor_profile pairing.
-	Pinned bool
 }
 
 // lookPath is a seam over exec.LookPath so tests control "is raptor
 // installed" without depending on the machine's PATH.
 var lookPath = exec.LookPath
 
-// DefaultPath returns raptor's home credentials file,
-// $HOME/.facets/credentials — where a global login writes.
-func DefaultPath() (string, error) {
-	home, err := os.UserHomeDir()
+// Resolve reports raptor's effective auth state from the working directory.
+// It never fails: an unreadable or missing credentials file simply yields
+// Found=false (plus whatever the env override provides).
+func Resolve() State {
+	profiles, err := credentials.LoadFacets()
 	if err != nil {
-		return "", err
+		profiles = nil
 	}
-	return filepath.Join(home, ".facets", "credentials"), nil
+	return resolve(profiles)
 }
 
-// getwd is a seam for the working directory (see raptorPath).
-var getwd = os.Getwd
-
-// SetGetwdForTest overrides the working directory the raptor-file walk starts
-// from and returns a restore func. Test-only: the walk otherwise climbs through
-// the developer's real home and reads their live ~/.facets/credentials.
-func SetGetwdForTest(fn func() (string, error)) func() {
-	prev := getwd
-	getwd = fn
-	return func() { getwd = prev }
-}
-
-// raptorPath is the file raptor itself would read from this directory: the
-// first <dir>/.facets/credentials walking up from cwd to the filesystem root
-// (raptor/pkg/config.getCredentialsPath), else the home file. A found local
-// file shadows the home file completely — that is raptor's rule, mirrored.
-func raptorPath() (string, error) {
-	if cwd, err := getwd(); err == nil {
-		for dir := cwd; ; dir = filepath.Dir(dir) {
-			p := filepath.Join(dir, ".facets", "credentials")
-			if _, err := os.Stat(p); err == nil {
-				return p, nil
-			}
-			if filepath.Dir(dir) == dir {
-				break
-			}
-		}
-	}
-	return DefaultPath()
-}
-
-// Resolve reports raptor's effective auth state. pinnedProfile is the active
-// praxis profile's raptor_profile pairing ("" when unset). It never fails:
-// an unreadable or missing credentials file simply yields Found=false (plus
-// whatever the env override provides).
-func Resolve(pinnedProfile string) State {
-	path, err := raptorPath()
-	if err != nil {
-		path = ""
-	}
-	return resolve(pinnedProfile, path)
-}
-
-// resolve is the testable core — the credentials path is explicit so tests
-// never touch the real ~/.facets.
-func resolve(pinnedProfile, credentialsPath string) State {
+// resolve is the testable core — the store is explicit.
+func resolve(profiles map[string]credentials.Profile) State {
 	st := State{}
 	if _, err := lookPath("raptor"); err == nil {
 		st.Installed = true
@@ -140,108 +78,60 @@ func resolve(pinnedProfile, credentialsPath string) State {
 		return st
 	}
 
-	profiles := loadProfiles(credentialsPath)
-
-	// 2. praxis-side pin. Reported even when the named profile is missing
-	// from raptor's store (Found=false, Pinned=true) so status can warn.
-	if pinnedProfile != "" {
-		st.Pinned = true
-		st.Profile = pinnedProfile
-		st.Source = SourcePin
-		if p, ok := profiles[pinnedProfile]; ok {
-			st.Found = true
-			st.ControlPlaneURL = p["control_plane_url"]
-			st.Username = p["username"]
-		}
-		return st
-	}
-
-	// 3. FACETS_PROFILE. Like the pin, a name that doesn't exist is still
-	// reported (raptor itself would error on it).
+	// 2. FACETS_PROFILE. A name that doesn't exist is still reported (raptor
+	// itself would error on it).
 	if name := os.Getenv("FACETS_PROFILE"); name != "" {
 		st.Profile = name
 		st.Source = SourceEnvProfile
 		if p, ok := profiles[name]; ok {
 			st.Found = true
-			st.ControlPlaneURL = p["control_plane_url"]
-			st.Username = p["username"]
+			st.ControlPlaneURL = p.URL
+			st.Username = p.Username
 		}
 		return st
 	}
 
-	// 4. [default] section.
-	if p, ok := profiles["default"]; ok {
+	// 3. [default] section.
+	if p, ok := profiles[credentials.DefaultProfileName]; ok {
 		st.Found = true
-		st.Profile = "default"
+		st.Profile = credentials.DefaultProfileName
 		st.Source = SourceDefault
-		st.ControlPlaneURL = p["control_plane_url"]
-		st.Username = p["username"]
+		st.ControlPlaneURL = p.URL
+		st.Username = p.Username
 		return st
 	}
 
-	// 5. Sole profile.
+	// 4. Sole profile.
 	if len(profiles) == 1 {
 		for name, p := range profiles {
 			st.Found = true
 			st.Profile = name
 			st.Source = SourceSole
-			st.ControlPlaneURL = p["control_plane_url"]
-			st.Username = p["username"]
+			st.ControlPlaneURL = p.URL
+			st.Username = p.Username
 		}
 		return st
 	}
 
-	// 6. Nothing resolved — zero or multiple profiles without a selector.
+	// 5. Nothing resolved — zero or multiple profiles without a selector.
 	return st
 }
 
 // PAT returns the (username, control-plane PAT) pair stored for the named
-// profile; ok=false when the file, the section, or either value is missing.
-// `praxis login` authenticates with it before falling back to minting a Praxis
-// API key. Deliberately a separate call rather than a State field, so the token
-// can't ride along into anything that prints State (e.g. `praxis status`).
+// profile in the shared store; ok=false when the section or either value is
+// missing. Deliberately a separate call rather than a State field, so the
+// token can't ride along into anything that prints State (e.g. `praxis
+// status`).
 func PAT(profile string) (username, token string, ok bool) {
-	path, err := raptorPath()
+	profiles, err := credentials.LoadFacets()
 	if err != nil {
 		return "", "", false
 	}
-	p, found := loadProfiles(path)[profile]
-	if !found || p["username"] == "" || p["token"] == "" {
+	p, found := profiles[profile]
+	if !found || p.Username == "" || p.Token == "" {
 		return "", "", false
 	}
-	return p["username"], p["token"], true
-}
-
-// HasProfile reports whether raptor's credentials file contains the named
-// profile. Used by `praxis login --raptor-profile` validation.
-func HasProfile(name string) (bool, string) {
-	path, err := raptorPath()
-	if err != nil {
-		return false, ""
-	}
-	return hasProfile(name, path)
-}
-
-func hasProfile(name, credentialsPath string) (bool, string) {
-	p, ok := loadProfiles(credentialsPath)[name]
-	if !ok {
-		return false, ""
-	}
-	return true, p["control_plane_url"]
-}
-
-// loadProfiles parses raptor's INI credentials file into raw sections.
-// Missing or unreadable file yields an empty map — callers treat that the
-// same as "no profiles".
-func loadProfiles(path string) map[string]map[string]string {
-	if path == "" {
-		return map[string]map[string]string{}
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return map[string]map[string]string{}
-	}
-	return credentials.ParseRawINI(data)
+	return p.Username, p.Token, true
 }
 
 // MatchesHost reports whether two URLs point at the same host,

@@ -80,18 +80,18 @@ current staleness.`,
 		}
 		state["tools"] = toolsFreshness(time.Now(), freshnessMode)
 
-		// Raptor auth state: which control plane raptor commands will hit,
-		// and whether that matches this praxis profile's URL. raptor and
-		// praxis keep independent credential stores — this is the one place
-		// the two are cross-checked, so AI hosts can catch a profile
-		// mismatch before mixing control planes.
-		raptorSt := raptorstate.Resolve(active.Profile.RaptorProfile)
-		state["raptor"] = raptorStatusBlock(raptorSt, active.Profile.URL)
+		// Raptor auth state: which profile a BARE raptor command would use
+		// here, and whether that is this praxis profile. The store is shared,
+		// so a praxis profile that is a control-plane PAT is always usable by
+		// raptor as FACETS_PROFILE=<name>; the block tells the AI host when
+		// that prefix is needed.
+		raptorSt := raptorstate.Resolve()
+		state["raptor"] = raptorStatusBlock(raptorSt, active)
 
 		// One field an AI host can branch on instead of re-deriving "is this
 		// machine actually usable?" from installed/found/logged_in. The skills'
 		// raptor preflight reads this.
-		state["setup_complete"] = loggedIn && raptorReady(raptorSt)
+		state["setup_complete"] = loggedIn && raptorReady(raptorSt, active)
 
 		if asJSON {
 			if statusFull {
@@ -142,7 +142,7 @@ current staleness.`,
 			fmt.Fprintf(out, "local mode: %s\n", projectRoot)
 		}
 		fmt.Fprintf(out, "url:        %s\n", active.Profile.URL)
-		fmt.Fprintf(out, "raptor:     %s\n", raptorStatusLine(raptorSt, active.Profile.URL))
+		fmt.Fprintf(out, "raptor:     %s\n", raptorStatusLine(raptorSt, active))
 		if loggedIn {
 			fmt.Fprintf(out, "logged in:  yes (%s)\n", active.Profile.Username)
 		} else {
@@ -165,7 +165,7 @@ current staleness.`,
 		}
 		// Last thing on screen, so an unfinished setup isn't buried above the
 		// skills/agents listings.
-		fmt.Fprint(out, setupNotice(raptorSt))
+		fmt.Fprint(out, setupNotice(raptorSt, active))
 		return nil
 	},
 }
@@ -227,17 +227,23 @@ func raptorInstallHint(goos, goarch string) map[string]any {
 // raptorStatusBlock shapes a raptorstate.State for JSON output. `installed`
 // and `found` are always present; resolution detail only when it exists, and
 // the praxis-URL comparison only when a control plane actually resolved.
-func raptorStatusBlock(st raptorstate.State, praxisURL string) map[string]any {
-	return raptorStatusBlockFor(st, praxisURL, runtime.GOOS, runtime.GOARCH)
+func raptorStatusBlock(st raptorstate.State, active credentials.Active) map[string]any {
+	return raptorStatusBlockFor(st, active, runtime.GOOS, runtime.GOARCH)
 }
 
 // raptorStatusBlockFor is raptorStatusBlock with the platform injected so the
 // install hint is testable across OS/arch.
-func raptorStatusBlockFor(st raptorstate.State, praxisURL, goos, goarch string) map[string]any {
+//
+// `shared_profile` is set when the active praxis profile is a control-plane
+// PAT in the shared store — usable by raptor as FACETS_PROFILE=<name>.
+// `prefix_required` says a bare raptor command would hit a DIFFERENT control
+// plane (or none), so the host must prefix every raptor command with
+// FACETS_PROFILE=<shared_profile>. Same host under another section name
+// needs no prefix.
+func raptorStatusBlockFor(st raptorstate.State, active credentials.Active, goos, goarch string) map[string]any {
 	block := map[string]any{
 		"installed": st.Installed,
 		"found":     st.Found,
-		"pinned":    st.Pinned,
 	}
 	if !st.Installed {
 		block["install_hint"] = raptorInstallHint(goos, goarch)
@@ -253,9 +259,26 @@ func raptorStatusBlockFor(st raptorstate.State, praxisURL, goos, goarch string) 
 		if st.Username != "" {
 			block["username"] = st.Username
 		}
-		block["matches_praxis_url"] = raptorstate.MatchesHost(praxisURL, st.ControlPlaneURL)
+		block["matches_praxis_url"] = raptorstate.MatchesHost(active.Profile.URL, st.ControlPlaneURL)
+	}
+	if sharedProfile(active) {
+		block["shared_profile"] = active.Name
+		block["prefix_required"] = prefixRequired(st, active)
 	}
 	return block
+}
+
+// prefixRequired reports whether a bare raptor command would miss this praxis
+// profile's control plane, so FACETS_PROFILE=<name> must be set.
+func prefixRequired(st raptorstate.State, active credentials.Active) bool {
+	return !st.Found || !raptorstate.MatchesHost(active.Profile.URL, st.ControlPlaneURL)
+}
+
+// sharedProfile reports whether the active praxis profile is a control-plane
+// PAT raptor can use (a section of the shared store, or the env override both
+// CLIs read).
+func sharedProfile(active credentials.Active) bool {
+	return active.Loaded && (active.Profile.Store == credentials.StoreFacets || active.Profile.Store == credentials.StoreEnv)
 }
 
 const (
@@ -271,17 +294,21 @@ const (
 )
 
 // raptorStatusLine renders the human one-liner for the raptor auth state.
-func raptorStatusLine(st raptorstate.State, praxisURL string) string {
+func raptorStatusLine(st raptorstate.State, active credentials.Active) string {
 	switch {
 	case st.Found:
 		match := "no"
-		if raptorstate.MatchesHost(praxisURL, st.ControlPlaneURL) {
+		if raptorstate.MatchesHost(active.Profile.URL, st.ControlPlaneURL) {
 			match = "yes"
 		}
-		return fmt.Sprintf("profile %s (%s) → %s (matches praxis url: %s)",
+		line := fmt.Sprintf("profile %s (%s) → %s (matches praxis url: %s)",
 			st.Profile, st.Source, st.ControlPlaneURL, match)
-	case st.Pinned:
-		return fmt.Sprintf("pinned profile %q not found in ~/.facets/credentials — run `raptor login`", st.Profile)
+		if sharedProfile(active) && prefixRequired(st, active) {
+			line += fmt.Sprintf("; use FACETS_PROFILE=%s for this praxis profile", active.Name)
+		}
+		return line
+	case sharedProfile(active):
+		return fmt.Sprintf("no default profile — use FACETS_PROFILE=%s (shared with praxis)", active.Name)
 	case st.Profile != "":
 		// FACETS_PROFILE names a profile raptor doesn't have.
 		return fmt.Sprintf("profile %q (%s) not found in ~/.facets/credentials", st.Profile, st.Source)
@@ -295,8 +322,11 @@ func raptorStatusLine(st raptorstate.State, praxisURL string) string {
 }
 
 // raptorReady reports whether raptor can actually run a control-plane command:
-// on PATH and resolved to a control plane it holds credentials for.
-func raptorReady(st raptorstate.State) bool { return st.Installed && st.Found }
+// on PATH, and either resolved bare or usable through the shared praxis
+// profile with a FACETS_PROFILE prefix.
+func raptorReady(st raptorstate.State, active credentials.Active) bool {
+	return st.Installed && (st.Found || sharedProfile(active))
+}
 
 // setupNotice is the closing summary printed when raptor isn't usable yet.
 //
@@ -305,8 +335,8 @@ func raptorReady(st raptorstate.State) bool { return st.Installed && st.Found }
 // closer. praxis login succeeding is only half of setup: raptor is what reaches
 // projects, resources, environments and releases, so every praxis user needs it
 // working. Returns "" when there is nothing to say.
-func setupNotice(st raptorstate.State) string {
-	if raptorReady(st) {
+func setupNotice(st raptorstate.State, active credentials.Active) string {
+	if raptorReady(st, active) {
 		return ""
 	}
 	if !st.Installed {
