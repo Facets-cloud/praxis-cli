@@ -29,8 +29,10 @@ var triggerWords = []string{
 	"control plane",
 }
 
+// No "say so if none fit" clause: it made the agent announce "no praxis skill
+// applies" on every prompt holding a trigger word, which is pure noise.
 const nudge = "This prompt mentions Facets. Check whether a skill named praxis-* is " +
-	"relevant and invoke it before doing any other work. If none fit, say so in one line and carry on."
+	"relevant and invoke it before doing any other work."
 
 // promptEventName is echoed back when the host omits its own. Claude Code and
 // Codex say UserPromptSubmit, Gemini says BeforeAgent.

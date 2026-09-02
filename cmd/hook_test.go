@@ -71,3 +71,14 @@ func TestHookRejectsUnknownArg(t *testing.T) {
 		t.Error("an unknown hook arg is a wiring bug and must error")
 	}
 }
+
+// The exact nudge the agent receives. Asserted whole so that re-adding a
+// report-back clause fails here: an earlier "say so if none fit" made every
+// trigger-word prompt open with "no praxis skill applies".
+func TestNudgeText(t *testing.T) {
+	const want = "This prompt mentions Facets. Check whether a skill named praxis-* is " +
+		"relevant and invoke it before doing any other work."
+	if got := nudgeContext(t, runHook(t, `{"prompt":"check the blueprint"}`)); got != want {
+		t.Errorf("nudge = %q, want %q", got, want)
+	}
+}
