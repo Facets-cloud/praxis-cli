@@ -40,6 +40,9 @@ restore() {
   return 0
 }
 trap restore EXIT INT TERM
+# Ctrl-Z does NOT fire EXIT. Without this the run suspends with both credential
+# files still hidden, which is how a stalled login strands them.
+trap 'restore; trap - TSTP; kill -TSTP $$' TSTP
 
 step "1. Hiding real credentials"
 hide
@@ -53,6 +56,7 @@ raptor whoami >/dev/null 2>&1 \
   && bad "~/.facets/credentials still present" || ok "~/.facets/credentials absent"
 
 step "3. Running the real login (create a PAT and paste it back)"
+echo "  If this stalls, press Ctrl-C (not Ctrl-Z) — credentials restore on Ctrl-C."
 praxis login --url "$CP"
 LOGIN_RC=$?
 [ $LOGIN_RC -eq 0 ] && ok "login exited 0" || bad "login exited $LOGIN_RC"
