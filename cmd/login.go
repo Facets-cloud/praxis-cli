@@ -49,13 +49,14 @@ var (
 	loginDryRun        bool
 )
 
-// browserLoginFn and postAuthSetup are package-level seams so tests can
-// exercise login's path selection (reuse vs. browser) and persistence
-// without opening a browser, hitting the network, or installing skills.
+// Package-level seams so tests can exercise login's path selection (reuse vs.
+// browser), its waits, and persistence without opening a browser, hitting the
+// network, or installing skills.
 var (
 	browserLoginFn   = browserSessionPollLogin
 	interactivePATFn = tryInteractivePAT
 	postAuthSetup    = runPostAuthSetup
+	pollSessionFn    = pollSessionKey
 )
 
 // osExit is a seam over os.Exit so tests can exercise the fatal-exit paths
@@ -186,7 +187,7 @@ installed skills — then exits without changing anything.`,
 			}
 		}
 		// A control-plane PAT beats a Praxis API key even when raptor left none.
-		if handled, perr := interactivePATFn(out, asJSON, profileName, baseURL, loginLocal); handled {
+		if handled, perr := interactivePATFn(out, asJSON, profileName, baseURL, loginTimeout, loginLocal); handled {
 			return perr
 		}
 		return browserLoginFn(out, asJSON, profileName, baseURL, loginTimeout, loginLocal)
@@ -321,7 +322,7 @@ func browserSessionPollLogin(out io.Writer, asJSON bool, profileName, baseURL st
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	key, err := pollSessionKey(ctx, baseURL, sessionNonce, pollInterval)
+	cred, err := pollSessionFn(ctx, baseURL, sessionNonce, pollInterval)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			render.PrintError(out, asJSON, "login timed out",
@@ -332,7 +333,7 @@ func browserSessionPollLogin(out io.Writer, asJSON bool, profileName, baseURL st
 			"the login handshake failed", exitcode.Auth)
 		os.Exit(exitcode.Auth)
 	}
-	return saveAndVerifyToken(out, asJSON, profileName, baseURL, key, local)
+	return saveAndVerifyToken(out, asJSON, profileName, baseURL, cred.Token, local)
 }
 
 // pollSessionKey polls GET {baseURL}/ai-api/v1/cli-session/{nonce}/key
@@ -350,26 +351,34 @@ func browserSessionPollLogin(out io.Writer, asJSON bool, profileName, baseURL st
 // `interval` is the gap between attempts. Splitting it out as a
 // parameter keeps the function trivially testable without sub-second
 // fakery — tests pass 10–50ms intervals.
-func pollSessionKey(ctx context.Context, baseURL, nonce string, interval time.Duration) (string, error) {
+func pollSessionKey(ctx context.Context, baseURL, nonce string, interval time.Duration) (sessionCredential, error) {
 	endpoint := fmt.Sprintf("%s/ai-api/v1/cli-session/%s/key",
 		strings.TrimRight(baseURL, "/"), nonce)
 	client := httpclient.New(pollRequestTimeout)
 
 	for {
-		key, status, err := pollSessionOnce(ctx, client, endpoint)
+		cred, status, err := pollSessionOnce(ctx, client, endpoint)
 		if err != nil {
-			return "", err
+			return sessionCredential{}, err
 		}
 		if status == pollReady {
-			return key, nil
+			return cred, nil
 		}
 		// pending or transient — wait then retry.
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return sessionCredential{}, ctx.Err()
 		case <-time.After(interval):
 		}
 	}
+}
+
+// sessionCredential is what the browser deposited under the nonce. Username is
+// set only by a control-plane-PAT deposit, which cannot authenticate without
+// it; empty marks an API-key deposit.
+type sessionCredential struct {
+	Token    string
+	Username string
 }
 
 type pollStatus int
@@ -384,44 +393,45 @@ const (
 // returns a fatal err only when retrying would never help (malformed
 // nonce, corrupt response). 5xx and network errors are folded into
 // pollTransient so the caller's loop just keeps going.
-func pollSessionOnce(ctx context.Context, client *http.Client, endpoint string) (string, pollStatus, error) {
+func pollSessionOnce(ctx context.Context, client *http.Client, endpoint string) (sessionCredential, pollStatus, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", pollPending, err
+		return sessionCredential{}, pollPending, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			// The OVERALL login deadline (or a cancel) fired — stop.
-			return "", pollPending, ctx.Err()
+			return sessionCredential{}, pollPending, ctx.Err()
 		}
 		// Everything else is transient and must keep the loop polling.
 		// That includes the client's own per-request timeout, whose
 		// error matches errors.Is(err, context.DeadlineExceeded) since
 		// Go 1.16 — checking the error instead of ctx.Err() here used
 		// to abort the whole login as "timed out" after one slow poll.
-		return "", pollTransient, nil
+		return sessionCredential{}, pollTransient, nil
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusNoContent:
-		return "", pollPending, nil
+		return sessionCredential{}, pollPending, nil
 	case http.StatusOK:
 		var body struct {
 			PlaintextKey string `json:"plaintext_key"`
+			Username     string `json:"username"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			return "", pollPending, fmt.Errorf("decode session response: %w", err)
+			return sessionCredential{}, pollPending, fmt.Errorf("decode session response: %w", err)
 		}
 		if body.PlaintextKey == "" {
-			return "", pollPending, fmt.Errorf("server returned empty plaintext_key")
+			return sessionCredential{}, pollPending, fmt.Errorf("server returned empty plaintext_key")
 		}
-		return body.PlaintextKey, pollReady, nil
+		return sessionCredential{Token: body.PlaintextKey, Username: body.Username}, pollReady, nil
 	case http.StatusBadRequest, http.StatusNotFound:
-		return "", pollPending, fmt.Errorf("server rejected nonce: HTTP %d", resp.StatusCode)
+		return sessionCredential{}, pollPending, fmt.Errorf("server rejected nonce: HTTP %d", resp.StatusCode)
 	default:
 		// 5xx or unexpected 2xx — keep trying.
-		return "", pollTransient, nil
+		return sessionCredential{}, pollTransient, nil
 	}
 }
 
