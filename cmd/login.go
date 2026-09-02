@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -65,11 +66,11 @@ var osExit = os.Exit
 func init() {
 	// --profile is the global flag on rootCmd (see root.go): for login it names
 	// the profile to create or update. One flag, one variable, both positions.
-	loginCmd.Flags().StringVar(&loginURL, "url", "", "Praxis deployment URL (required for a new profile; existing profiles reuse their saved URL)")
+	loginCmd.Flags().StringVar(&loginURL, "url", "", "Praxis deployment URL (a new profile needs one: pass it here, or login asks for it on a terminal; existing profiles reuse their saved URL)")
 	loginCmd.Flags().StringVar(&loginToken, "token", "", "skip browser flow; save and verify the given API key directly")
 	loginCmd.Flags().BoolVar(&loginForce, "force", false, "skip the stored token and re-authenticate from the start of the chain")
 	loginCmd.Flags().BoolVar(&loginLocal, "local", false,
-		"pin this profile to the current directory tree (writes <cwd>/.praxis) and install its skills project-scoped, instead of switching the global profile")
+		"pin this profile to the current directory tree (writes <cwd>/.praxis, and <cwd>/.facets/credentials for raptor) and install its skills project-scoped, instead of switching the global profile")
 	loginCmd.Flags().BoolVar(&loginJSON, "json", false, "JSON output")
 	loginCmd.Flags().DurationVar(&loginTimeout, "timeout", 90*time.Second, "max time to wait for browser callback")
 	// No backticks in this usage string: pflag's UnquoteUsage treats a
@@ -101,7 +102,9 @@ var loginCmd = &cobra.Command{
      Login walks the chain until one works. Use --token to supply a
      Praxis API key directly, or --force to skip (a) and
      re-authenticate.
-  3. Save credentials and flip the active profile pointer.
+  3. Save credentials and flip the active profile pointer. A control-plane
+     PAT is also saved as a raptor profile in ~/.facets/credentials (the
+     section named after this profile), so raptor needs no second login.
   4. Wipe any praxis-* org skills from the previous profile.
   5. Fetch this profile's skill catalog from the server and install
      each entry as praxis-<name> across all detected AI hosts.
@@ -143,6 +146,12 @@ installed skills — then exits without changing anything.`,
 		}
 
 		baseURL, err := resolveLoginURL(profileName, loginURL)
+		if err != nil {
+			// Same as `raptor login`: on a terminal, ask for the URL.
+			if typed := promptLoginURL(asJSON); typed != "" {
+				baseURL, err = typed, nil
+			}
+		}
 		if err != nil {
 			render.PrintError(out, asJSON, err.Error(),
 				"pass --url https://<account-id>.console.facets.cloud to create this profile",
@@ -191,7 +200,9 @@ installed skills — then exits without changing anything.`,
 //
 // Raptor's control plane is not a guess — it's this machine's actual state, and
 // in facets mode the agent server is served under that same host, so it is the
-// deployment a raptor user means by a bare `praxis login`.
+// deployment a raptor user means by a bare `praxis login`. A NAMED profile only
+// inherits the raptor section it is paired with (the pin, else its own name):
+// `praxis login -p acme` is a second tenant, not raptor's default one.
 func resolveLoginURL(profileName, flagURL string) (string, error) {
 	if flagURL != "" {
 		return normalizeBaseURL(flagURL), nil
@@ -200,7 +211,11 @@ func resolveLoginURL(profileName, flagURL string) (string, error) {
 	if p, ok := store[profileName]; ok && p.URL != "" {
 		return normalizeBaseURL(p.URL), nil
 	}
-	if st := raptorstate.Resolve(raptorPin(profileName)); st.Found && st.ControlPlaneURL != "" {
+	pin := raptorPin(profileName)
+	if pin == "" && profileName != credentials.DefaultProfileName {
+		pin = profileName
+	}
+	if st := raptorstate.Resolve(pin); st.Found && st.ControlPlaneURL != "" {
 		return normalizeBaseURL(st.ControlPlaneURL), nil
 	}
 	return "", fmt.Errorf("profile %q has no saved URL; pass --url to create it (or run `raptor login` first)", profileName)
@@ -590,6 +605,13 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 func persistAndSetup(out io.Writer, asJSON bool, profileName string, prof credentials.Profile, displayName string, local bool) error {
 	baseURL := prof.URL
 	prof.RaptorProfile = resolveRaptorPairing(profileName, baseURL)
+	if prof.AuthMode == credentials.AuthModeBasic {
+		// The PAT becomes a raptor profile too; a non-default name is pinned
+		// so `praxis status` and the AI host select that section.
+		if s := raptorSection(profileName, prof.RaptorProfile); s != credentials.DefaultProfileName {
+			prof.RaptorProfile = s
+		}
+	}
 	if err := credentials.Put(profileName, prof); err != nil {
 		return fmt.Errorf("save credentials: %w", err)
 	}
@@ -600,20 +622,69 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName string, prof creden
 	}
 	defer restore()
 
+	raptorW, raptorWarn := writeRaptorCredentials(profileName, prof, projectRoot)
+
 	// Post-auth: install meta-skill, wipe previous org skills, install
 	// this profile's catalog, refresh the MCP tools snapshot. The HTTP
 	// calls use the profile's full auth headers (Bearer + X-Facets-Username).
 	state := postAuthSetup(out, asJSON, baseURL, prof.Auth())
 
 	if asJSON {
-		return render.JSON(out, setupPayload(profileName, displayName, baseURL, projectRoot, prof.RaptorProfile, local, state))
+		payload := setupPayload(profileName, displayName, baseURL, projectRoot, prof.RaptorProfile, local, state)
+		if raptorW != nil {
+			payload["raptor_credentials"] = map[string]any{
+				"path": raptorW.Path, "section": raptorW.Section, "changed": raptorW.Changed,
+			}
+		}
+		if raptorWarn != "" {
+			payload["raptor_credentials_warning"] = raptorWarn
+		}
+		return render.JSON(out, payload)
 	}
 	if local {
 		fmt.Fprintf(out, "\n✓ Logged in as %s and pinned profile %q to %s\n", displayName, profileName, projectRoot)
-		return nil
+	} else {
+		fmt.Fprintf(out, "\n✓ Logged in as %s (profile: %s, url: %s)\n", displayName, profileName, baseURL)
 	}
-	fmt.Fprintf(out, "\n✓ Logged in as %s (profile: %s, url: %s)\n", displayName, profileName, baseURL)
+	switch {
+	case raptorWarn != "":
+		fmt.Fprintf(out, "Warning: %s\n", raptorWarn)
+	case raptorW != nil && raptorW.Changed:
+		fmt.Fprintf(out, "✓ raptor profile %q saved to %s\n", raptorW.Section, raptorW.Path)
+	}
 	return nil
+}
+
+// raptorSection names the ~/.facets/credentials section a PAT login writes:
+// the pairing when one exists, else the praxis profile's own name.
+func raptorSection(profileName, pin string) string {
+	if pin != "" {
+		return pin
+	}
+	return profileName
+}
+
+// writeRaptorCredentials mirrors a control-plane PAT into raptor's store, next
+// to the project pointer for a --local login. Only PAT (facets) profiles have a
+// credential raptor can use; API-key profiles write nothing. A failed write is
+// a warning, never a failed login — praxis itself is authenticated. Nil result
+// with an empty warning means nothing applied.
+func writeRaptorCredentials(profileName string, prof credentials.Profile, projectRoot string) (*raptorstate.Written, string) {
+	if prof.AuthMode != credentials.AuthModeBasic {
+		return nil, ""
+	}
+	dir := ""
+	if projectRoot != "" {
+		dir = filepath.Dir(projectRoot)
+	}
+	w, err := raptorstate.Write(raptorSection(profileName, prof.RaptorProfile), prof.URL, prof.Username, prof.Token, dir)
+	if err != nil {
+		return nil, fmt.Sprintf("could not save the raptor profile (%v); run `raptor login` to set it up", err)
+	}
+	if w.Replaced != "" {
+		fmt.Fprintf(os.Stderr, "raptor profile %q now points at %s (was %s).\n", w.Section, prof.URL, w.Replaced)
+	}
+	return &w, ""
 }
 
 // resolveRaptorPairing decides the raptor_profile value to persist:

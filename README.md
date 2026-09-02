@@ -94,10 +94,15 @@ that does everything you need:
      token (and its control plane) — nothing to click.
    - Otherwise it opens the control plane's **personal access token**
      page — the same page `raptor login` opens — and you paste the token
-     you create there.
+     you create there. On a terminal with no `--url`, it asks for the
+     control plane URL first, the way `raptor login` does.
    - Failing both, it opens your browser to create a **Praxis API key**
      (you click "Create" once; the CLI polls the deployment for the new
      key and picks it up).
+   A control-plane token is also saved as a **raptor profile** in
+   `~/.facets/credentials` (section named after the praxis profile), so
+   `raptor` works with no second login. A Praxis API key is not a raptor
+   credential and writes nothing there.
 3. **Wipes any leftover org skills** from a previous profile.
 4. **Fetches your org's catalog of skills** from the Praxis server
    and installs each one as `praxis-<name>` across every AI host.
@@ -179,8 +184,9 @@ praxis login [--profile X] [--url Y] [--token Z] [--local] [--raptor-profile R]
    or switch profiles. The only command that's human-only — opens a
    browser (unless a stored token is still valid, or --token is given).
    --local pins this profile to the CURRENT directory tree (writes
-   <cwd>/.praxis) and installs its skills project-scoped, instead of
-   switching the global profile. See "Local mode" below.
+   <cwd>/.praxis, and the raptor profile to <cwd>/.facets/credentials)
+   and installs its skills project-scoped, instead of switching the
+   global profile. See "Local mode" below.
    --raptor-profile pairs this praxis profile with a raptor profile
    (~/.facets/credentials section). See "Pairing with raptor
    profiles" below.
@@ -579,10 +585,17 @@ praxis surfaces this instead of ignoring it:
   warning but never fails login. Re-logins without the flag preserve
   the pairing.
 
-praxis never *writes* `~/.facets/credentials` — the pairing is metadata
-on the praxis side only. It does *read* that file: a control-plane token
-raptor already holds is the first credential `praxis login` tries (step 2
-above).
+The two stores share one token. A control-plane token raptor already
+holds is the first credential `praxis login` tries (step 2 above), and a
+control-plane token `praxis login` ends with is written back as a raptor
+profile: `praxis login` → `[default]`, `praxis login --profile acme` →
+`[acme]` plus the `raptor_profile = acme` pairing, `--raptor-profile R`
+→ `[R]`. An existing section with the same name is replaced, as `raptor
+login` would. `praxis logout` leaves raptor's file alone.
+
+In local mode (`--local`) the raptor profile goes to
+`<cwd>/.facets/credentials` (with a `.gitignore`), which is where `raptor
+login --local` writes and what raptor reads first from inside that tree.
 
 ## Files
 
@@ -592,6 +605,8 @@ above).
 ~/.praxis/config.json      global active-profile pointer (set by `praxis login`)
 ~/.praxis/mcp-tools.json   manifest snapshot of gateway tools
 ~/.praxis/installed.json   receipt of skill files written across hosts
+~/.facets/credentials      raptor's store; a control-plane PAT login writes
+                           its section here (or <cwd>/.facets with --local)
 
 ~/.claude/skills/praxis/SKILL.md      meta-skill (always present)
 ~/.claude/skills/praxis-<name>/...    org skills (cycle on profile switch)

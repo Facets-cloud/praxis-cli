@@ -108,6 +108,20 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		action = "control-plane PAT prompt, else " + action
 	}
 
+	// A control-plane PAT is also saved as a raptor profile; an API key is not.
+	raptorEffect := "unchanged (only a control-plane PAT is saved for raptor)"
+	raptorTarget := fmt.Sprintf("raptor profile [%s] written to ~/.facets/credentials", raptorSection(profileName, raptorPin(profileName)))
+	if local {
+		raptorTarget = fmt.Sprintf("raptor profile [%s] written to <cwd>/.facets/credentials", raptorSection(profileName, raptorPin(profileName)))
+	}
+	switch {
+	case strings.HasPrefix(action, "facets-pat"),
+		strings.HasPrefix(action, "reuse-token") && prof.AuthMode == credentials.AuthModeBasic:
+		raptorEffect = raptorTarget
+	case strings.HasPrefix(action, "control-plane PAT prompt"):
+		raptorEffect = raptorTarget + " if a control-plane PAT is pasted"
+	}
+
 	skillsEffect := fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)
 	if activeName != profileName {
 		skillsEffect = fmt.Sprintf("active profile switches %q → %q; %q's praxis-* org skills are wiped and %q's catalog installed",
@@ -127,6 +141,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 			"token_status":   tokenStatus,
 			"action":         action,
 			"skills_effect":  skillsEffect,
+			"raptor_effect":  raptorEffect,
 		}
 		if rerr := render.JSON(out, payload); rerr != nil {
 			return rerr
@@ -148,6 +163,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		fmt.Fprintf(out, "  token:    %s\n", tokenStatus)
 		fmt.Fprintf(out, "  action:   %s\n", action)
 		fmt.Fprintf(out, "  skills:   %s\n", skillsEffect)
+		fmt.Fprintf(out, "  raptor:   %s\n", raptorEffect)
 	}
 
 	if !reachable {

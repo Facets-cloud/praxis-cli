@@ -55,9 +55,9 @@ praxis login           ← AI runs this on first contact (or when token expires)
 That's the entire setup. Login does everything: installs this
 meta-skill into your AI host's skill directory, authenticates (reusing
 the control-plane token raptor already holds, else opening the control
-plane's personal-access-token page for the user to paste one), fetches
-this org's skill catalog, and writes the MCP tool manifest snapshot to
-~/.praxis/mcp-tools.json.
+plane's personal-access-token page for the user to paste one), saves that
+token as a raptor profile too, fetches this org's skill catalog, and
+writes the MCP tool manifest snapshot to ~/.praxis/mcp-tools.json.
 
 ## First thing to do every conversation
 
@@ -293,10 +293,11 @@ Preflight — once per session, before the first raptor command:
     the user with the ` + "`raptor.install_hint.commands`" + ` from
     ` + "`praxis status --json`" + ` (already resolved for this OS/arch; no
     sudo). See "Raptor profile ≠ praxis profile" below.
-  - **Logged in?** ` + "`raptor whoami`" + ` — if it errors, RUN
-    ` + "`raptor login`" + ` for the user. It opens their browser and they
-    complete the sign-in; it stores a PAT in
-    ` + "`~/.facets/credentials`" + `. Wait for exit 0. Never ask for a token
+  - **Logged in?** ` + "`raptor whoami`" + ` — a ` + "`praxis login`" + ` that ended
+    with a control-plane PAT already wrote raptor's profile, so this
+    normally passes. If it errors, RUN ` + "`raptor login`" + ` for the user.
+    It opens their browser and they complete the sign-in; it stores a PAT
+    in ` + "`~/.facets/credentials`" + `. Wait for exit 0. Never ask for a token
     in chat or write credentials yourself.
   - **Up to date?** ` + "`praxis status --json`" + ` reports ` + "`tools`" + ` as an
     ARRAY, one object per tool with its ` + "`current`" + `/` + "`latest`" + ` version
@@ -310,13 +311,15 @@ releases / cloud accounts, reach for ` + "`raptor`" + `, not ` + "`praxis mcp`" 
 
 ## Raptor profile ≠ praxis profile
 
-praxis and raptor keep SEPARATE credential stores; switching a praxis
-profile never moves raptor:
+praxis and raptor keep SEPARATE credential stores. A control-plane PAT
+login writes both (` + "`praxis login`" + ` → raptor ` + "`[default]`" + `,
+` + "`praxis login --profile X`" + ` → raptor ` + "`[X]`" + ` plus a pin), but switching
+a praxis profile afterwards never moves raptor:
 
   - praxis: ` + "`~/.praxis/credentials`" + `, switched by ` + "`praxis login --profile X`" + `
   - raptor: ` + "`~/.facets/credentials`" + `, selected ONLY by the
     ` + "`FACETS_PROFILE`" + ` env var (no flag, no pointer file; unset = its
-    ` + "`[default]`" + ` section)
+    ` + "`[default]`" + ` section, or the sole section when there is one)
 
 ` + "`praxis status --json`" + ` cross-checks them in the ` + "`raptor`" + ` block.
 Act on it:
@@ -341,11 +344,13 @@ Act on it:
     afterwards. When ` + "`asset_url`" + ` is absent raptor publishes no
     build for this platform — docs only, don't improvise. Then continue
     to ` + "`raptor login`" + ` below.
-  - ` + "`found: false`" + ` — raptor has no usable profile. RUN
-    ` + "`raptor login`" + ` on the user's behalf, exactly as you do for
-    ` + "`praxis login`" + `: it opens their browser and they complete the
-    sign-in themselves. Wait for exit 0. Never ask for a token in chat,
-    and never write ` + "`~/.facets/credentials`" + ` yourself.
+  - ` + "`found: false`" + ` — raptor has no usable profile. If praxis is not
+    logged in yet, run ` + "`praxis login`" + ` first: a control-plane PAT login
+    writes raptor's profile as well. Otherwise RUN ` + "`raptor login`" + ` on
+    the user's behalf, exactly as you do for ` + "`praxis login`" + `: it opens
+    their browser and they complete the sign-in themselves. Wait for exit
+    0. Never ask for a token in chat, and
+    never write ` + "`~/.facets/credentials`" + ` yourself.
   - ` + "`setup_complete`" + ` (top level, not inside the raptor block) — true
     only when praxis is logged in AND raptor is installed and resolved.
     Check it first; the two bullets above say what to do when it's false.

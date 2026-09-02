@@ -97,10 +97,12 @@ internal/             pure logic, unit-tested
                        becomes ActiveRoot for the receipt/snapshot/skills.
   duties/             REST client for Agent Schedules (duties): runs,
                        findings, artifacts — mirrors internal/memory
-  raptorstate/        READ-ONLY mirror of raptor's profile resolution
-                       (~/.facets/credentials + FACETS_* env) so `status`
-                       can cross-check raptor's control plane against the
-                       praxis profile URL; never writes raptor's store
+  raptorstate/        praxis's view of raptor's store (~/.facets/credentials
+                       + FACETS_* env): mirrors raptor's profile resolution
+                       (including its cwd-upward file walk) so `status` can
+                       cross-check control planes, and Write() saves a PAT
+                       login as a raptor profile. The only package that
+                       touches that file.
   selfupdate/         GitHub Releases fetch, checksum, atomic replace
   hosthooks/          merges praxis's hooks into each AI host's hook config.
                        ONE JSON merge engine, per-host differences in a Host
@@ -144,8 +146,19 @@ profile actually present in the store. Otherwise it returns the HOME root.
 
 Invariants to preserve when touching this area:
 
-- **Credentials are always global.** `paths.Credentials()` is pinned to
-  the HOME root; never route it through `ActiveRoot()`.
+- **Praxis credentials are always global.** `paths.Credentials()` is pinned
+  to the HOME root; never route it through `ActiveRoot()`. The RAPTOR
+  profile a PAT login writes is the exception, on purpose: `--local` puts
+  it in `<cwd>/.facets/credentials` because that is raptor's own local
+  mode — raptor reads the first `.facets/credentials` walking up from cwd
+  and ignores the home file when it finds one. `raptorstate.Resolve`
+  mirrors that walk (seam: `raptorstate.SetGetwdForTest`, wired in both
+  test mains so no test reads the developer's live file).
+- **A named profile inherits only its own raptor section.** `praxis login
+  -p X` with no `--url` takes the URL from raptor section `[X]` (or the
+  `--raptor-profile` pin), never from raptor's `[default]` — that is a
+  second tenant, not the first one again. `default` still follows raptor's
+  own resolution (default, else sole profile).
 - **A bare or foreign `.praxis` must stay inert.** Local mode activates
   only via `LocalModeActive` (pointer names a known profile). Don't switch
   any state on mere directory presence — that's what protects a user who
