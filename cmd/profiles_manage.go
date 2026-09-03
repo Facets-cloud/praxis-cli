@@ -30,9 +30,9 @@ func init() {
 var profilesRenameCmd = &cobra.Command{
 	Use:   "rename OLD NEW",
 	Short: "Rename a profile (credentials only — no browser, no skill changes)",
-	Long: `Rename a profile section in ~/.praxis/credentials, keeping its URL,
-username, and token, in whichever file holds it. If the global active-profile
-named OLD it follows to NEW automatically.
+	Long: `Rename a profile section, keeping its URL, username, and token, in
+whichever credentials file holds it (~/.facets/credentials for a control-plane
+PAT, ~/.praxis/credentials for a Praxis API key).
 
 Installed skills are not touched: they belong to the profile's org, not its
 name. No browser opens and no API key is created — this fixes the "re-login
@@ -70,7 +70,9 @@ credentials file and are not touched.`,
 var profilesRmCmd = &cobra.Command{
 	Use:   "rm NAME",
 	Short: "Remove a non-active profile's credentials (no skill changes)",
-	Long: `Delete one profile section from ~/.praxis/credentials.
+	Long: `Delete one profile section from the credentials file that holds it
+(~/.facets/credentials for a control-plane PAT, ~/.praxis/credentials for a
+Praxis API key).
 
 Only non-active profiles can be removed here: the active profile owns the
 org skills installed on disk, so removing it goes through 'praxis logout'
@@ -88,8 +90,15 @@ so there is no double skill-cycle from switching just to delete.`,
 		// a session TALKS to, while [default] is what owns the org skills on
 		// disk, so it alone decides which profile can't be deleted out from under
 		// them.
-		if name == credentials.OnDiskActiveName() {
+		// The same credentials under another name are the active profile too:
+		// after `login -p acme`, [default] is a copy of [acme], and removing
+		// [acme] alone would leave the user logged in while the output says
+		// raptor lost it.
+		if active := credentials.OnDiskActiveName(); name == active || credentials.SameCreds(name, active) {
 			msg := fmt.Sprintf("%q is the active profile", name)
+			if name != active {
+				msg = fmt.Sprintf("%q holds the active profile's credentials ([%s] is a copy of it)", name, active)
+			}
 			render.PrintError(out, asJSON, msg,
 				"use `praxis logout` to remove the active profile (it also removes its installed org skills)",
 				exitcode.Usage)

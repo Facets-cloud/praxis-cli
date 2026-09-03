@@ -192,12 +192,17 @@ Credentials are never moved: a control-plane PAT stays in
 			URL:         baseURL,
 			ProjectRoot: projectRoot,
 			// store is the credentials file this command already loaded, so the
-			// count is free.
-			MultiProfile: len(store) > 1,
+			// count is free. A [default] copy is not a second profile.
+			MultiProfile: len(credentials.Distinct(store)) > 1,
 		}
 		// The switch is real but can be invisible where it was run: a session
 		// with the profile in its environment keeps using that.
-		if (prior.Source == credentials.SourceEnv || prior.Source == credentials.SourceFacetsEnv) && prior.Name != name {
+		switch {
+		case prior.Source == credentials.SourceEnvOverride:
+			// raptor's env credential outranks every file for both CLIs.
+			summary.ShadowedByEnv = prior.Name
+			summary.ShadowVar = "CONTROL_PLANE_URL"
+		case (prior.Source == credentials.SourceEnv || prior.Source == credentials.SourceFacetsEnv) && prior.Name != name:
 			summary.ShadowedByEnv = prior.Name
 			summary.ShadowVar = credentials.EnvProfileVar()
 		}

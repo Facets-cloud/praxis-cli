@@ -23,7 +23,12 @@ import (
 // reachable. Exit code 0 means the report is complete; exitcode.Network means
 // the server could not be reached, so login's behavior can't be predicted.
 func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, local bool) error {
-	store, _ := credentials.Load()
+	// The store login itself consults: home for a global login, so a run
+	// from inside a local tree cannot make the report reuse the tree's token.
+	store, _ := credentials.LoadHome()
+	if local {
+		store, _ = credentials.Load()
+	}
 	prof, exists := store[profileName]
 
 	// The profile whose org skills are on disk right now — the store's own
@@ -35,7 +40,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 
 	var probeAuth map[string]string
 	tokenSource := "none"
-	switch c, hasPAT := facetsPATCandidate(profileName, baseURL); {
+	switch c, hasPAT := facetsPATCandidate(profileName, baseURL, local); {
 	case loginToken != "":
 		probeAuth, tokenSource = credentials.Profile{Token: loginToken}.Auth(), "supplied"
 	case exists && prof.Token != "" && prof.URL == baseURL:
@@ -72,7 +77,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 			// returns handled=false and the PAT gets its turn. Probe it too, or
 			// the report says "browser" where login would use the PAT.
 			tokenStatus, action = "stored-invalid", "browser"
-			if c, hasPAT := facetsPATCandidate(profileName, baseURL); hasPAT && !loginForce {
+			if c, hasPAT := facetsPATCandidate(profileName, baseURL, local); hasPAT && !loginForce {
 				if _, perr := fetchAuthMe(baseURL, c.asProfile().Auth()); perr == nil {
 					tokenStatus, action = "stored-invalid, facets-pat-valid", "facets-pat (no browser)"
 				}
@@ -110,12 +115,12 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		storeEffect = fmt.Sprintf("%s [%s] (shared with raptor) if a control-plane PAT is pasted, else ~/.praxis/credentials", facetsFile, profileName)
 	}
 
-	skillsEffect := fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)
-	sameCreds := false
-	for _, n := range credentials.SameAs(store, profileName) {
-		sameCreds = sameCreds || n == activeName
+	if local && !strings.Contains(storeEffect, "shared with raptor") {
+		storeEffect = "refused: local mode needs a control-plane PAT (drop --local, or paste a PAT)"
 	}
-	if activeName != profileName && !sameCreds {
+
+	skillsEffect := fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)
+	if !credentials.SameCreds(profileName, activeName) {
 		skillsEffect = fmt.Sprintf("active profile switches %q → %q; %q's praxis-* org skills are wiped and %q's catalog installed",
 			activeName, profileName, activeName, profileName)
 	}

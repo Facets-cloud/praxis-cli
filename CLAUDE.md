@@ -86,7 +86,7 @@ cmd/                  cobra command tree (only commands that DO something
   version.go          `praxis version`
   update.go           `praxis update` (self-update via GitHub Releases)
   completion.go       `praxis completion {bash|zsh|fish|powershell}`
-  logout.go           `praxis logout` (deletes ~/.praxis/credentials)
+  logout.go           `praxis logout` (removes the active profile from whichever file holds it)
   duty.go             `praxis duty *` (Agent Schedule runs/findings/reports)
   hook.go             `praxis hook user-prompt-submit` (hidden) — the AI-host
                        prompt hook that nudges toward a matching praxis skill
@@ -174,8 +174,13 @@ Invariants to preserve when touching this area:
   `[default]` — that is a second tenant, not the first one again. `default`
   still follows raptor's own resolution (default, else sole profile).
 - **Logout is shared and acts where you are.** Removing a PAT profile
-  removes raptor's section; inside a local tree `logout` removes the tree's
-  `[default]`; `logout --all` removes both home files.
+  removes raptor's section. Every section that holds the same credentials
+  goes with it: the `[default]` copy and the section it came from are one
+  login, and leaving either would resolve it as the sole section again.
+  Inside a local tree `logout` removes the tree's `[default]` and its copies;
+  `logout --all` removes both home files, and the tree's file when run inside
+  a tree. `profiles rm X` refuses an X whose credentials equal the active
+  section's, for the same reason.
 - **Never pin a directory to a guess.** On a multi-profile machine, `login
   --local` (or `login --url <host≠default's>`) with no `-p` goes through
   `pickProfile`: a terminal gets the list and may type a new name; `--json`

@@ -69,7 +69,7 @@ func init() {
 	loginCmd.Flags().StringVar(&loginToken, "token", "", "skip browser flow; save and verify the given API key directly")
 	loginCmd.Flags().BoolVar(&loginForce, "force", false, "skip the stored token and re-authenticate from the start of the chain")
 	loginCmd.Flags().BoolVar(&loginLocal, "local", false,
-		"pin this profile to the current directory tree (writes <cwd>/.praxis, and <cwd>/.facets/credentials for raptor) and install its skills project-scoped, instead of switching the global profile")
+		"pin this profile to the current directory tree (writes <cwd>/.facets/credentials, which raptor reads too, and <cwd>/.praxis) and install its skills project-scoped, instead of switching the global profile; needs a control-plane PAT")
 	loginCmd.Flags().BoolVar(&loginJSON, "json", false, "JSON output")
 	loginCmd.Flags().DurationVar(&loginTimeout, "timeout", 90*time.Second, "max time to wait for browser callback")
 	loginCmd.Flags().BoolVar(&loginDryRun, "dry-run", false,
@@ -96,11 +96,11 @@ var loginCmd = &cobra.Command{
      Login walks the chain until one works. Use --token to supply a
      Praxis API key directly, or --force to skip (a) and
      re-authenticate.
-  3. Save credentials and make the profile active. A control-plane PAT is
-     saved to ~/.facets/credentials — raptor's store, read by both CLIs —
-     as the section named after this profile, and copied over [default],
-     which is what a bare praxis or raptor command uses. A Praxis API key
-     goes to ~/.praxis/credentials.
+  3. Save credentials and make the profile active. praxis saves a
+     control-plane PAT to ~/.facets/credentials, the store raptor reads too.
+     The section has this profile's name. praxis also copies it over
+     [default], the section a bare praxis or raptor command uses. A Praxis
+     API key goes to ~/.praxis/credentials.
   4. Wipe any praxis-* org skills from the previous profile.
   5. Fetch this profile's skill catalog from the server and install
      each entry as praxis-<name> across all detected AI hosts.
@@ -108,9 +108,9 @@ var loginCmd = &cobra.Command{
 
 Multiple deployments? Use --profile to keep them separate. With more than
 one profile on this machine, --local (or a --url that is not default's
-control plane) asks which profile to use on a terminal — a number, a
-name, or a new name — and refuses with the list otherwise, so a
-directory is never pinned to a guess. A bare login keeps "default".
+control plane) does not guess. On a terminal it asks which profile to use:
+a number, a name, or a new name. Without a terminal it refuses and lists
+the profiles. A bare login keeps "default".
 
   praxis login --url https://acme.console.facets.cloud → "default"
   praxis login --profile acme --url https://...   → "acme"
@@ -152,7 +152,7 @@ installed skills — then exits without changing anything.`,
 			}
 		}
 
-		baseURL, err := resolveLoginURL(profileName, loginURL)
+		baseURL, err := resolveLoginURL(profileName, loginURL, loginLocal)
 		if err != nil {
 			// Same as `raptor login`: on a terminal, ask for the URL.
 			if typed := promptLoginURL(asJSON); typed != "" {
@@ -184,8 +184,12 @@ installed skills — then exits without changing anything.`,
 		}
 
 		// --token is the explicit non-browser path: verify the supplied
-		// key and persist it, unchanged by the reuse logic.
+		// key and persist it, unchanged by the reuse logic. It is always a
+		// Praxis API key, which a tree's file cannot hold.
 		if loginToken != "" {
+			if loginLocal {
+				return refuseLocalAPIKey(out, asJSON)
+			}
 			return saveAndVerifyToken(out, asJSON, profileName, baseURL, loginToken, loginLocal)
 		}
 
@@ -207,8 +211,25 @@ installed skills — then exits without changing anything.`,
 		if handled, perr := interactivePATFn(out, asJSON, profileName, baseURL, loginLocal); handled {
 			return perr
 		}
+		// The browser mints a Praxis API key. A pin needs a control-plane
+		// PAT, so refuse here — before a key is minted and saved globally.
+		if loginLocal {
+			return refuseLocalAPIKey(out, asJSON)
+		}
 		return browserLoginFn(out, asJSON, profileName, baseURL, loginTimeout, loginLocal)
 	},
+}
+
+// refuseLocalAPIKey is the exit for a --local login that would end with a
+// Praxis API key: only a control-plane PAT can live in a tree's
+// .facets/credentials, and nothing has been written yet.
+func refuseLocalAPIKey(out io.Writer, asJSON bool) error {
+	msg := "local mode needs a control-plane PAT; this login would save a Praxis API key"
+	render.PrintError(out, asJSON, msg,
+		"drop --local to log in globally, or paste a control-plane PAT at the prompt (facets-mode deployments only)",
+		exitcode.Usage)
+	osExit(exitcode.Usage)
+	return fmt.Errorf("%s", msg)
 }
 
 // resolveLoginURL resolves the URL for a NEW or EXISTING profile during
@@ -221,16 +242,19 @@ installed skills — then exits without changing anything.`,
 // itself would select (its [default], else its sole section) is not a guess
 // either: in facets mode the agent server is served under that same host. A
 // NAMED profile with no section is a second tenant, not raptor's first one.
-func resolveLoginURL(profileName, flagURL string) (string, error) {
+//
+// A GLOBAL login reads the home store: run from inside a local tree it must
+// not adopt the tree's [default] and then write it over the home one.
+func resolveLoginURL(profileName, flagURL string, local bool) (string, error) {
 	if flagURL != "" {
 		return normalizeBaseURL(flagURL), nil
 	}
-	store, _ := credentials.Load()
+	store, _ := loginStore(local)
 	if p, ok := store[profileName]; ok && p.URL != "" {
 		return normalizeBaseURL(p.URL), nil
 	}
 	if profileName == credentials.DefaultProfileName {
-		if st := raptorstate.Resolve(); st.Found && st.ControlPlaneURL != "" {
+		if st := raptorState(local); st.Found && st.ControlPlaneURL != "" {
 			return normalizeBaseURL(st.ControlPlaneURL), nil
 		}
 	}
@@ -242,6 +266,39 @@ func resolveLoginURL(profileName, flagURL string) (string, error) {
 // how the user typed --url or what an older CLI persisted.
 func normalizeBaseURL(raw string) string {
 	return strings.TrimRight(strings.TrimSpace(raw), "/")
+}
+
+// loginStore is the store a login reads: the home store for a global login,
+// the store visible from the working directory for a --local one. A global
+// login run inside a local tree must never reuse the tree's section and
+// write it over the home [default].
+func loginStore(local bool) (map[string]credentials.Profile, error) {
+	if local {
+		return credentials.Load()
+	}
+	return credentials.LoadHome()
+}
+
+// storeBefore is loginStore with a read failure read as an empty store — for
+// a notice, never a decision.
+func storeBefore(local bool) map[string]credentials.Profile {
+	store, err := loginStore(local)
+	if err != nil {
+		return nil
+	}
+	return store
+}
+
+// raptorState is raptorstate.Resolve over the same store as loginStore.
+func raptorState(local bool) raptorstate.State {
+	if local {
+		return raptorstate.Resolve()
+	}
+	profiles, err := credentials.LoadFacetsHome()
+	if err != nil {
+		profiles = nil
+	}
+	return raptorstate.ResolveIn(profiles)
 }
 
 // tryReuseStoredToken attempts a no-browser login using the token already
@@ -263,7 +320,7 @@ func normalizeBaseURL(raw string) string {
 // HTTP 401/403). The error is always nil here. A rejected token is reported
 // as a one-line notice on stderr, not an error, so the fallback is smooth.
 func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string, local bool) (bool, error) {
-	store, err := credentials.Load()
+	store, err := loginStore(local)
 	if err != nil {
 		return false, nil // can't read the store — just use the browser
 	}
@@ -472,7 +529,7 @@ func suggestedKeyName() string {
 // to the browser — no usable raptor profile, or the server rejected the PAT.
 // The fallback uses the caller's baseURL, never the candidate's.
 func tryFacetsPAT(out io.Writer, asJSON bool, profileName, baseURL string, local bool) (bool, error) {
-	c, ok := facetsPATCandidate(profileName, baseURL)
+	c, ok := facetsPATCandidate(profileName, baseURL, local)
 	if !ok {
 		return false, nil
 	}
@@ -536,8 +593,18 @@ func (c facetsPAT) asProfile() credentials.Profile {
 // never validate — and a control-plane PAT must never be offered to a host that
 // was merely typed after --url. Loopback is exempt: a developer's own agent
 // server running against a remote CP.
-func facetsPATCandidate(profileName, baseURL string) (facetsPAT, bool) {
-	st := raptorstate.Resolve()
+//
+// The store is the one loginStore reads: a global login adopts raptor's HOME
+// default, not a tree's, so it cannot copy a tree's PAT over the home file.
+func facetsPATCandidate(profileName, baseURL string, local bool) (facetsPAT, bool) {
+	profiles, err := credentials.LoadFacetsHome()
+	if local {
+		profiles, err = credentials.LoadFacets()
+	}
+	if err != nil {
+		return facetsPAT{}, false
+	}
+	st := raptorstate.ResolveIn(profiles)
 	if !st.Found || st.Source == raptorstate.SourceEnv {
 		return facetsPAT{}, false
 	}
@@ -547,11 +614,11 @@ func facetsPATCandidate(profileName, baseURL string) (facetsPAT, bool) {
 		(!isLoopbackURL(baseURL) && !raptorstate.MatchesHost(baseURL, st.ControlPlaneURL)) {
 		return facetsPAT{}, false
 	}
-	username, token, ok := raptorstate.PAT(st.Profile)
-	if !ok {
+	p, found := profiles[st.Profile]
+	if !found || p.Username == "" || p.Token == "" {
 		return facetsPAT{}, false
 	}
-	return facetsPAT{section: st.Profile, username: username, token: token, url: baseURL}, true
+	return facetsPAT{section: st.Profile, username: p.Username, token: p.Token, url: baseURL}, true
 }
 
 // patTransportOK reports whether a control-plane PAT may be sent to this URL at
@@ -622,11 +689,22 @@ func saveAndVerifyToken(out io.Writer, asJSON bool, profileName, baseURL, token 
 // on reuse) and a displayName used only for the human/JSON "logged in as" line.
 func persistAndSetup(out io.Writer, asJSON bool, profileName string, prof credentials.Profile, displayName string, local bool) error {
 	baseURL := prof.URL
+	// Say so when this login points an existing raptor section at another
+	// control plane: bare raptor commands in every shell change with it.
+	if prev, ok := storeBefore(local)[profileName]; ok && prev.Store == credentials.StoreFacets &&
+		prev.URL != "" && !raptorstate.MatchesHost(prev.URL, prof.URL) {
+		fmt.Fprintf(os.Stderr, "raptor profile %q now points at %s (was %s).\n", profileName, prof.URL, prev.URL)
+	}
 	// Save the section first (so activateProfile can copy it), then make it
 	// the active one: [default] globally, or the tree's file for --local. A
 	// --local login writes the tree only, like `raptor login --local`.
 	var err error
 	if local {
+		// Checked before any write: a tree's file holds only control-plane
+		// PATs, and the praxis file is global.
+		if _, shared, serr := credentials.StorePath(prof, "."); serr != nil || !shared {
+			return fmt.Errorf("pin profile to this directory: profile %q is a Praxis API key; local mode needs a control-plane PAT", profileName)
+		}
 		root, rerr := paths.EnsureProjectRoot()
 		if rerr != nil {
 			return fmt.Errorf("pin profile to this directory: %w", rerr)
@@ -670,17 +748,15 @@ func persistAndSetup(out io.Writer, asJSON bool, profileName string, prof creden
 }
 
 // storedAt names the file credentials.Put/PutLocal chose for prof and whether
-// raptor reads it too. projectRoot is <cwd>/.praxis for a --local login.
+// raptor reads it too — the store's own answer, so the report cannot disagree
+// with the write. projectRoot is <cwd>/.praxis for a --local login.
 func storedAt(prof credentials.Profile, projectRoot string) (string, bool) {
-	if prof.AuthMode == credentials.AuthModeBasic && strings.HasPrefix(prof.URL, "https://") {
-		if projectRoot != "" {
-			return credentials.FacetsPathIn(filepath.Dir(projectRoot)), true
-		}
-		p, _ := credentials.FacetsHome()
-		return p, true
+	dir := ""
+	if projectRoot != "" {
+		dir = filepath.Dir(projectRoot)
 	}
-	p, _ := paths.Credentials()
-	return p, false
+	path, shared, _ := credentials.StorePath(prof, dir)
+	return path, shared
 }
 
 // activateProfile makes profileName the active profile for BOTH CLIs and pins

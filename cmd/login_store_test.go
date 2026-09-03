@@ -355,9 +355,9 @@ func TestResolveLoginURL_NamedProfileOnlyInheritsItsOwnSection(t *testing.T) {
 			resetLoginFlags(t)
 			clearFacetsEnv(t)
 			seedRaptorCreds(t, tt.creds)
-			got, err := resolveLoginURL(tt.profile, "")
+			got, err := resolveLoginURL(tt.profile, "", false)
 			if (err != nil) != tt.wantErr || got != tt.want {
-				t.Errorf("resolveLoginURL(%q) = %q, %v; want %q, wantErr %v", tt.profile, got, err, tt.want, tt.wantErr)
+				t.Errorf("resolveLoginURL(%q, false) = %q, %v; want %q, wantErr %v", tt.profile, got, err, tt.want, tt.wantErr)
 			}
 		})
 	}
@@ -530,5 +530,29 @@ func TestLogout_RefusalNamesFacetsProfileWhenThatIsTheSelector(t *testing.T) {
 	}
 	if strings.Contains(out, "PRAXIS_PROFILE") {
 		t.Errorf("refusal names PRAXIS_PROFILE, which is not set:\n%s", out)
+	}
+}
+
+// After logout the one section left becomes active by the sole-section rule
+// (raptor's too); logout must say so rather than read as "logged out".
+func TestLogout_ReportsTheSoleSectionNowActive(t *testing.T) {
+	isolateHome(t)
+	clearFacetsEnv(t)
+	seedRaptorCreds(t, "[default]\ncontrol_plane_url = https://cp.test\nusername = u\ntoken = pat\n\n[other]\ncontrol_plane_url = https://other.test\nusername = o\ntoken = ot\n")
+	logoutAll, logoutJSON = false, true
+	t.Cleanup(func() { logoutAll, logoutJSON = false, false })
+
+	var buf bytes.Buffer
+	logoutCmd.SetOut(&buf)
+	t.Cleanup(func() { logoutCmd.SetOut(nil) })
+	if err := logoutCmd.RunE(logoutCmd, nil); err != nil {
+		t.Fatalf("logout err: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("bad JSON: %v\n%s", err, buf.String())
+	}
+	if out["removed"] != "default" || out["now_active"] != "other" {
+		t.Errorf("payload = %v, want removed default and now_active other", out)
 	}
 }

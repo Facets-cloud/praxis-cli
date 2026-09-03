@@ -309,12 +309,12 @@ func TestResolveLoginURL_TrimsTrailingSlash(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveLoginURL("default", tt.flagURL)
+			got, err := resolveLoginURL("default", tt.flagURL, false)
 			if err != nil {
 				t.Fatalf("resolveLoginURL err = %v", err)
 			}
 			if got != tt.want {
-				t.Errorf("resolveLoginURL(%q) = %q, want %q", tt.flagURL, got, tt.want)
+				t.Errorf("resolveLoginURL(%q, false) = %q, want %q", tt.flagURL, got, tt.want)
 			}
 		})
 	}
@@ -328,7 +328,7 @@ func TestResolveLoginURL_TrimsStoredProfileURL(t *testing.T) {
 		t.Fatalf("seed credentials: %v", err)
 	}
 
-	got, err := resolveLoginURL("acme", "")
+	got, err := resolveLoginURL("acme", "", false)
 	if err != nil {
 		t.Fatalf("resolveLoginURL err = %v", err)
 	}

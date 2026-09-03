@@ -61,6 +61,11 @@ func Resolve() State {
 	return resolve(profiles)
 }
 
+// ResolveIn is Resolve over an explicit facets store. A global login run
+// inside a local tree passes the HOME store, so it adopts raptor's home
+// default rather than the tree's.
+func ResolveIn(profiles map[string]credentials.Profile) State { return resolve(profiles) }
+
 // resolve is the testable core — the store is explicit.
 func resolve(profiles map[string]credentials.Profile) State {
 	st := State{}

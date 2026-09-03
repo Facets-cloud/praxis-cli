@@ -132,7 +132,10 @@ func ActiveRoot() (string, error) {
 	return Dir()
 }
 
-// EnsureProjectRoot creates <cwd>/.praxis (if absent) and returns it. It
+// EnsureProjectRoot returns the project root of the tree the working
+// directory is in, creating <cwd>/.praxis when there is none. A tree pinned
+// at or above the working directory is reused, so a re-pin run from a
+// subdirectory does not nest a second tree inside the first. A new root
 // requires the working directory to be under the home directory (and not the
 // home directory itself): local mode is discovered by walking up to home, so
 // a marker outside that subtree could never be found again. Returns an error
@@ -141,6 +144,9 @@ func ActiveRoot() (string, error) {
 // It aligns home and the working directory the same way ProjectRoot does, so
 // whatever this creates is discoverable afterwards.
 func EnsureProjectRoot() (string, error) {
+	if root, ok, _ := ProjectRoot(); ok {
+		return root, os.MkdirAll(root, 0o700)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

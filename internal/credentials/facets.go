@@ -2,11 +2,14 @@ package credentials
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
 // The facets store is raptor's credentials file, read by both CLIs. A section
@@ -77,6 +80,16 @@ func LoadFacets() (map[string]Profile, error) {
 	return loadFacets(path), nil
 }
 
+// LoadFacetsHome returns the home facets store, ignoring any local tree — what
+// a global operation run from inside a tree must consult.
+func LoadFacetsHome() (map[string]Profile, error) {
+	path, err := FacetsHome()
+	if err != nil {
+		return nil, err
+	}
+	return loadFacets(path), nil
+}
+
 // loadFacets parses a raptor credentials file. Missing or unreadable → empty.
 func loadFacets(path string) map[string]Profile {
 	out := map[string]Profile{}
@@ -100,11 +113,48 @@ func rawFacets(path string) map[string]map[string]string {
 	return parseRawINI(data)
 }
 
-// isFacetsCredential reports whether p belongs in raptor's file: a PAT for an
-// https control plane. A loopback developer server cannot be raptor's
-// control_plane_url, so that PAT stays in the praxis file.
+// isFacetsCredential reports whether p belongs in raptor's file: a PAT for a
+// control plane raptor can hold — an http(s) URL that is not loopback. raptor
+// accepts http:// control planes, so those stay shared. A loopback URL is a
+// developer's own agent server, never raptor's control_plane_url, so that PAT
+// stays in the praxis file.
 func isFacetsCredential(p Profile) bool {
-	return p.AuthMode == AuthModeBasic && strings.HasPrefix(p.URL, "https://")
+	if p.AuthMode != AuthModeBasic {
+		return false
+	}
+	u, err := url.Parse(strings.TrimSpace(p.URL))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return false
+	}
+	return !isLoopbackHost(u.Hostname())
+}
+
+func isLoopbackHost(h string) bool {
+	return strings.EqualFold(h, "localhost") || net.ParseIP(h).IsLoopback()
+}
+
+// sameHost reports whether two URLs name the same host (case-insensitive).
+func sameHost(a, b string) bool {
+	ua, errA := url.Parse(strings.TrimSpace(a))
+	ub, errB := url.Parse(strings.TrimSpace(b))
+	return errA == nil && errB == nil && ua.Host != "" && strings.EqualFold(ua.Host, ub.Host)
+}
+
+// StorePath is the file Put (dir == "") or PutLocal writes p to, and whether
+// raptor reads it too: raptor's file for a control-plane PAT — the home file,
+// or <dir>/.facets/credentials — else the praxis file. Callers that report
+// where a credential landed use this, so the report and the write cannot
+// disagree.
+func StorePath(p Profile, dir string) (path string, shared bool, err error) {
+	if !isFacetsCredential(p) {
+		path, err = paths.Credentials()
+		return path, false, err
+	}
+	if dir != "" {
+		return FacetsPathIn(dir), true, nil
+	}
+	path, err = FacetsHome()
+	return path, true, err
 }
 
 // putFacets writes section `name` the way `raptor login` does — the three
@@ -244,8 +294,12 @@ func writeAtomic(path, pattern string, data []byte) error {
 
 // MigrateLegacyPATs moves control-plane PATs that an older praxis stored in
 // ~/.praxis/credentials into the facets home file, so raptor can use them and
-// both CLIs read one store. Returns the profiles moved. Best-effort: a failure
-// leaves the praxis file as it was.
+// both CLIs read one store. A raptor section of the same name is never
+// overwritten: identical credentials just drop the praxis copy; different
+// ones move the praxis copy under a name derived from its host (see
+// keepName). Returns the profiles moved, as "name" or "name→new". Best-effort:
+// a section that cannot be written stays in the praxis file, the rest still
+// move, and the first error is returned.
 func MigrateLegacyPATs() ([]string, error) {
 	praxis, err := loadPraxis()
 	if err != nil {
@@ -255,20 +309,52 @@ func MigrateLegacyPATs() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	facets := loadFacets(home)
 	var moved []string
+	var firstErr error
+	fail := func(name string, err error) {
+		if firstErr == nil {
+			firstErr = fmt.Errorf("profile %q: %w", name, err)
+		}
+	}
 	for _, name := range sortedKeys(praxis) {
 		p := praxis[name]
 		if !isFacetsCredential(p) {
 			continue
 		}
-		if err := putFacets(home, name, p); err != nil {
-			return moved, err
+		base, err := baseHost(p.URL)
+		if err != nil {
+			fail(name, err)
+			continue
 		}
+		target := name
+		if cur, ok := facets[name]; ok && !(cur.URL == base && cur.Username == p.Username && cur.Token == p.Token) {
+			taken := map[string]Profile{}
+			for n, q := range facets {
+				taken[n] = q
+			}
+			for n, q := range praxis {
+				taken[n] = q
+			}
+			target = keepName(taken, p.URL)
+		}
+		if err := putFacets(home, target, p); err != nil {
+			fail(name, err)
+			continue
+		}
+		facets[target] = FacetsProfile(base, p.Username, p.Token)
 		delete(praxis, name)
-		moved = append(moved, name)
+		if target == name {
+			moved = append(moved, name)
+		} else {
+			moved = append(moved, name+"→"+target)
+		}
 	}
 	if len(moved) == 0 {
-		return nil, nil
+		return nil, firstErr
 	}
-	return moved, savePraxis(praxis)
+	if err := savePraxis(praxis); err != nil {
+		return moved, err
+	}
+	return moved, firstErr
 }

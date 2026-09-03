@@ -142,7 +142,7 @@ func TestResolveLoginURL(t *testing.T) {
 			if tt.seedName != "" {
 				seedProfile(t, tt.seedName, tt.seedURL, "tok")
 			}
-			got, err := resolveLoginURL(tt.profile, tt.flagURL)
+			got, err := resolveLoginURL(tt.profile, tt.flagURL, false)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.errContains)

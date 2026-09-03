@@ -327,14 +327,15 @@ func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
 				return logoutCmd.RunE(logoutCmd, nil)
 			},
 			verify: func(t *testing.T, _ *postAuthCall) {
-				// [default] was the copy of acme the environment named; the copy
-				// goes, the named section itself stays.
+				// [default] was the copy of acme the environment named; both hold
+				// the credentials being removed, so both go — leaving [acme] would
+				// make it the sole section and log the user straight back in.
 				store, _ := credentials.Load()
 				if _, gone := store["default"]; gone {
 					t.Error("logout kept the active [default] copy")
 				}
-				if _, kept := store["acme"]; !kept {
-					t.Error("logout removed acme; it must only touch the active section")
+				if _, kept := store["acme"]; kept {
+					t.Error("logout kept acme, the section [default] was a copy of; the user is still logged in")
 				}
 			},
 		},

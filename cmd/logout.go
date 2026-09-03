@@ -78,7 +78,15 @@ exactly what a bare logout does.`,
 
 		// logout acts on the store visible from here — the tree's own
 		// credentials inside a local-mode tree, else home — and on the skills
-		// installed for that same root, so the two never go out of step.
+		// installed for that same root, so the two never go out of step. The
+		// root is pinned BEFORE any credential goes: inside a local tree the
+		// credentials file is also the local-mode marker, and removing its
+		// last section removes the file, which would otherwise retarget the
+		// skill wipe below at the home root.
+		if root, rerr := paths.ActiveRoot(); rerr == nil {
+			restore := paths.OverrideActiveRoot(root)
+			defer restore()
+		}
 
 		if logoutAll {
 			if err := credentials.DeleteAll(); err != nil {
@@ -135,21 +143,30 @@ exactly what a bare logout does.`,
 		}
 
 		// `target` is the store's own active profile, resolved above alongside the
-		// guard — the same name, by construction. logout is global (see the home
-		// pin above), so a project pointer in the cwd can't redirect it, and
-		// neither can $PRAXIS_PROFILE: the pointer is what owns the credentials
-		// and the org skills this removes, together.
+		// guard — the same name, by construction. $PRAXIS_PROFILE cannot redirect
+		// it: [default] is what owns the credentials and the org skills this
+		// removes, together.
+		//
+		// Every section that holds the same credentials goes with it: after
+		// `login -p acme` or `profiles use acme`, [default] is a copy of [acme],
+		// and removing only [default] would leave [acme] as the sole section —
+		// logged in again, with no skills.
 		store, _ := credentials.Load()
-		credsPresent := false
-		if _, ok := store[target]; ok {
-			credsPresent = true
-		}
+		_, credsPresent := store[target]
+		copies := credentials.SameAs(store, target)
 
 		var deleted credentials.Deleted
-		if credsPresent {
-			var derr error
-			if deleted, derr = credentials.Delete(target); derr != nil {
+		for _, name := range append([]string{target}, copies...) {
+			if _, ok := store[name]; !ok {
+				continue
+			}
+			d, derr := credentials.Delete(name)
+			if derr != nil {
 				return derr
+			}
+			deleted.Praxis = deleted.Praxis || d.Praxis
+			if d.Facets {
+				deleted.Facets, deleted.FacetsPath = true, d.FacetsPath
 			}
 		}
 
@@ -183,12 +200,25 @@ exactly what a bare logout does.`,
 			fmt.Fprintln(out, "✓ Removed use-ig hooks.")
 		}
 
+		// With one section left, raptor's sole-section rule makes it active
+		// again — for both CLIs. Say so, or "logged out" reads as "logged out".
+		stillActive := ""
+		if after, aerr := credentials.ResolveActive(""); aerr == nil && after.Loaded && after.Source == credentials.SourceSole {
+			stillActive = after.Name
+		}
+
 		if asJSON {
 			envelope := map[string]any{
 				"removed":           ifTrue(credsPresent, target),
 				"removed_skills":    liteResults(removed),
 				"removed_agents":    agentLogoutLite(removedAgents),
 				"raptor_logged_out": deleted.Facets,
+			}
+			if len(copies) > 0 {
+				envelope["removed_copies"] = copies
+			}
+			if stillActive != "" {
+				envelope["now_active"] = stillActive
 			}
 			if len(warnings) > 0 {
 				envelope["warnings"] = warnings
@@ -202,12 +232,18 @@ exactly what a bare logout does.`,
 		} else {
 			fmt.Fprintf(out, "No credentials to remove for profile %q.\n", target)
 		}
+		if len(copies) > 0 {
+			fmt.Fprintf(out, "  Also removed %q — the same credentials under another name.\n", copies)
+		}
 		if len(removed) > 0 {
 			fmt.Fprintf(out, "✓ Removed %d org skill(s) from %d host(s).\n",
 				countSkills(removed), countHosts(removed))
 		}
 		if len(removedAgents) > 0 {
 			fmt.Fprintf(out, "✓ Removed %d agent file(s).\n", len(removedAgents))
+		}
+		if stillActive != "" {
+			fmt.Fprintf(out, "Note: %q is the only profile left, so praxis and raptor now use it. Run `praxis profiles rm %s` to remove it too.\n", stillActive, stillActive)
 		}
 		return nil
 	},

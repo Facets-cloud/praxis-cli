@@ -118,7 +118,7 @@ praxis profiles use bigcorp --json # wipes acme skills, installs bigcorp
 
 Read the result: ` + "`profile`" + ` is the new active one, ` + "`previous_profile`" + ` the
 old one. If ` + "`shadowed_by_project_root`" + ` is present the switch was global but
-this directory is pinned to ` + "`effective_profile`" + ` by a ` + "`.praxis`" + ` marker —
+this directory is pinned to ` + "`effective_profile`" + ` by its own ` + "`.facets/credentials`" + ` —
 commands run here still use that profile; add ` + "`--local`" + ` to repin the tree.
 
 Exit 3 means the stored token is dead: fall back to
@@ -589,7 +589,7 @@ accepted for praxis-skill convention compatibility but is a no-op.
 // teaches the host to start passing `-p` at the single profile it already
 // resolves to.
 //
-// A seam, like paths.LocalModeActive: this package must not read the
+// A seam: this package must not read the
 // credentials store itself (its tests would then depend on the developer's real
 // ~/.praxis), so cmd wires it to credentials.List and tests set it directly.
 // Unwired it reports false, so the doctrine ships only once something has

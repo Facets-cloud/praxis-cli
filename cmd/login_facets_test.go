@@ -299,7 +299,7 @@ func TestFacetsPATCandidate(t *testing.T) {
 				t.Setenv("FACETS_PROFILE", tt.env)
 			}
 
-			c, ok := facetsPATCandidate("default", tt.baseURL)
+			c, ok := facetsPATCandidate("default", tt.baseURL, false)
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v (candidate %+v)", ok, tt.wantOK, c)
 			}
@@ -358,12 +358,12 @@ func TestResolveLoginURL_RaptorControlPlaneFallback(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, err := resolveLoginURL("default", "")
+			got, err := resolveLoginURL("default", "", false)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
 			}
 			if got != tt.want {
-				t.Errorf("resolveLoginURL() = %q, want %q", got, tt.want)
+				t.Errorf("resolveLoginURL(, false) = %q, want %q", got, tt.want)
 			}
 		})
 	}

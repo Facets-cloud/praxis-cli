@@ -57,8 +57,10 @@ func init() {
 	// read only when a meta-skill body is actually rendered, so `praxis version`
 	// pays nothing.
 	skillinstall.MultiProfileMachine = func() bool {
-		names, err := credentials.List()
-		return err == nil && len(names) > 1
+		// Identical credentials under two names ([acme] and its [default]
+		// copy) are one deployment.
+		store, err := credentials.Load()
+		return err == nil && len(credentials.Distinct(store)) > 1
 	}
 }
 
@@ -99,7 +101,7 @@ func refusedProfileFlag(out io.Writer, asJSON bool, what, hintFmt, acts string) 
 // ACTIVE profile's credentials while the user believed they had named acme.
 //
 // `acts` must be resolved WITHOUT the flag and the environment (see
-// credentials.PersistedActiveName / PointerActiveName), or the comparison is
+// credentials.OnDiskActiveName), or the comparison is
 // against the selection itself and always matches. The CALLER must then act on
 // that same name — a guard checked against the store while the action
 // re-resolves the full chain is two different answers to "which profile?", and
@@ -155,8 +157,12 @@ func Execute() {
 	// Control-plane PATs an older praxis kept in ~/.praxis/credentials move to
 	// raptor's file, the shared store; its active-profile pointer becomes the
 	// [default] section. Silent and best-effort.
-	_, _ = credentials.MigrateLegacyPATs()
-	promoted, kept, _ := credentials.MigrateLegacyPointer()
+	// Skipped for version/update/completion, which never read the store.
+	var promoted, kept string
+	if !skipUpdateCheck(os.Args[1:]) {
+		_, _ = credentials.MigrateLegacyPATs()
+		promoted, kept, _ = credentials.MigrateLegacyPointer()
+	}
 	if render.IsTTY(os.Stderr) && !skipUpdateCheck(os.Args[1:]) {
 		if promoted != "" {
 			note := fmt.Sprintf("Note: profile %q is now the [default] section (your old active-profile pointer was retired).", promoted)

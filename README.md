@@ -534,9 +534,9 @@ praxis profiles rename test-x acme-prod
 Credentials-only: the section keeps its URL, username, and token; the
 [default] copy of the old profile, if any, stays the active one. No
 browser round-trip, no second API key, no skill
-churn. (Directory trees pinned via `--local` reference profiles by
-name — re-pin those with `praxis profiles use <new> --local`; until
-then they harmlessly fall back to the global profile.)
+churn. (A directory tree pinned via `--local` has its own
+`.facets/credentials` and is not touched; it keeps the section under the
+old name until you re-pin it with `praxis profiles use <new> --local`.)
 
 ### Removing a profile
 

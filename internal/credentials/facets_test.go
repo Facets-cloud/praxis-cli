@@ -179,12 +179,13 @@ func TestPutLocal_WritesProjectFacetsFile(t *testing.T) {
 	if _, err := os.Stat(homeFacets(t)); !os.IsNotExist(err) {
 		t.Errorf("home facets file written by PutLocal: %v", err)
 	}
-	// An API key ignores dir: the praxis file is always global.
-	if err := PutLocal("key", Profile{URL: "https://acme.test", Username: "u@x", Token: "sk"}, repo); err != nil {
-		t.Fatal(err)
+	// An API key cannot be pinned: the praxis file is global, so PutLocal
+	// refuses before it writes anything.
+	if err := PutLocal("key", Profile{URL: "https://acme.test", Username: "u@x", Token: "sk"}, repo); err == nil {
+		t.Fatal("PutLocal accepted a Praxis API key")
 	}
-	if praxis, _ := loadPraxis(); praxis["key"].Token != "sk" {
-		t.Errorf("praxis file = %v, want key", praxis)
+	if praxis, _ := loadPraxis(); len(praxis) != 0 {
+		t.Errorf("praxis file = %v, want empty", praxis)
 	}
 }
 

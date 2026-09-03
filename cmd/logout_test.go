@@ -63,9 +63,11 @@ func TestLogoutCmd_RemovesActive(t *testing.T) {
 	}
 }
 
-// Only the active section — [default] — is removed; sibling profiles are
-// untouched. After `profiles use acme`, [default] is a copy of acme, so logout
-// removes the copy and acme itself survives.
+// Logout removes the active section and every section that holds the same
+// credentials, and nothing else. After `profiles use acme`, [default] is a
+// copy of acme: removing only the copy would leave [acme] as the sole section,
+// which the store resolves as active again — logged in, with no skills. A
+// sibling with other credentials is untouched.
 func TestLogoutCmd_LeavesOtherProfilesAlone(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	resetLogoutFlags()
@@ -73,6 +75,7 @@ func TestLogoutCmd_LeavesOtherProfilesAlone(t *testing.T) {
 
 	_ = credentials.Put("default", credentials.Profile{URL: "x", Token: "t1"})
 	_ = credentials.Put("acme", credentials.Profile{URL: "y", Token: "t2"})
+	_ = credentials.Put("other", credentials.Profile{URL: "z", Token: "t3"})
 	_, _ = credentials.SetDefault("acme")
 
 	var buf bytes.Buffer
@@ -83,12 +86,21 @@ func TestLogoutCmd_LeavesOtherProfilesAlone(t *testing.T) {
 	if !strings.Contains(buf.String(), `"removed": "default"`) {
 		t.Errorf("expected JSON default removal, got %q", buf.String())
 	}
+	if !strings.Contains(buf.String(), `"removed_copies"`) || !strings.Contains(buf.String(), `"acme"`) {
+		t.Errorf("expected removed_copies naming acme, got %q", buf.String())
+	}
 	store, _ := credentials.Load()
 	if _, ok := store["default"]; ok {
 		t.Errorf("default (the active copy) should be gone")
 	}
-	if _, ok := store["acme"]; !ok {
-		t.Errorf("acme should remain")
+	if _, ok := store["acme"]; ok {
+		t.Errorf("acme holds the same credentials as the removed [default]; it must go too, or the user is still logged in")
+	}
+	if _, ok := store["other"]; !ok {
+		t.Errorf("other (different credentials) should remain")
+	}
+	if active, _ := credentials.ResolveActive(""); active.Loaded {
+		t.Errorf("still logged in after logout: %+v", active)
 	}
 }
 
@@ -146,8 +158,11 @@ func TestLogoutCmd_InProjectDir_RemovesTreeDefaultNotHome(t *testing.T) {
 	if _, still := tree["default"]; still {
 		t.Error("tree [default] should have been removed")
 	}
-	if tree["acme"]["token"] != "t2" {
-		t.Error("tree [acme] must survive")
+	// The tree's [acme] is the section [default] was copied from: the same
+	// credentials, so it goes too — else the tree resolves it as its sole
+	// section and stays logged in.
+	if _, still := tree["acme"]; still {
+		t.Error("tree [acme] holds the removed credentials and must go too")
 	}
 	if got := homeFacetsURL(t); got != "https://home.test" {
 		t.Errorf("home [default] = %q; a logout inside a tree must not touch the home store", got)

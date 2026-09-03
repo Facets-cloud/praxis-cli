@@ -128,6 +128,12 @@ func (p Profile) Auth() map[string]string {
 	return h
 }
 
+// sameCreds reports whether q holds the same URL, username, and token as p —
+// one identity under two names, which is what a [default] copy is.
+func (p Profile) sameCreds(q Profile) bool {
+	return p.URL == q.URL && p.Username == q.Username && p.Token == q.Token
+}
+
 // Source describes which level produced the active-profile name. Surfaced
 // in `praxis status` so users (and AI hosts) can understand WHERE the
 // active profile came from.
@@ -145,8 +151,8 @@ const (
 // EnvProfile selects the active profile for one PROCESS TREE — i.e. one shell
 // or one agent session.
 //
-// This is the concurrency-safe way to work in a profile. The active-profile
-// pointer (~/.praxis/config.json) and the installed org skills are BOTH
+// This is the concurrency-safe way to work in a profile. The [default]
+// section and the installed org skills are BOTH
 // machine-global, so `praxis profiles use X` changes what every other session
 // on the machine resolves to, and rewrites skill files those sessions have
 // already read. Exporting PRAXIS_PROFILE instead writes nothing: it can't be
@@ -243,10 +249,10 @@ const FacetsEnvProfile = "FACETS_PROFILE"
 // EnvProfileVar names the variable that supplied EnvProfileName, so a message
 // about the selection points at the one the user actually exported.
 func EnvProfileVar() string {
-	if strings.TrimSpace(os.Getenv(EnvProfile)) != "" {
+	switch _, src := envProfile(); src {
+	case SourceEnv:
 		return EnvProfile
-	}
-	if strings.TrimSpace(os.Getenv(FacetsEnvProfile)) != "" {
+	case SourceFacetsEnv:
 		return FacetsEnvProfile
 	}
 	return ""
@@ -290,8 +296,26 @@ func SameAs(store map[string]Profile, name string) []string {
 	var out []string
 	for _, other := range sortedKeys(store) {
 		q := store[other]
-		if other != name && q.URL == p.URL && q.Username == p.Username && q.Token == p.Token {
+		if other != name && q.sameCreds(p) {
 			out = append(out, other)
+		}
+	}
+	return out
+}
+
+// Distinct returns one name for each set of identical credentials, in List
+// order, so a [default] copy does not count as a second profile. The first
+// name of each group is the one kept.
+func Distinct(store map[string]Profile) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, name := range sortedKeys(store) {
+		if seen[name] {
+			continue
+		}
+		out = append(out, name)
+		for _, other := range SameAs(store, name) {
+			seen[other] = true
 		}
 	}
 	return out
@@ -337,9 +361,19 @@ func SetDefault(name string) (kept string, err error) {
 	if !ok {
 		return "", fmt.Errorf("profile %q does not exist", name)
 	}
-	if def, has := store[DefaultProfileName]; has && len(SameAs(store, DefaultProfileName)) == 0 &&
-		(def.URL != p.URL || def.Username != p.Username || def.Token != p.Token) {
-		kept = keepName(store, def.URL)
+	return setDefaultFrom(store, p)
+}
+
+// setDefaultFrom copies p over the home [default] in `home` (a loadHome
+// result). A [default] that no other section duplicates is kept first under
+// a name derived from its host — unless it is the same identity as p (same
+// control plane and username) with another token: that is the copy a
+// re-login with a rotated token has just superseded, not a second profile.
+func setDefaultFrom(home map[string]Profile, p Profile) (kept string, err error) {
+	def, has := home[DefaultProfileName]
+	if has && len(SameAs(home, DefaultProfileName)) == 0 && !def.sameCreds(p) &&
+		!(def.URL == p.URL && def.Username == p.Username) {
+		kept = keepName(home, def.URL)
 		if err := Put(kept, def); err != nil {
 			return "", err
 		}
@@ -401,33 +435,35 @@ func SetDefaultLocal(name, dir string) error {
 // both files resolves to the facets section, so praxis and raptor never
 // disagree about a shared name. Missing files yield an empty store.
 func Load() (map[string]Profile, error) {
-	store, err := loadPraxis()
-	if err != nil {
-		return nil, err
-	}
 	path, err := FacetsPath()
 	if err != nil {
 		return nil, err
 	}
-	for name, p := range loadFacets(path) {
-		store[name] = p
-	}
-	return store, nil
+	return loadWith(path)
 }
 
-// loadHome is Load without the directory walk: the praxis file plus the HOME
-// facets file. Global operations (SetDefault, the pointer migration) use it so
-// running them from inside a local tree cannot redirect them to the tree.
-func loadHome() (map[string]Profile, error) {
-	store, err := loadPraxis()
-	if err != nil {
-		return nil, err
-	}
+// LoadHome is Load without the directory walk: the praxis file plus the HOME
+// facets file. Global operations (a global login, SetDefault, the pointer
+// migration) use it so a run from inside a local tree cannot redirect them to
+// the tree.
+func LoadHome() (map[string]Profile, error) {
 	home, err := FacetsHome()
 	if err != nil {
 		return nil, err
 	}
-	for name, p := range loadFacets(home) {
+	return loadWith(home)
+}
+
+func loadHome() (map[string]Profile, error) { return LoadHome() }
+
+// loadWith merges the praxis file with one facets file; a facets section wins
+// a shared name.
+func loadWith(facetsPath string) (map[string]Profile, error) {
+	store, err := loadPraxis()
+	if err != nil {
+		return nil, err
+	}
+	for name, p := range loadFacets(facetsPath) {
 		store[name] = p
 	}
 	return store, nil
@@ -484,14 +520,11 @@ func put(name string, p Profile, dir string) error {
 	if err := validateProfileName(name); err != nil {
 		return err
 	}
-	if isFacetsCredential(p) {
-		path, err := FacetsHome()
-		if dir != "" {
-			path, err = FacetsPathIn(dir), nil
-		}
-		if err != nil {
-			return err
-		}
+	path, shared, err := StorePath(p, dir)
+	if err != nil {
+		return err
+	}
+	if shared {
 		if err := putFacets(path, name, p); err != nil {
 			return err
 		}
@@ -509,32 +542,48 @@ func put(name string, p Profile, dir string) error {
 		}
 		return nil
 	}
+	if dir != "" {
+		// Refused before any write: the praxis file is global, so nothing
+		// here could belong to the tree.
+		return fmt.Errorf("profile %q is a Praxis API key; local mode needs a control-plane PAT", name)
+	}
 	praxis, err := loadPraxis()
 	if err != nil {
 		return err
 	}
-	p.Store = ""
 	praxis[name] = p
 	if err := savePraxis(praxis); err != nil {
 		return err
 	}
 	// The praxis file is global, so the section it displaces is the HOME
-	// facets one — never a tree's file the command merely ran inside.
+	// facets one — never a tree's file the command merely ran inside. A
+	// raptor section of that name for the SAME control plane is this
+	// deployment re-logged in and goes; one for another control plane is
+	// raptor's own profile and is kept under a name derived from its host.
 	fpath, err := FacetsHome()
 	if err != nil {
 		return err
 	}
-	_, err = deleteFacets(fpath, name)
+	sec, ok := rawFacets(fpath)[name]
+	if !ok {
+		return nil
+	}
+	if sameHost(sec["control_plane_url"], p.URL) {
+		_, err = deleteFacets(fpath, name)
+		return err
+	}
+	home, err := loadHome()
+	if err != nil {
+		return err
+	}
+	_, err = renameFacets(fpath, name, keepName(home, sec["control_plane_url"]))
 	return err
 }
 
 // Rename moves a profile to a new section name in whichever file holds it,
-// keeping every field. If the GLOBAL active-profile
-// pointer named the old profile it is updated to follow; project-local
-// pointers can live in any directory tree and are NOT rewritten — a stale
-// one is inert by design (LocalModeActive requires the pointer to name an
-// existing profile, so it falls back to the global resolution).
-// Returns whether the global pointer was updated.
+// keeping every field. A [default] section that is a copy of the old name is
+// not renamed and stays the active profile. A tree pinned with --local has
+// its own file and is not touched.
 func Rename(oldName, newName string) error {
 	if err := validateProfileName(oldName); err != nil {
 		return err
@@ -593,6 +642,26 @@ func Delete(name string) (Deleted, error) {
 	if err := validateProfileName(name); err != nil {
 		return d, err
 	}
+	fpath, err := FacetsPath()
+	if err != nil {
+		return d, err
+	}
+	home, err := FacetsHome()
+	if err != nil {
+		return d, err
+	}
+	if d.Facets, err = deleteFacets(fpath, name); err != nil {
+		return d, err
+	}
+	if d.Facets {
+		d.FacetsPath = fpath
+		// Inside a local tree the tree's section is the whole answer: the
+		// praxis file is global and may hold a same-named API key this
+		// tree never saw.
+		if fpath != home {
+			return d, nil
+		}
+	}
 	praxis, err := loadPraxis()
 	if err != nil {
 		return d, err
@@ -604,33 +673,29 @@ func Delete(name string) (Deleted, error) {
 		}
 		d.Praxis = true
 	}
-	fpath, err := FacetsPath()
-	if err != nil {
-		return d, err
-	}
-	d.Facets, err = deleteFacets(fpath, name)
-	if d.Facets {
-		d.FacetsPath = fpath
-	}
-	return d, err
+	return d, nil
 }
 
 // DeleteAll wipes both home credentials files — the praxis file and raptor's —
-// and the active-profile pointer. Used by `praxis logout --all`.
+// plus the tree's file when run inside a local tree, and a legacy pointer
+// file. Used by `praxis logout --all`.
 func DeleteAll() error {
 	path, err := paths.Credentials()
 	if err != nil {
-		return err
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	home, err := FacetsHome()
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(home); err != nil && !os.IsNotExist(err) {
+	tree, err := FacetsPath()
+	if err != nil {
 		return err
+	}
+	for _, f := range []string{path, home, tree} {
+		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
 	// Also drop a legacy pointer file, if one is still around.
 	if legacy, err := paths.LegacyConfig(); err == nil {
@@ -697,7 +762,7 @@ func MigrateLegacyPointer() (promoted, kept string, err error) {
 			return "", "", err
 		}
 		if _, ok := store[name]; ok {
-			if kept, err = SetDefault(name); err != nil {
+			if kept, err = setDefaultFrom(store, store[name]); err != nil {
 				return "", "", err
 			}
 			promoted = name
@@ -709,8 +774,8 @@ func MigrateLegacyPointer() (promoted, kept string, err error) {
 // ─── Hand-rolled INI parser (flat sections, key=value, # or ; comments) ──
 
 // parseRawINI is the pure parser. Callers cast the inner maps into typed
-// shapes (Profile, configFile) themselves — keeps the parser dumb and
-// reusable across both files.
+// shapes (Profile, or raptor's raw sections) themselves — keeps the parser
+// dumb and reusable across both files.
 func parseRawINI(data []byte) map[string]map[string]string {
 	out := map[string]map[string]string{}
 	var current string

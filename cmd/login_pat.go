@@ -178,19 +178,26 @@ func promptLoginURL(asJSON bool) string {
 // a NEW name (which then goes through the URL and PAT prompts). Without a
 // terminal, or with --json, it exits 2 with the list and a -p hint.
 func pickProfile(out io.Writer, asJSON, local bool, flagURL string) (string, error) {
-	store, err := credentials.Load()
-	if err != nil || len(store) < 2 {
+	// A global login writes the home store, and a pin copies a home section
+	// into the tree, so the choice is always among the home profiles — never
+	// the tree's, which a run from inside a local tree would otherwise see.
+	store, err := credentials.LoadHome()
+	if err != nil {
 		return "", nil
 	}
-	if !local {
-		if flagURL == "" {
-			return "", nil
-		}
-		if def, ok := store[credentials.DefaultProfileName]; ok && raptorstate.MatchesHost(flagURL, def.URL) {
+	// Identical credentials under two names — [acme] and its [default] copy —
+	// are one deployment, not a choice to make.
+	names := credentials.Distinct(store)
+	if len(names) < 2 {
+		return "", nil
+	}
+	// A bare login means [default]; with one, or with a --url on its host,
+	// there is nothing to guess. Without one every login creates it.
+	if def, ok := store[credentials.DefaultProfileName]; ok && !local {
+		if flagURL == "" || raptorstate.MatchesHost(flagURL, def.URL) {
 			return "", nil
 		}
 	}
-	names, _ := credentials.List()
 	if asJSON || !stdinIsTTY() {
 		msg := fmt.Sprintf("%d profiles exist; say which one with -p", len(names))
 		render.PrintError(out, asJSON, msg,
@@ -201,7 +208,11 @@ func pickProfile(out io.Writer, asJSON, local bool, flagURL string) (string, err
 	}
 	fmt.Fprintln(os.Stderr, "Profiles:")
 	for i, n := range names {
-		fmt.Fprintf(os.Stderr, "  %d) %-12s %s\n", i+1, n, store[n].URL)
+		alias := ""
+		if same := credentials.SameAs(store, n); len(same) > 0 {
+			alias = fmt.Sprintf(" (also %q)", same)
+		}
+		fmt.Fprintf(os.Stderr, "  %d) %-12s %s%s\n", i+1, n, store[n].URL, alias)
 	}
 	verb := "use"
 	if local {
@@ -214,6 +225,14 @@ func pickProfile(out io.Writer, asJSON, local bool, flagURL string) (string, err
 	case isIndex(answer, len(names)):
 		i, _ := strconv.Atoi(answer)
 		return names[i-1], nil
+	}
+	// A number that is not a position is a slip, not a new profile name.
+	if _, nerr := strconv.Atoi(answer); nerr == nil {
+		msg := fmt.Sprintf("%q is not a position in the list", answer)
+		render.PrintError(out, asJSON, msg,
+			fmt.Sprintf("pick a number from 1 to %d, or type a name", len(names)), exitcode.Usage)
+		osExit(exitcode.Usage)
+		return "", fmt.Errorf("%s", msg)
 	}
 	if err := credentials.ValidateProfileName(answer); err != nil {
 		render.PrintError(out, asJSON, err.Error(), "pick a number from the list or a plain name", exitcode.Usage)

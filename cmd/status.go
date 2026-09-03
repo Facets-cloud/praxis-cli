@@ -273,6 +273,12 @@ func raptorStatusBlockFor(st raptorstate.State, active credentials.Active, goos,
 // prefixRequired reports whether a bare raptor command would miss this praxis
 // profile's control plane, so FACETS_PROFILE=<name> must be set.
 func prefixRequired(st raptorstate.State, active credentials.Active) bool {
+	// CONTROL_PLANE_URL outranks FACETS_PROFILE in raptor, so no prefix can
+	// move an env-resolved raptor; matches_praxis_url says whether the two
+	// agree, and the host asks the user when it is false.
+	if st.Found && st.Source == raptorstate.SourceEnv {
+		return false
+	}
 	return !st.Found || !raptorstate.MatchesHost(active.Profile.URL, st.ControlPlaneURL)
 }
 
