@@ -4,10 +4,11 @@ import (
 	"errors"
 	"io"
 	"os"
-	"strings"
+	"path/filepath"
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 )
 
 // captureStderr redirects os.Stderr for the duration of the test; the returned
@@ -33,8 +34,23 @@ func captureStderr(t *testing.T) func() string {
 // mirrors) out of the fake HOME the credentials file lives in.
 func clearFacetsEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("CONTROL_PLANE_URL", "")
-	t.Setenv("FACETS_PROFILE", "")
+	for _, k := range []string{"CONTROL_PLANE_URL", "FACETS_USERNAME", "FACETS_TOKEN", "FACETS_PROFILE"} {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
+}
+
+// seedRaptorCreds writes a raptor-style ~/.facets/credentials into the
+// (already isolated) fake HOME — the shared store both CLIs read.
+func seedRaptorCreds(t *testing.T, body string) {
+	t.Helper()
+	dir := filepath.Join(os.Getenv("HOME"), ".facets")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "credentials"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func mustLoadProfile(t *testing.T, name string) credentials.Profile {
@@ -126,14 +142,20 @@ func TestLoginRunE_FallsBackToBrowserWhenPATRejected(t *testing.T) {
 	if !*browsed {
 		t.Error("browser did not open after the PAT was rejected")
 	}
-	if store, _ := credentials.Load(); store["default"].Token != "" {
-		t.Errorf("a rejected PAT must not be persisted; got %+v", store["default"])
+	// The rejected PAT is raptor's own section in the shared store; praxis
+	// leaves it as it is and writes nothing of its own.
+	if praxis := readPraxisFile(t); praxis != nil {
+		t.Errorf("a rejected PAT must not be persisted; praxis file = %v", praxis)
+	}
+	if got := readFacetsFile(t, os.Getenv("HOME"))["default"]["token"]; got != "pat123" {
+		t.Errorf("raptor's section changed by a failed login: %q", got)
 	}
 }
 
-// A transient failure is not a verdict on the PAT: login still falls through
-// (the browser flow hits the same unreachable host) but must not report the
-// credential as rejected.
+// A transient failure is not a verdict on the PAT. The shared store makes
+// raptor's PAT this profile's stored token, so login takes the stored-token
+// path: it refuses to clobber a possibly-valid credential over a network blip,
+// leaves the store untouched, and exits with the network code.
 func TestLoginRunE_TransientErrorIsNotAPATVerdict(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
@@ -141,27 +163,24 @@ func TestLoginRunE_TransientErrorIsNotAPATVerdict(t *testing.T) {
 	seedRaptorCreds(t, "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat123\n")
 	stubPostAuth(t)
 	browsed := stubBrowserLogin(t)
+	code := stubOsExit(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return nil, errors.New("dial tcp: i/o timeout")
 	})
 
 	loginURL = "https://cp.test"
-	stderr := captureStderr(t)
-	if _, err := runLoginRunE(t); err != nil {
-		t.Fatalf("login err: %v", err)
+	_, _ = runLoginRunE(t)
+	if *code != exitcode.Network {
+		t.Errorf("exit code = %d, want %d (network)", *code, exitcode.Network)
 	}
-	if !*browsed {
-		t.Error("browser did not open after the PAT could not be verified")
+	if *browsed {
+		t.Error("browser opened over a transient failure; the stored PAT may still be valid")
 	}
-	got := stderr()
-	if strings.Contains(got, "not accepted") {
-		t.Errorf("transient failure reported as a rejected PAT: %q", got)
+	if got := readFacetsFile(t, os.Getenv("HOME"))["default"]["token"]; got != "pat123" {
+		t.Errorf("stored PAT changed by an unverified login: %q", got)
 	}
-	if !strings.Contains(got, "could not be verified") {
-		t.Errorf("stderr should say the PAT was unverified; got %q", got)
-	}
-	if store, _ := credentials.Load(); store["default"].Token != "" {
-		t.Errorf("an unverified PAT must not be persisted; got %+v", store["default"])
+	if praxis := readPraxisFile(t); praxis != nil {
+		t.Errorf("praxis file written: %v", praxis)
 	}
 }
 
@@ -195,8 +214,7 @@ func TestFacetsPATCandidate(t *testing.T) {
 	tests := []struct {
 		name        string
 		creds       string // raptor credentials body; "" = no file
-		pin         string // praxis profile's stored raptor_profile
-		flagPin     string // --raptor-profile
+		env         string // FACETS_PROFILE
 		baseURL     string
 		wantSection string
 		wantOK      bool
@@ -216,18 +234,16 @@ func TestFacetsPATCandidate(t *testing.T) {
 			wantOK:      true,
 		},
 		{
-			name:        "stored praxis pin wins over default",
-			creds:       twoSections,
-			pin:         "acme",
-			baseURL:     "https://acme.test",
-			wantSection: "acme",
-			wantOK:      true,
+			// Two sections and no selector: raptor itself resolves nothing.
+			name:    "multiple sections without a default give no candidate",
+			creds:   "[a]\ncontrol_plane_url = https://cp.test\nusername = u\ntoken = t\n\n[b]\ncontrol_plane_url = https://cp.test\nusername = u\ntoken = t\n",
+			baseURL: "https://cp.test",
+			wantOK:  false,
 		},
 		{
-			name:        "--raptor-profile wins over a stored pin",
+			name:        "FACETS_PROFILE selects the section",
 			creds:       twoSections,
-			pin:         "default",
-			flagPin:     "acme",
+			env:         "acme",
 			baseURL:     "https://acme.test",
 			wantSection: "acme",
 			wantOK:      true,
@@ -270,13 +286,6 @@ func TestFacetsPATCandidate(t *testing.T) {
 			baseURL: "https://cp.test",
 			wantOK:  false,
 		},
-		{
-			name:    "pin names a section raptor does not have",
-			creds:   "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat\n",
-			pin:     "ghost",
-			baseURL: "https://cp.test",
-			wantOK:  false,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -286,12 +295,11 @@ func TestFacetsPATCandidate(t *testing.T) {
 			if tt.creds != "" {
 				seedRaptorCreds(t, tt.creds)
 			}
-			if err := credentials.Put("default", credentials.Profile{RaptorProfile: tt.pin}); err != nil {
-				t.Fatal(err)
+			if tt.env != "" {
+				t.Setenv("FACETS_PROFILE", tt.env)
 			}
-			loginRaptorProfile = tt.flagPin
 
-			c, ok := facetsPATCandidate("default", tt.baseURL)
+			c, ok := facetsPATCandidate("default", tt.baseURL, false)
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v (candidate %+v)", ok, tt.wantOK, c)
 			}
@@ -318,7 +326,6 @@ func TestResolveLoginURL_RaptorControlPlaneFallback(t *testing.T) {
 		name     string
 		creds    string
 		storeURL string
-		flagPin  string
 		want     string
 		wantErr  bool
 	}{
@@ -332,12 +339,6 @@ func TestResolveLoginURL_RaptorControlPlaneFallback(t *testing.T) {
 			creds:    "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat\n",
 			storeURL: "https://stored.test",
 			want:     "https://stored.test",
-		},
-		{
-			name:    "--raptor-profile selects which control plane",
-			creds:   "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat\n\n[acme]\ncontrol_plane_url = https://acme.test\nusername = u@acme\ntoken = pat2\n",
-			flagPin: "acme",
-			want:    "https://acme.test",
 		},
 		{
 			name:    "no raptor, no stored URL, no --url is still an error",
@@ -357,14 +358,12 @@ func TestResolveLoginURL_RaptorControlPlaneFallback(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			loginRaptorProfile = tt.flagPin
-
-			got, err := resolveLoginURL("default", "")
+			got, err := resolveLoginURL("default", "", false)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
 			}
 			if got != tt.want {
-				t.Errorf("resolveLoginURL() = %q, want %q", got, tt.want)
+				t.Errorf("resolveLoginURL(, false) = %q, want %q", got, tt.want)
 			}
 		})
 	}

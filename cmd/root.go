@@ -9,6 +9,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"github.com/spf13/cobra"
@@ -37,8 +38,8 @@ Run 'praxis <command> --help' for details on any command.`,
 
 // rootProfile is the global --profile flag: the credentials profile this one
 // invocation should use. It sits at the top of the resolution chain in
-// credentials.resolveName (flag → project pointer → global pointer →
-// "default"), so it overrides a local-mode tree without touching any pointer
+// credentials.resolveName (flag → $PRAXIS_PROFILE → $FACETS_PROFILE → [default]
+// → sole section), so it overrides a local-mode tree without touching anything
 // on disk — nothing is persisted and the next invocation resolves normally.
 // Empty means "resolve normally". Commands consume it via activeOrAuthExit or
 // by passing it to credentials.ResolveActive.
@@ -56,8 +57,10 @@ func init() {
 	// read only when a meta-skill body is actually rendered, so `praxis version`
 	// pays nothing.
 	skillinstall.MultiProfileMachine = func() bool {
-		names, err := credentials.List()
-		return err == nil && len(names) > 1
+		// Identical credentials under two names ([acme] and its [default]
+		// copy) are one deployment.
+		store, err := credentials.Load()
+		return err == nil && len(credentials.Distinct(store)) > 1
 	}
 }
 
@@ -69,7 +72,7 @@ func explicitProfile() (string, string) {
 		return rootProfile, "--profile"
 	}
 	if name := credentials.EnvProfileName(); name != "" {
-		return name, credentials.EnvProfile
+		return name, credentials.EnvProfileVar()
 	}
 	return "", ""
 }
@@ -92,15 +95,15 @@ func refusedProfileFlag(out io.Writer, asJSON bool, what, hintFmt, acts string) 
 //
 // Use it where the command rewrites state belonging to the ACTIVE profile:
 // `logout` deletes credentials and wipes org skills, `refresh-skills`
-// reinstalls them. Acting on any other profile would leave the pointer and the
+// reinstalls them. Acting on any other profile would leave [default] and the
 // skills on disk out of step. Ignoring a diverging selection is the dangerous
 // option, not the polite one — `praxis --profile acme logout` would delete the
 // ACTIVE profile's credentials while the user believed they had named acme.
 //
 // `acts` must be resolved WITHOUT the flag and the environment (see
-// credentials.PersistedActiveName / PointerActiveName), or the comparison is
+// credentials.OnDiskActiveName), or the comparison is
 // against the selection itself and always matches. The CALLER must then act on
-// that same name — a guard checked against the pointer while the action
+// that same name — a guard checked against the store while the action
 // re-resolves the full chain is two different answers to "which profile?", and
 // the action's one wins.
 //
@@ -111,11 +114,14 @@ func refusedProfileFlag(out io.Writer, asJSON bool, what, hintFmt, acts string) 
 // logout` under PRAXIS_PROFILE=acme passed the check and deleted acme — the one
 // profile the user had not named.
 func refusedExplicitProfile(out io.Writer, asJSON bool, what, hintFmt, acts string) bool {
-	if rootProfile != "" && rootProfile != acts {
+	// A selection whose credentials equal the active section is the same
+	// deployment under another name — [default] after `profiles use X` — and
+	// is not a redirect.
+	if rootProfile != "" && !credentials.SameCreds(rootProfile, acts) {
 		return refuseSelection(out, asJSON, what, hintFmt, rootProfile, "--profile", acts)
 	}
-	if env := credentials.EnvProfileName(); env != "" && env != acts {
-		return refuseSelection(out, asJSON, what, hintFmt, env, credentials.EnvProfile, acts)
+	if env := credentials.EnvProfileName(); env != "" && !credentials.SameCreds(env, acts) {
+		return refuseSelection(out, asJSON, what, hintFmt, env, credentials.EnvProfileVar(), acts)
 	}
 	return false
 }
@@ -131,8 +137,8 @@ func refusedExplicitProfile(out io.Writer, asJSON bool, what, hintFmt, acts stri
 // that they switch to the profile they were already on.
 func refuseSelection(out io.Writer, asJSON bool, what, hintFmt, name, how, acts string) bool {
 	hint := fmt.Sprintf(hintFmt, name)
-	if how == credentials.EnvProfile {
-		hint = "unset " + credentials.EnvProfile + " for this command, or " + hint
+	if how == credentials.EnvProfile || how == credentials.FacetsEnvProfile {
+		hint = "unset " + how + " for this command, or " + hint
 	}
 	render.PrintError(out, asJSON,
 		fmt.Sprintf("%s can't be pointed at another profile (%s=%s); it acts on %q", what, how, name, acts),
@@ -148,6 +154,29 @@ func Execute() {
 	// stat() after the first time) and skipped for machine-invoked commands;
 	// never blocks the command it precedes.
 	maybeFirstRunBootstrap(os.Args[1:])
+	// Control-plane PATs an older praxis kept in ~/.praxis/credentials move to
+	// raptor's file, the shared store; its active-profile pointer becomes the
+	// [default] section. Silent and best-effort.
+	// Skipped for version/update/completion, which never read the store.
+	var promoted, kept string
+	if !skipUpdateCheck(os.Args[1:]) {
+		_, _ = credentials.MigrateLegacyPATs()
+		promoted, kept, _ = credentials.MigrateLegacyPointer()
+	}
+	if render.IsTTY(os.Stderr) && !skipUpdateCheck(os.Args[1:]) {
+		if promoted != "" {
+			note := fmt.Sprintf("Note: profile %q is now the [default] section (your old active-profile pointer was retired).", promoted)
+			if kept != "" {
+				note += fmt.Sprintf(" The previous default was kept as [%s].", kept)
+			}
+			fmt.Fprintln(os.Stderr, note)
+		}
+		// A pre-v1.11 per-directory pointer no longer pins anything; say so once
+		// per run to a human, so a repo that used to be local mode is not a mystery.
+		if p, profile, ok := paths.LegacyProjectPointer(); ok {
+			fmt.Fprintf(os.Stderr, "Note: %s is an old per-directory pointer and is ignored. To pin this tree again run `praxis profiles use %s --local`, or delete that file.\n", p, profile)
+		}
+	}
 	// Fire a background check for a newer release, but only for an interactive
 	// human (stderr is a TTY). When praxis is spawned by an AI host or a script,
 	// stderr is piped — we skip entirely so the check never delays automation

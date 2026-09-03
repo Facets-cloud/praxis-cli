@@ -32,7 +32,7 @@ func TestResolveActive_DefaultWhenNothingSet(t *testing.T) {
 
 func TestResolveActive_FlagWinsAll(t *testing.T) {
 	withHome(t)
-	if err := SetActive("from-config"); err != nil {
+	if err := Put("default", Profile{URL: "https://d.test", Token: "t"}); err != nil {
 		t.Fatal(err)
 	}
 	a, err := ResolveActive("from-flag")
@@ -41,20 +41,6 @@ func TestResolveActive_FlagWinsAll(t *testing.T) {
 	}
 	if a.Name != "from-flag" || a.Source != SourceFlag {
 		t.Errorf("flag should win, got %+v", a)
-	}
-}
-
-func TestResolveActive_ConfigBeatsDefault(t *testing.T) {
-	withHome(t)
-	if err := SetActive("acme"); err != nil {
-		t.Fatal(err)
-	}
-	a, err := ResolveActive("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a.Name != "acme" || a.Source != SourceConfig {
-		t.Errorf("config should beat default, got %+v", a)
 	}
 }
 
@@ -89,6 +75,7 @@ func TestPutLoadGet_RoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("acme profile missing after Put")
 	}
+	want.Store = StorePraxis // an API key lives in the praxis file
 	if got != want {
 		t.Errorf("round-trip mismatch: got %+v want %+v", got, want)
 	}
@@ -122,6 +109,7 @@ func TestAuth(t *testing.T) {
 
 func TestAuthMode_RoundTripsThroughINI(t *testing.T) {
 	withHome(t)
+	// An https PAT lands in the shared store, where AuthMode is implied.
 	want := Profile{URL: "https://cp.test", Username: "user@corp", Token: "pat123", AuthMode: "basic"}
 	if err := Put("facets", want); err != nil {
 		t.Fatal(err)
@@ -134,10 +122,13 @@ func TestAuthMode_RoundTripsThroughINI(t *testing.T) {
 	if !ok {
 		t.Fatal("facets profile missing after Put")
 	}
+	want.Store = StoreFacets
 	if got != want {
 		t.Errorf("round-trip mismatch: got %+v want %+v", got, want)
 	}
-	// A profile with no AuthMode must NOT emit an auth_mode line.
+	// A loopback PAT stays in the praxis file, so auth_mode must persist there;
+	// a profile with no AuthMode must NOT emit an auth_mode line.
+	_ = Put("dev", Profile{URL: "http://localhost:8000", Username: "user@corp", Token: "pat", AuthMode: "basic"})
 	_ = Put("bearer", Profile{URL: "https://x.test", Token: "sk"})
 	path, _ := paths.Credentials()
 	raw, _ := os.ReadFile(path)
@@ -145,7 +136,10 @@ func TestAuthMode_RoundTripsThroughINI(t *testing.T) {
 		t.Errorf("empty AuthMode should be omitted from INI; got:\n%s", raw)
 	}
 	if !strings.Contains(string(raw), "auth_mode = basic") {
-		t.Errorf("basic AuthMode not persisted; got:\n%s", raw)
+		t.Errorf("basic AuthMode not persisted for the loopback PAT; got:\n%s", raw)
+	}
+	if store, _ = Load(); store["dev"].AuthMode != "basic" || store["dev"].Store != StorePraxis {
+		t.Errorf("loopback PAT = %+v", store["dev"])
 	}
 }
 
@@ -170,7 +164,7 @@ func TestDelete_RemovesEntry(t *testing.T) {
 	withHome(t)
 	_ = Put("default", Profile{URL: "x", Token: "t"})
 	_ = Put("acme", Profile{URL: "y", Token: "t"})
-	if err := Delete("acme"); err != nil {
+	if _, err := Delete("acme"); err != nil {
 		t.Fatal(err)
 	}
 	store, _ := Load()
@@ -184,7 +178,7 @@ func TestDelete_RemovesEntry(t *testing.T) {
 
 func TestDelete_NonExistent_NoError(t *testing.T) {
 	withHome(t)
-	if err := Delete("never-there"); err != nil {
+	if _, err := Delete("never-there"); err != nil {
 		t.Errorf("delete of non-existent profile should not error: %v", err)
 	}
 }
@@ -192,7 +186,10 @@ func TestDelete_NonExistent_NoError(t *testing.T) {
 func TestDeleteAll_AlsoClearsActivePointer(t *testing.T) {
 	withHome(t)
 	_ = Put("default", Profile{URL: "x", Token: "t"})
-	_ = SetActive("default")
+	legacy, _ := paths.LegacyConfig()
+	if err := os.WriteFile(legacy, []byte("[default]\nprofile = default\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := DeleteAll(); err != nil {
 		t.Fatal(err)
@@ -257,32 +254,6 @@ func TestINI_FormatMatchesFacetsConvention(t *testing.T) {
 	}
 }
 
-func TestSetActive_WritesAndIsRead(t *testing.T) {
-	withHome(t)
-	if err := SetActive("acme"); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := loadConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Profile != "acme" {
-		t.Errorf("loaded profile = %q, want acme", cfg.Profile)
-	}
-}
-
-func TestClearActive_AfterSetActive_FallsBackToDefault(t *testing.T) {
-	withHome(t)
-	_ = SetActive("acme")
-	if err := ClearActive(); err != nil {
-		t.Fatal(err)
-	}
-	a, _ := ResolveActive("")
-	if a.Name != "default" || a.Source != SourceDefault {
-		t.Errorf("after ClearActive, expected default/default, got %+v", a)
-	}
-}
-
 func TestPutRejectsInvalidNames(t *testing.T) {
 	withHome(t)
 	cases := []struct {
@@ -304,10 +275,7 @@ func TestPutRejectsInvalidNames(t *testing.T) {
 			if err == nil {
 				t.Errorf("Put(%q) returned nil error; want validation failure", c.in)
 			}
-			if err2 := SetActive(c.in); err2 == nil {
-				t.Errorf("SetActive(%q) returned nil error; want validation failure", c.in)
-			}
-			if err3 := Delete(c.in); err3 == nil {
+			if _, err3 := Delete(c.in); err3 == nil {
 				t.Errorf("Delete(%q) returned nil error; want validation failure", c.in)
 			}
 		})
@@ -347,224 +315,11 @@ func setCwd(t *testing.T, dir string) {
 	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return dir, nil }))
 }
 
-func TestResolveActive_ProjectBeatsConfig(t *testing.T) {
-	home := withHome(t)
-	if err := SetActive("from-config"); err != nil {
-		t.Fatal(err)
-	}
-	// The project profile must EXIST in the store for the pointer to win
-	// (an unknown profile gracefully falls back to global — see
-	// TestResolveActive_ProjectPointerToMissingProfile_FallsBack).
-	if err := Put("from-project", Profile{URL: "https://p.test", Token: "t"}); err != nil {
-		t.Fatal(err)
-	}
-	repo := filepath.Join(home, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setCwd(t, repo)
-	if _, err := SetActiveLocal("from-project"); err != nil {
-		t.Fatalf("SetActiveLocal: %v", err)
-	}
-
-	a, err := ResolveActive("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a.Name != "from-project" || a.Source != SourceProject {
-		t.Errorf("project pointer should win, got name=%q source=%s", a.Name, a.Source)
-	}
-}
-
-// TestResolveActive_ProjectPointerToMissingProfile_FallsBack is the
-// regression test for the teammate-hijack fix: a project pointer naming a
-// profile this machine doesn't have (e.g. a committed <repo>/.praxis) must
-// NOT win — it falls back to the global resolution so a normal user isn't
-// locked into a profile they never created.
-func TestResolveActive_ProjectPointerToMissingProfile_FallsBack(t *testing.T) {
-	home := withHome(t)
-	if err := SetActive("from-config"); err != nil {
-		t.Fatal(err)
-	}
-	repo := filepath.Join(home, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setCwd(t, repo)
-	// Pointer to "ghost" — but no such profile is ever Put into the store.
-	if _, err := SetActiveLocal("ghost"); err != nil {
-		t.Fatalf("SetActiveLocal: %v", err)
-	}
-
-	a, err := ResolveActive("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a.Name != "from-config" || a.Source != SourceConfig {
-		t.Errorf("missing project profile should fall back to global config, got name=%q source=%s", a.Name, a.Source)
-	}
-}
-
-// TestResolveActiveGlobal_IgnoresProjectPointer pins that the global resolver
-// (used by `praxis logout`) never honors a project pointer, even one naming a
-// real profile.
-func TestResolveActiveGlobal_IgnoresProjectPointer(t *testing.T) {
-	home := withHome(t)
-	if err := SetActive("from-config"); err != nil {
-		t.Fatal(err)
-	}
-	if err := Put("from-project", Profile{URL: "https://p.test", Token: "t"}); err != nil {
-		t.Fatal(err)
-	}
-	repo := filepath.Join(home, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setCwd(t, repo)
-	if _, err := SetActiveLocal("from-project"); err != nil {
-		t.Fatal(err)
-	}
-
-	// ResolveActive honors the project pointer...
-	if a, _ := ResolveActive(""); a.Name != "from-project" {
-		t.Errorf("ResolveActive should see project profile, got %q", a.Name)
-	}
-	// ...but the global resolver ignores it.
-	g, err := ResolveActiveGlobal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if g.Name != "from-config" || g.Source != SourceConfig {
-		t.Errorf("ResolveActiveGlobal must ignore project pointer, got name=%q source=%s", g.Name, g.Source)
-	}
-}
-
-func TestResolveActive_FlagStillBeatsProject(t *testing.T) {
-	home := withHome(t)
-	repo := filepath.Join(home, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setCwd(t, repo)
-	if _, err := SetActiveLocal("from-project"); err != nil {
-		t.Fatal(err)
-	}
-	a, _ := ResolveActive("from-flag")
-	if a.Name != "from-flag" || a.Source != SourceFlag {
-		t.Errorf("--profile flag must beat project pointer, got %+v", a)
-	}
-}
-
-func TestSetActiveLocal_CreatesMarkerAndConfig(t *testing.T) {
-	home := withHome(t)
-	repo := filepath.Join(home, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setCwd(t, repo)
-
-	root, err := SetActiveLocal("acme")
-	if err != nil {
-		t.Fatalf("SetActiveLocal: %v", err)
-	}
-	if want := filepath.Join(repo, ".praxis"); root != want {
-		t.Errorf("root = %q, want %q", root, want)
-	}
-	cfgPath := filepath.Join(root, "config.json")
-	data, err := os.ReadFile(cfgPath)
-	if err != nil {
-		t.Fatalf("read project config: %v", err)
-	}
-	if !strings.Contains(string(data), "profile = acme") {
-		t.Errorf("project config missing pointer; got %q", string(data))
-	}
-	// Credentials file must NOT have been created by a local use.
-	credPath, _ := paths.Credentials()
-	if _, err := os.Stat(credPath); !os.IsNotExist(err) {
-		t.Errorf("SetActiveLocal must not touch the global credentials file (err=%v)", err)
-	}
-}
-
-func TestSetActiveLocal_ReusesAncestorRoot(t *testing.T) {
-	home := withHome(t)
-	repo := filepath.Join(home, "repo")
-	sub := filepath.Join(repo, "deep", "nested")
-	if err := os.MkdirAll(sub, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Pre-existing project root at the repo level.
-	if err := os.MkdirAll(filepath.Join(repo, ".praxis"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	setCwd(t, sub)
-
-	root, err := SetActiveLocal("acme")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Must reuse the ancestor's .praxis, not create one in the nested cwd.
-	if want := filepath.Join(repo, ".praxis"); root != want {
-		t.Errorf("root = %q, want ancestor %q (no nested marker)", root, want)
-	}
-	if _, err := os.Stat(filepath.Join(sub, ".praxis")); !os.IsNotExist(err) {
-		t.Errorf("must not create a nested .praxis in cwd (err=%v)", err)
-	}
-}
-
-func TestSetActiveLocal_OutsideHome_Errors(t *testing.T) {
-	withHome(t)
-	outside := t.TempDir()
-	setCwd(t, outside)
-	_, err := SetActiveLocal("acme")
-	if err == nil {
-		t.Fatal("SetActiveLocal outside home should error, got nil")
-	}
-	if !strings.Contains(err.Error(), "under your home directory") {
-		t.Errorf("error should explain the home-subtree requirement; got %q", err.Error())
-	}
-}
-
-func TestRaptorProfile_RoundTripAndValidation(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	// Round-trip: raptor_profile persists through Save/Load.
-	if err := Put("acme", Profile{URL: "https://acme.test", Username: "u@x", Token: "tok", RaptorProfile: "acme-raptor"}); err != nil {
-		t.Fatal(err)
-	}
-	store, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := store["acme"].RaptorProfile; got != "acme-raptor" {
-		t.Errorf("RaptorProfile = %q, want %q", got, "acme-raptor")
-	}
-
-	// A profile without the key stays empty (backwards compatibility).
-	if err := Put("plain", Profile{URL: "https://plain.test", Username: "u@x", Token: "tok"}); err != nil {
-		t.Fatal(err)
-	}
-	store, err = Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := store["plain"].RaptorProfile; got != "" {
-		t.Errorf("plain profile RaptorProfile = %q, want empty", got)
-	}
-
-	// An INI-corrupting raptor profile value is rejected at the store
-	// boundary — the same charset rules as section names.
-	for _, bad := range []string{"has space", "a\nb", "[bracket]", "a=b"} {
-		if err := Put("acme", Profile{URL: "https://acme.test", Token: "tok", RaptorProfile: bad}); err == nil {
-			t.Errorf("Put with RaptorProfile %q succeeded, want validation error", bad)
-		}
-	}
-}
-
 func TestRename(t *testing.T) {
 	seed := func(t *testing.T) {
 		t.Helper()
 		t.Setenv("HOME", t.TempDir())
-		if err := Put("old", Profile{URL: "https://old.test", Username: "u@x", Token: "tok", RaptorProfile: "rp"}); err != nil {
+		if err := Put("old", Profile{URL: "https://old.test", Username: "u@x", Token: "tok"}); err != nil {
 			t.Fatal(err)
 		}
 		if err := Put("other", Profile{URL: "https://other.test", Token: "tok2"}); err != nil {
@@ -572,55 +327,36 @@ func TestRename(t *testing.T) {
 		}
 	}
 
-	t.Run("moves every field and reports pointer untouched", func(t *testing.T) {
+	t.Run("moves every field", func(t *testing.T) {
 		seed(t)
-		updated, err := Rename("old", "new")
-		if err != nil {
+		if err := Rename("old", "new"); err != nil {
 			t.Fatal(err)
-		}
-		if updated {
-			t.Error("pointer reported updated but none was set")
 		}
 		store, _ := Load()
 		if _, ok := store["old"]; ok {
 			t.Error("old section still present")
 		}
 		got := store["new"]
-		want := Profile{URL: "https://old.test", Username: "u@x", Token: "tok", RaptorProfile: "rp"}
+		want := Profile{URL: "https://old.test", Username: "u@x", Token: "tok", Store: StorePraxis}
 		if got != want {
 			t.Errorf("renamed profile = %+v, want %+v", got, want)
 		}
 	})
 
-	t.Run("global pointer follows the rename", func(t *testing.T) {
+	t.Run("a [default] copy of the renamed profile stays active", func(t *testing.T) {
 		seed(t)
-		if err := SetActive("old"); err != nil {
+		if _, err := SetDefault("old"); err != nil {
 			t.Fatal(err)
 		}
-		updated, err := Rename("old", "new")
-		if err != nil {
+		if err := Rename("old", "new"); err != nil {
 			t.Fatal(err)
 		}
-		if !updated {
-			t.Error("pointer should have been reported updated")
+		active, _ := ResolveActive("")
+		if active.Name != "default" || active.Profile.URL != "https://old.test" {
+			t.Errorf("active = %+v, want default with old's credentials", active)
 		}
-		active, _ := ResolveActiveGlobal()
-		if active.Name != "new" || active.Source != SourceConfig {
-			t.Errorf("active = %s (%s), want new (config)", active.Name, active.Source)
-		}
-	})
-
-	t.Run("pointer naming another profile is left alone", func(t *testing.T) {
-		seed(t)
-		if err := SetActive("other"); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := Rename("old", "new"); err != nil {
-			t.Fatal(err)
-		}
-		active, _ := ResolveActiveGlobal()
-		if active.Name != "other" {
-			t.Errorf("active = %s, want other (untouched)", active.Name)
+		if same := SameAs(mustLoad(t), "default"); len(same) != 1 || same[0] != "new" {
+			t.Errorf("SameAs(default) = %v, want [new]", same)
 		}
 	})
 
@@ -633,9 +369,160 @@ func TestRename(t *testing.T) {
 			"invalid new name": {"old", "has space"},
 			"invalid old name": {"[x]", "new"},
 		} {
-			if _, err := Rename(pair[0], pair[1]); err == nil {
+			if err := Rename(pair[0], pair[1]); err == nil {
 				t.Errorf("%s: Rename(%q, %q) succeeded, want error", name, pair[0], pair[1])
 			}
 		}
 	})
+}
+
+func mustLoad(t *testing.T) map[string]Profile {
+	t.Helper()
+	store, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+// Raptor's rule, applied by praxis: [default], else the sole section.
+func TestResolveActive_SoleSectionWhenNoDefault(t *testing.T) {
+	withHome(t)
+	if err := Put("acme", Profile{URL: "https://acme.test", Username: "u", Token: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := ResolveActive("")
+	if err != nil || a.Name != "acme" || a.Source != SourceSole || !a.Loaded {
+		t.Errorf("ResolveActive = %+v, %v; want the sole section", a, err)
+	}
+	if OnDiskActiveName() != "acme" {
+		t.Errorf("OnDiskActiveName() = %q, want acme", OnDiskActiveName())
+	}
+	// Two sections and no default: nothing resolves, like raptor.
+	if err := Put("zed", Profile{URL: "https://zed.test", Username: "u", Token: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	a, _ = ResolveActive("")
+	if a.Name != "default" || a.Loaded {
+		t.Errorf("ResolveActive with two sections and no default = %+v, want an unloaded default", a)
+	}
+}
+
+func TestSetDefault_CopiesSectionSoBothCLIsMove(t *testing.T) {
+	withHome(t)
+	seedFacets(t, homeFacets(t), twoRaptorSections)
+	if err := Put("key", Profile{URL: "https://key.test", Username: "k", Token: "sk"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := SetDefault("acme"); err != nil {
+		t.Fatal(err)
+	}
+	store := mustLoad(t)
+	if store["default"].URL != "https://acme.test" || store["default"].Token != "pat-acme" || store["default"].Store != StoreFacets {
+		t.Errorf("[default] = %+v, want a copy of acme in the facets file", store["default"])
+	}
+	if _, ok := store["acme"]; !ok {
+		t.Error("acme itself must survive the copy")
+	}
+	if same := SameAs(store, "default"); len(same) != 1 || same[0] != "acme" {
+		t.Errorf("SameAs(default) = %v, want [acme]", same)
+	}
+
+	// An API key becomes default in the praxis file, and the facets [default]
+	// goes away so it cannot shadow it.
+	if _, err := SetDefault("key"); err != nil {
+		t.Fatal(err)
+	}
+	store = mustLoad(t)
+	if store["default"].Token != "sk" || store["default"].Store != StorePraxis {
+		t.Errorf("[default] = %+v, want the API key", store["default"])
+	}
+	if _, still := loadFacets(homeFacets(t))["default"]; still {
+		t.Error("facets [default] should have been removed")
+	}
+
+	if _, err := SetDefault("default"); err != nil {
+		t.Errorf("SetDefault(default) = %v, want no-op", err)
+	}
+	if _, err := SetDefault("ghost"); err == nil {
+		t.Error("SetDefault(ghost) should fail")
+	}
+}
+
+func TestSetDefaultLocal_WritesTreeFileWithDefaultCopy(t *testing.T) {
+	home := withHome(t)
+	seedFacets(t, homeFacets(t), twoRaptorSections)
+	if err := Put("key", Profile{URL: "https://key.test", Username: "k", Token: "sk"}); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SetDefaultLocal("acme", repo); err != nil {
+		t.Fatal(err)
+	}
+	local := loadFacets(FacetsPathIn(repo))
+	if local["acme"].Token != "pat-acme" || local["default"].Token != "pat-acme" || len(local) != 2 {
+		t.Errorf("tree file = %v, want acme and a default copy", local)
+	}
+	// Home file untouched.
+	if h := loadFacets(homeFacets(t)); h["default"].Token != "pat-root" {
+		t.Errorf("home [default] changed: %+v", h["default"])
+	}
+	// Inside the tree both CLIs' store is the tree file, and default resolves.
+	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
+	a, _ := ResolveActive("")
+	if a.Name != "default" || a.Profile.URL != "https://acme.test" {
+		t.Errorf("in-tree ResolveActive = %+v", a)
+	}
+	if names := sortedKeys(mustLoad(t)); strings.Join(names, ",") != "default,acme,key" {
+		t.Errorf("in-tree Load() = %v; the tree file shadows home, API keys stay visible", names)
+	}
+
+	if err := SetDefaultLocal("key", repo); err == nil {
+		t.Error("an API key cannot be pinned to a tree; want error")
+	}
+}
+
+func TestSetDefault_KeepsAnUnduplicatedDefault(t *testing.T) {
+	withHome(t)
+	// A bare first login wrote only [default]; a second, named login must not
+	// destroy it when it takes the default slot.
+	if err := Put("default", FacetsProfile("https://facetsdemo.console.facets.cloud", "u@x", "pat-demo")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Put("snabbit", FacetsProfile("https://6711429322.facetsapp.cloud", "u@x", "pat-snab")); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := SetDefault("snabbit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := mustLoad(t)
+	if kept != "facetsdemo" || store["facetsdemo"].Token != "pat-demo" {
+		t.Errorf("kept = %q, store[facetsdemo] = %+v; want the old default preserved by host label", kept, store["facetsdemo"])
+	}
+	if store["default"].Token != "pat-snab" {
+		t.Errorf("[default] = %+v, want snabbit's copy", store["default"])
+	}
+	// Switching back keeps nothing: [default] is already duplicated by snabbit.
+	if kept, _ := SetDefault("facetsdemo"); kept != "" {
+		t.Errorf("kept %q on a switch whose default was a copy", kept)
+	}
+	// A numeric host label works; a collision gets a suffix.
+	if err := Put("default", FacetsProfile("https://6711429322.facetsapp.cloud", "o@x", "other")); err != nil {
+		t.Fatal(err)
+	}
+	if kept, _ := SetDefault("facetsdemo"); kept != "6711429322" {
+		t.Errorf("kept = %q, want the numeric label", kept)
+	}
+	if err := Put("default", FacetsProfile("https://facetsdemo.console.facets.cloud", "z@x", "z")); err != nil {
+		t.Fatal(err)
+	}
+	if kept, _ := SetDefault("snabbit"); kept != "facetsdemo-2" {
+		t.Errorf("kept = %q, want facetsdemo-2 on collision", kept)
+	}
 }

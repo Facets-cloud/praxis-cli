@@ -10,7 +10,6 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
-	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
@@ -132,7 +131,7 @@ Requires an existing valid login. Exits 3 if not logged in — run
 
 This always re-syncs the ACTIVE profile, so a global ` + "`--profile`" + ` (or
 ` + "`$PRAXIS_PROFILE`" + `) naming a DIFFERENT profile is REFUSED (exit 2,
-nothing changed): installing one profile's skills while the pointer names
+nothing changed): installing one profile's skills while [default] holds
 another is the exact state this flow prevents. Naming the active profile is
 allowed — it asks for the re-sync that was going to happen anyway. To change
 profiles, use ` + "`praxis profiles use X`" + ` — it switches and re-syncs in
@@ -144,19 +143,16 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(refreshSkillsJSON, false, out)
 
-		// Installing profile X's skills while the pointer still names Y is the
+		// Installing profile X's skills while [default] still holds Y is the
 		// one state the post-auth flow exists to prevent, so refresh-skills
 		// only ever re-syncs the ACTIVE profile — by flag or by environment.
 		// Switching is a switch.
 		//
 		// Only a DIVERGING selection is a switch, though: compared against the
-		// applicable pointer (project when this tree is pinned, else global,
-		// matching the root this command installs into), so naming the profile
-		// it would re-sync anyway is the no-op it looks like.
-		acts, err := credentials.PointerActiveName()
-		if err != nil {
-			return err
-		}
+		// store's own active profile (the tree's file inside a local-mode tree,
+		// else home), so naming the profile it would re-sync anyway is the no-op
+		// it looks like.
+		acts := credentials.OnDiskActiveName()
 		if refusedExplicitProfile(out, asJSON, "refresh-skills",
 			"run `praxis profiles use %s` — it switches AND re-syncs the skills in one step",
 			acts) {
@@ -182,20 +178,19 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 		}
 
 		// --project pins this repo to the active profile (writes
-		// <cwd>/.praxis) and scopes the install there. Otherwise the
-		// install follows the resolved active root: project when we're
-		// already inside a local-mode tree, else user-level.
+		// <cwd>/.facets/credentials and <cwd>/.praxis) and scopes the install
+		// there. Otherwise the install follows the resolved active root: project
+		// when we're already inside a local-mode tree, else user-level.
 		if refreshSkillsProject {
-			root, perr := credentials.SetActiveLocal(active.Name)
+			_, restore, perr := activateProfile(active.Name, true)
 			if perr != nil {
 				render.PrintError(out, asJSON,
 					fmt.Sprintf("cannot scope to this directory: %v", perr),
-					"run `praxis refresh-skills --project` from a directory under your home directory",
+					"run `praxis refresh-skills --project` from a directory under your home directory, with a control-plane PAT profile active",
 					exitcode.Usage)
 				osExit(exitcode.Usage)
 				return nil // reached only under test (osExit stubbed)
 			}
-			restore := paths.OverrideActiveRoot(root)
 			defer restore()
 		}
 

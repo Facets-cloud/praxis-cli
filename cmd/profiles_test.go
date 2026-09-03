@@ -89,7 +89,7 @@ func TestProfilesCmd_ActiveMarker(t *testing.T) {
 
 	mustPut(t, "default", credentials.Profile{URL: "https://default.test", Token: "td"})
 	mustPut(t, "dev", credentials.Profile{URL: "https://dev.test", Token: "tdev"})
-	if err := credentials.SetActive("dev"); err != nil {
+	if _, err := credentials.SetDefault("dev"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -100,16 +100,18 @@ func TestProfilesCmd_ActiveMarker(t *testing.T) {
 	}
 	out := decodeProfiles(t, buf.Bytes())
 
-	if out.ActiveProfile != "dev" {
-		t.Errorf("active_profile = %q, want dev", out.ActiveProfile)
+	// `profiles use dev` copies dev over [default]: default is the active
+	// section and dev is flagged as holding the same credentials.
+	if out.ActiveProfile != "default" {
+		t.Errorf("active_profile = %q, want default", out.ActiveProfile)
 	}
 	dev, _ := findProfile(out, "dev")
 	def, _ := findProfile(out, "default")
-	if !dev.Active {
-		t.Error("dev should be marked active")
+	if !def.Active || def.URL != "https://dev.test" {
+		t.Errorf("default should be active with dev's URL; got %+v", def)
 	}
-	if def.Active {
-		t.Error("default should not be marked active")
+	if dev.Active || !dev.SameAsActive {
+		t.Errorf("dev should be marked same_as_active, not active; got %+v", dev)
 	}
 }
 

@@ -55,14 +55,19 @@ func TestCredentials_UnderDotPraxis(t *testing.T) {
 // reads/writes happen in the cmd layer.
 var _ = os.Remove
 
-// mkProjectRoot creates dir/.praxis and returns the marker path.
+// mkProjectRoot writes dir/.facets/credentials — raptor's local-mode marker,
+// which is what makes dir a project root — and returns the project root path
+// (dir/.praxis) discovery is expected to report.
 func mkProjectRoot(t *testing.T, dir string) string {
 	t.Helper()
-	marker := filepath.Join(dir, ".praxis")
-	if err := os.MkdirAll(marker, 0o700); err != nil {
+	facets := filepath.Join(dir, ".facets")
+	if err := os.MkdirAll(facets, 0o700); err != nil {
 		t.Fatalf("mkdir marker: %v", err)
 	}
-	return marker
+	if err := os.WriteFile(filepath.Join(facets, "credentials"), []byte("[default]\ncontrol_plane_url = https://x\nusername = u\ntoken = t\n"), 0o600); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	return filepath.Join(dir, ".praxis")
 }
 
 func TestProjectRoot_FoundInCwd(t *testing.T) {
@@ -101,9 +106,9 @@ func TestProjectRoot_FoundInAncestor(t *testing.T) {
 
 func TestProjectRoot_StopsBelowHome_NeverReturnsHomeDotPraxis(t *testing.T) {
 	home := withHome(t)
-	// The global ~/.praxis exists, and cwd is a plain dir under home with no
-	// project marker. Discovery must NOT mistake ~/.praxis for a project root.
-	mkProjectRoot(t, home) // creates ~/.praxis
+	// The home store exists, and cwd is a plain dir under home with no
+	// project marker. Discovery must NOT mistake the home file for a project.
+	mkProjectRoot(t, home) // creates ~/.facets/credentials
 	repo := filepath.Join(home, "work", "repo")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
@@ -353,8 +358,9 @@ func TestProjectRoot_SymlinkOutOfHome_StillDiscovered(t *testing.T) {
 	}
 }
 
-// What EnsureProjectRoot creates must be what ProjectRoot later finds;
-// otherwise `--local` writes a pointer that discovery can't see.
+// What EnsureProjectRoot creates must be what ProjectRoot later finds once the
+// credentials marker is written beside it; otherwise `--local` pins a tree
+// that discovery can't see.
 func TestEnsureProjectRoot_SymlinkedHome_RoundTripsWithDiscovery(t *testing.T) {
 	link, phys := symlinkedHome(t)
 	t.Setenv("HOME", link)
@@ -363,6 +369,7 @@ func TestEnsureProjectRoot_SymlinkedHome_RoundTripsWithDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
+	mkProjectRoot(t, repo)
 
 	created, err := EnsureProjectRoot()
 	if err != nil {
@@ -490,24 +497,47 @@ func TestResolved_MissingPathIsUnchanged(t *testing.T) {
 	}
 }
 
-func TestProjectConfig_PathAndPresence(t *testing.T) {
+func TestProjectRoot_BarePraxisDirIsNotLocalMode(t *testing.T) {
+	// A committed <repo>/.praxis (receipt, snapshot, or an old pointer) is not
+	// an opt-in. Only the credentials file beside it is.
+	home := withHome(t)
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".praxis"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".praxis", "config.json"), []byte("[default]\nprofile = acme\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
+	if got, ok, _ := ProjectRoot(); ok {
+		t.Errorf("ProjectRoot() = %q, ok=true; a bare .praxis must be inert", got)
+	}
+	path, profile, ok := LegacyProjectPointer()
+	if !ok || profile != "acme" || path != filepath.Join(repo, ".praxis", "config.json") {
+		t.Errorf("LegacyProjectPointer() = %q, %q, %v", path, profile, ok)
+	}
+	// With the marker present the tree is real local mode, and the old pointer
+	// is not reported.
+	mkProjectRoot(t, repo)
+	if _, _, ok := LegacyProjectPointer(); ok {
+		t.Error("LegacyProjectPointer() reported a pointer inside a real local tree")
+	}
+}
+
+// Reading the active root is not an opt-in: a read-only command inside a
+// `raptor login --local` tree must not create <dir>/.praxis. Writers do that.
+func TestActiveRoot_DoesNotCreateTheProjectDir(t *testing.T) {
 	home := withHome(t)
 	repo := filepath.Join(home, "repo")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	root := mkProjectRoot(t, repo)
 	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
-
-	// No project root yet.
-	if _, ok, _ := ProjectConfig(); ok {
-		t.Error("ProjectConfig() ok=true with no project root")
+	if got, _ := ActiveRoot(); got != root {
+		t.Fatalf("ActiveRoot() = %q, want %q", got, root)
 	}
-	marker := mkProjectRoot(t, repo)
-	got, ok, err := ProjectConfig()
-	if err != nil || !ok {
-		t.Fatalf("ProjectConfig() ok=%v err=%v; want found", ok, err)
-	}
-	if want := filepath.Join(marker, "config.json"); got != want {
-		t.Errorf("ProjectConfig() = %q, want %q", got, want)
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("ActiveRoot() created %s; only writers may", root)
 	}
 }

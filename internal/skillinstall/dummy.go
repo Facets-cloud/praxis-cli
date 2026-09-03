@@ -55,9 +55,9 @@ praxis login           ← AI runs this on first contact (or when token expires)
 That's the entire setup. Login does everything: installs this
 meta-skill into your AI host's skill directory, authenticates (reusing
 the control-plane token raptor already holds, else opening the control
-plane's personal-access-token page for the user to paste one), saves that
-token as a raptor profile too, fetches this org's skill catalog, and
-writes the MCP tool manifest snapshot to ~/.praxis/mcp-tools.json.
+plane's personal-access-token page for the user to paste one) into the
+store raptor reads too, fetches this org's skill catalog, and writes the
+MCP tool manifest snapshot to ~/.praxis/mcp-tools.json.
 
 ## First thing to do every conversation
 
@@ -118,7 +118,7 @@ praxis profiles use bigcorp --json # wipes acme skills, installs bigcorp
 
 Read the result: ` + "`profile`" + ` is the new active one, ` + "`previous_profile`" + ` the
 old one. If ` + "`shadowed_by_project_root`" + ` is present the switch was global but
-this directory is pinned to ` + "`effective_profile`" + ` by a ` + "`.praxis`" + ` marker —
+this directory is pinned to ` + "`effective_profile`" + ` by its own ` + "`.facets/credentials`" + ` —
 commands run here still use that profile; add ` + "`--local`" + ` to repin the tree.
 
 Exit 3 means the stored token is dead: fall back to
@@ -136,7 +136,7 @@ This meta-skill survives every switch. Only the catalog skills cycle.
 // the host to pass `-p` at the one profile it already resolves to.
 const praxisSkillMultiProfile = `### Scope yourself instead of switching
 
-` + "`profiles use`" + ` is MACHINE-GLOBAL. It rewrites the active-profile pointer
+` + "`profiles use`" + ` is MACHINE-GLOBAL. It rewrites the [default] section
 AND replaces the installed praxis-* skills, so it changes every other shell
 and agent session on this machine — including skill files a concurrent session
 has already read. **If you might not be the only session running, don't
@@ -164,8 +164,9 @@ your shell tool's env, or ` + "`export`" + ` it if your shell state persists.
 | this whole session works in one deployment | ` + "`PRAXIS_PROFILE=<name>`" + ` |
 | the USER asked to switch and owns the machine | ` + "`profiles use <name>`" + ` |
 
-Precedence: ` + "`-p`" + ` > ` + "`PRAXIS_PROFILE`" + ` > a repo's ` + "`.praxis`" + ` pointer >
-the global pointer. The flag works before or after the command name
+Precedence: ` + "`-p`" + ` > ` + "`PRAXIS_PROFILE`" + ` > ` + "`FACETS_PROFILE`" + ` > the
+store's ` + "`[default]`" + ` (a repo's own ` + "`.facets/credentials`" + ` inside a local
+tree, else home) > the sole section. The flag works before or after the command name
 (` + "`praxis -p x status`" + ` == ` + "`praxis status -p x`" + `).
 
 **Limitation worth knowing:** ` + "`-p`" + ` and ` + "`PRAXIS_PROFILE`" + ` route commands
@@ -205,14 +206,16 @@ praxis profiles use acme --local        # already authenticated: just pin
 praxis refresh-skills --project         # same scope, no re-auth
 ` + "```" + `
 
-  - Writes a pointer at ` + "`<dir>/.praxis/config.json`" + `; discovery is
-    git-style, walking up from cwd (bounded to ` + "`$HOME`" + `).
+  - Writes ` + "`<dir>/.facets/credentials`" + ` (the profile plus a ` + "`[default]`" + `
+    copy) — the same file ` + "`raptor login --local`" + ` writes, so BOTH CLIs
+    resolve that profile inside the tree with no env var. Discovery is
+    git-style, walking up from cwd (bounded to ` + "`$HOME`" + `). Only a
+    control-plane PAT profile can be pinned this way.
   - Skills/agents install project-scoped (` + "`<dir>/.claude/skills`" + `, …),
     so several orgs' skills coexist on one machine without wiping each
-    other. Credentials always stay global in ` + "`~/.praxis/credentials`" + `.
-  - ` + "`praxis status`" + ` inside the tree shows
-    ` + "`profile_source: \"project\"`" + ` plus ` + "`project_root`" + `; outside
-    it, the global profile applies as usual.
+    other. The receipt and MCP snapshot live in ` + "`<dir>/.praxis`" + `.
+  - ` + "`praxis status`" + ` inside the tree shows ` + "`project_root`" + `; outside
+    it, the home store applies as usual.
 
 ## Output convention
 
@@ -294,8 +297,9 @@ Preflight — once per session, before the first raptor command:
     ` + "`praxis status --json`" + ` (already resolved for this OS/arch; no
     sudo). See "Raptor profile ≠ praxis profile" below.
   - **Logged in?** ` + "`raptor whoami`" + ` — a ` + "`praxis login`" + ` that ended
-    with a control-plane PAT already wrote raptor's profile, so this
-    normally passes. If it errors, RUN ` + "`raptor login`" + ` for the user.
+    with a control-plane PAT already wrote raptor's section, so this
+    normally passes (prefix ` + "`FACETS_PROFILE`" + ` when ` + "`prefix_required`" + `
+    says so). If it errors, RUN ` + "`raptor login`" + ` for the user.
     It opens their browser and they complete the sign-in; it stores a PAT
     in ` + "`~/.facets/credentials`" + `. Wait for exit 0. Never ask for a token
     in chat or write credentials yourself.
@@ -309,29 +313,33 @@ Preflight — once per session, before the first raptor command:
 So when the user asks about projects / resources / environments /
 releases / cloud accounts, reach for ` + "`raptor`" + `, not ` + "`praxis mcp`" + `.
 
-## Raptor profile ≠ praxis profile
+## Raptor profile vs praxis profile
 
-praxis and raptor keep SEPARATE credential stores. A control-plane PAT
-login writes both (` + "`praxis login`" + ` → raptor ` + "`[default]`" + `,
-` + "`praxis login --profile X`" + ` → raptor ` + "`[X]`" + ` plus a pin), but switching
-a praxis profile afterwards never moves raptor:
+praxis and raptor share ONE credential store for control-plane tokens:
+` + "`~/.facets/credentials`" + ` (or ` + "`<repo>/.facets/credentials`" + ` inside a local-mode
+tree). A ` + "`praxis login`" + ` that ends with a control-plane PAT writes the
+section raptor reads, and a ` + "`raptor login`" + ` is already a praxis login.
+Only Praxis API keys live apart, in ` + "`~/.praxis/credentials`" + `.
 
-  - praxis: ` + "`~/.praxis/credentials`" + `, switched by ` + "`praxis login --profile X`" + `
-  - raptor: ` + "`~/.facets/credentials`" + `, selected ONLY by the
-    ` + "`FACETS_PROFILE`" + ` env var (no flag, no pointer file; unset = its
-    ` + "`[default]`" + ` section, or the sole section when there is one)
+Selection is the same rule for both: ` + "`FACETS_PROFILE`" + `, else the
+` + "`[default]`" + ` section, else the sole section (praxis also honors ` + "`-p`" + ` and
+` + "`PRAXIS_PROFILE`" + ` first). ` + "`praxis profiles use acme`" + ` copies acme over
+` + "`[default]`" + `, so it moves raptor too. The only way the two diverge is a
+praxis-only selector (` + "`-p`" + `, ` + "`PRAXIS_PROFILE`" + `) in this session.
 
 ` + "`praxis status --json`" + ` cross-checks them in the ` + "`raptor`" + ` block.
 Act on it:
 
-  - ` + "`pinned: true`" + ` — this praxis profile is paired to a raptor profile
-    (set via ` + "`praxis login --raptor-profile <name>`" + `). Prefix EVERY
-    raptor command: ` + "`FACETS_PROFILE=<profile> raptor …`" + `. Per-command
-    prefix, never ` + "`export`" + ` — each shell call starts fresh.
-  - ` + "`matches_praxis_url: false`" + ` — raptor targets a different control
-    plane than this praxis profile. Say which two hosts you see and ask the
-    user which is intended BEFORE any raptor write;
-    read-only exploration may proceed with a note.
+  - ` + "`prefix_required: true`" + ` — a bare raptor command would use a different
+    section than this praxis profile. Prefix EVERY raptor command:
+    ` + "`FACETS_PROFILE=<shared_profile> raptor …`" + ` (` + "`shared_profile`" + ` is the
+    praxis profile's name in the shared store). Per-command prefix, never
+    ` + "`export`" + ` — each shell call starts fresh.
+  - ` + "`matches_praxis_url: false`" + ` — raptor's bare selection targets a
+    different control plane than this praxis profile. With
+    ` + "`prefix_required`" + ` true, the prefix fixes it; otherwise say which two
+    hosts you see and ask the user which is intended BEFORE any raptor
+    write. Read-only exploration may proceed with a note.
   - ` + "`installed: false`" + ` — raptor isn't on this machine at all, so every
     control-plane command will fail. The block carries an
     ` + "`install_hint`" + `. Point the user at ` + "`install_hint.docs`" + `
@@ -344,15 +352,17 @@ Act on it:
     afterwards. When ` + "`asset_url`" + ` is absent raptor publishes no
     build for this platform — docs only, don't improvise. Then continue
     to ` + "`raptor login`" + ` below.
-  - ` + "`found: false`" + ` — raptor has no usable profile. If praxis is not
-    logged in yet, run ` + "`praxis login`" + ` first: a control-plane PAT login
-    writes raptor's profile as well. Otherwise RUN ` + "`raptor login`" + ` on
-    the user's behalf, exactly as you do for ` + "`praxis login`" + `: it opens
-    their browser and they complete the sign-in themselves. Wait for exit
-    0. Never ask for a token in chat, and
-    never write ` + "`~/.facets/credentials`" + ` yourself.
+  - ` + "`found: false`" + ` with no ` + "`shared_profile`" + ` — nothing in the shared
+    store. Run ` + "`praxis login`" + ` (a control-plane PAT login IS the raptor
+    login), or ` + "`raptor login`" + ` on the user's behalf: it opens their
+    browser and they complete the sign-in themselves. Wait for exit 0.
+    Never ask for a token in chat, and
+    never write ` + "`~/.facets/credentials`" + ` yourself. With a
+    ` + "`shared_profile`" + ` present, ` + "`found: false`" + ` only means the prefix
+    is required.
   - ` + "`setup_complete`" + ` (top level, not inside the raptor block) — true
-    only when praxis is logged in AND raptor is installed and resolved.
+    only when praxis is logged in AND raptor is installed and can reach a
+    control plane (bare, or through the shared profile with the prefix).
     Check it first; the two bullets above say what to do when it's false.
 
 ## Discovering MCP tools
@@ -579,7 +589,7 @@ accepted for praxis-skill convention compatibility but is a no-op.
 // teaches the host to start passing `-p` at the single profile it already
 // resolves to.
 //
-// A seam, like paths.LocalModeActive: this package must not read the
+// A seam: this package must not read the
 // credentials store itself (its tests would then depend on the developer's real
 // ~/.praxis), so cmd wires it to credentials.List and tests set it directly.
 // Unwired it reports false, so the doctrine ships only once something has

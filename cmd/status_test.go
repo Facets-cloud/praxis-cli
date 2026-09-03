@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
-	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 )
 
@@ -25,17 +24,13 @@ func TestStatusCmd_LocalMode_ReportsProjectRootAndSource(t *testing.T) {
 	t.Setenv("HOME", home)
 	resetStatusFlags()
 
-	if err := credentials.Put("acme", credentials.Profile{URL: "https://acme.test", Username: "u@acme", Token: "tok"}); err != nil {
+	isolateRaptorEnv(t)
+	seedPAT(t, "acme", "https://acme.test", "tok")
+	repo := repoUnderHome(t, home)
+	if err := credentials.SetDefaultLocal("acme", repo); err != nil {
 		t.Fatal(err)
 	}
-	repo := filepath.Join(home, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return repo, nil }))
-	if _, err := credentials.SetActiveLocal("acme"); err != nil {
-		t.Fatal(err)
-	}
+	inDir(t, repo)
 
 	var buf bytes.Buffer
 	statusCmd.SetOut(&buf)
@@ -43,7 +38,7 @@ func TestStatusCmd_LocalMode_ReportsProjectRootAndSource(t *testing.T) {
 		t.Fatalf("RunE err = %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{`"profile": "acme"`, `"profile_source": "project"`, `"project_root"`} {
+	for _, want := range []string{`"profile": "default"`, `"url": "https://acme.test"`, `"project_root"`, `"same_as"`, `"acme"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status in local mode missing %q\nfull: %s", want, out)
 		}
@@ -186,7 +181,7 @@ func TestStatusCmd_HonorsActiveProfileFromUseConfig(t *testing.T) {
 
 	_ = credentials.Put("default", credentials.Profile{URL: "https://default.test", Token: "td"})
 	_ = credentials.Put("acme", credentials.Profile{URL: "https://acme.test", Token: "ta"})
-	if err := credentials.SetActive("acme"); err != nil {
+	if _, err := credentials.SetDefault("acme"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -195,8 +190,11 @@ func TestStatusCmd_HonorsActiveProfileFromUseConfig(t *testing.T) {
 	if err := statusCmd.RunE(statusCmd, nil); err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
-	if !strings.Contains(buf.String(), `"profile": "acme"`) ||
-		!strings.Contains(buf.String(), `"url": "https://acme.test"`) {
+	// `profiles use acme` copies acme over [default]; status shows the active
+	// section and names the copy's source.
+	if !strings.Contains(buf.String(), `"profile": "default"`) ||
+		!strings.Contains(buf.String(), `"url": "https://acme.test"`) ||
+		!strings.Contains(buf.String(), `"same_as"`) {
 		t.Errorf("`praxis use acme` not honored, got %q", buf.String())
 	}
 }
@@ -356,7 +354,6 @@ func TestStatusCmd_RaptorBlock_MatchingDefault(t *testing.T) {
 	}
 	for k, want := range map[string]any{
 		"found":              true,
-		"pinned":             false,
 		"profile":            "default",
 		"source":             "default",
 		"control_plane_url":  "https://root.test",
@@ -368,18 +365,18 @@ func TestStatusCmd_RaptorBlock_MatchingDefault(t *testing.T) {
 	}
 }
 
-func TestStatusCmd_RaptorBlock_PinnedMismatch(t *testing.T) {
+func TestStatusCmd_RaptorBlock_SharedProfileNeedsPrefix(t *testing.T) {
+	// The active praxis profile is a PAT in the shared store, but a bare raptor
+	// command would pick [default]: the host must prefix FACETS_PROFILE=acme.
 	t.Setenv("HOME", t.TempDir())
 	isolateRaptorEnv(t)
 	resetStatusFlags()
 	stubStatusFreshness(t)
 
-	if err := credentials.Put("default", credentials.Profile{
-		URL: "https://root.test", Username: "u@x", Token: "tok", RaptorProfile: "acme",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	writeRaptorCreds(t, "[acme]\ncontrol_plane_url = https://acme.test\nusername = u@x\ntoken = pat\n")
+	writeRaptorCreds(t, "[default]\ncontrol_plane_url = https://root.test\nusername = u@x\ntoken = pat\n\n[acme]\ncontrol_plane_url = https://acme.test\nusername = u@x\ntoken = pat2\n")
+	// Bare commands share [default], so a mismatch only arises from an explicit
+	// selection: this session works on acme via -p.
+	setRootProfile(t, "acme")
 
 	var buf bytes.Buffer
 	statusCmd.SetOut(&buf)
@@ -395,10 +392,48 @@ func TestStatusCmd_RaptorBlock_PinnedMismatch(t *testing.T) {
 		t.Fatalf("raptor block missing")
 	}
 	for k, want := range map[string]any{
-		"pinned":             true,
-		"profile":            "acme",
-		"source":             "pin",
+		"found":              true,
+		"profile":            "default",
+		"source":             "default",
 		"matches_praxis_url": false,
+		"shared_profile":     "acme",
+		"prefix_required":    true,
+	} {
+		if got := rb[k]; got != want {
+			t.Errorf("raptor[%q] = %v, want %v", k, got, want)
+		}
+	}
+	// A shared PAT profile is usable via FACETS_PROFILE, so setup is complete
+	// whenever raptor is on PATH (CI has no raptor; the developer's machine does).
+	if want := rb["installed"] == true; s["setup_complete"] != want {
+		t.Errorf("setup_complete = %v, want %v (raptor installed: %v)", s["setup_complete"], want, rb["installed"])
+	}
+}
+
+func TestStatusCmd_RaptorBlock_APIKeyProfileIsNotShared(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	isolateRaptorEnv(t)
+	resetStatusFlags()
+	stubStatusFreshness(t)
+
+	if err := credentials.Put("default", credentials.Profile{URL: "https://root.test", Username: "u@x", Token: "sk"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	statusCmd.SetOut(&buf)
+	if err := statusCmd.RunE(statusCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	var s map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &s); err != nil {
+		t.Fatalf("status not JSON: %v\n%s", err, buf.String())
+	}
+	rb, _ := s["raptor"].(map[string]any)
+	for k, want := range map[string]any{
+		"found":           false,
+		"shared_profile":  nil,
+		"prefix_required": nil,
 	} {
 		if got := rb[k]; got != want {
 			t.Errorf("raptor[%q] = %v, want %v", k, got, want)
@@ -435,10 +470,11 @@ func TestStatusCmd_RaptorBlock_NothingResolved(t *testing.T) {
 
 func TestRaptorStatusLine(t *testing.T) {
 	tests := []struct {
-		name string
-		st   raptorstate.State
-		url  string
-		want string
+		name   string
+		st     raptorstate.State
+		url    string
+		shared string // active praxis profile name when it is a shared PAT
+		want   string
 	}{
 		{
 			name: "found and matching",
@@ -453,9 +489,18 @@ func TestRaptorStatusLine(t *testing.T) {
 			want: "profile acme (env-profile) → https://acme.test (matches praxis url: no)",
 		},
 		{
-			name: "pinned but missing",
-			st:   raptorstate.State{Pinned: true, Profile: "ghost", Source: raptorstate.SourcePin},
-			want: "pinned profile \"ghost\" not found in ~/.facets/credentials — run `raptor login`",
+			name:   "found but the praxis profile is another shared section",
+			st:     raptorstate.State{Found: true, Profile: "default", Source: raptorstate.SourceDefault, ControlPlaneURL: "https://root.test"},
+			url:    "https://acme.test",
+			shared: "acme",
+			want:   "profile default (default) → https://root.test (matches praxis url: no); use FACETS_PROFILE=acme for this praxis profile",
+		},
+		{
+			name:   "nothing resolved but the praxis profile is shared",
+			st:     raptorstate.State{Installed: true},
+			url:    "https://acme.test",
+			shared: "acme",
+			want:   "no default profile — use FACETS_PROFILE=acme (shared with praxis)",
 		},
 		{
 			name: "env profile missing",
@@ -477,7 +522,12 @@ func TestRaptorStatusLine(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := raptorStatusLine(tt.st, tt.url); got != tt.want {
+			active := credentials.Active{Name: tt.shared, Profile: credentials.Profile{URL: tt.url}}
+			if tt.shared != "" {
+				active.Loaded = true
+				active.Profile.Store = credentials.StoreFacets
+			}
+			if got := raptorStatusLine(tt.st, active); got != tt.want {
 				t.Errorf("raptorStatusLine() = %q, want %q", got, tt.want)
 			}
 		})
@@ -490,7 +540,7 @@ func TestRaptorStatusLine(t *testing.T) {
 // "not installed", which is the right fact but not an actionable one: it names
 // no consequence and no next step. These tests pin the actionable form.
 func TestRaptorStatusLine_NotInstalledPointsAtTheInstall(t *testing.T) {
-	got := raptorStatusLine(raptorstate.State{}, "https://root.test")
+	got := raptorStatusLine(raptorstate.State{}, credentials.Active{Profile: credentials.Profile{URL: "https://root.test"}})
 	if !strings.Contains(got, "not installed") {
 		t.Errorf("line must still state the fact; got %q", got)
 	}
@@ -506,6 +556,7 @@ func TestSetupNotice(t *testing.T) {
 	tests := []struct {
 		name      string
 		st        raptorstate.State
+		shared    string // active praxis profile when it is a shared PAT
 		wantEmpty bool
 		must      []string
 	}{
@@ -520,9 +571,10 @@ func TestSetupNotice(t *testing.T) {
 			must: []string{"setup incomplete", "raptor login"},
 		},
 		{
-			name: "installed, pinned profile missing — needs login",
-			st:   raptorstate.State{Installed: true, Pinned: true, Profile: "ghost", Source: raptorstate.SourcePin},
-			must: []string{"setup incomplete", "raptor login"},
+			name:      "installed, nothing resolved bare, but the praxis profile is shared — stay quiet",
+			st:        raptorstate.State{Installed: true},
+			shared:    "acme",
+			wantEmpty: true,
 		},
 		{
 			name:      "fully set up — stay quiet",
@@ -532,7 +584,12 @@ func TestSetupNotice(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := setupNotice(tt.st)
+			active := credentials.Active{Name: tt.shared}
+			if tt.shared != "" {
+				active.Loaded = true
+				active.Profile.Store = credentials.StoreFacets
+			}
+			got := setupNotice(tt.st, active)
 			if tt.wantEmpty {
 				if got != "" {
 					t.Errorf("want no notice when setup is complete; got %q", got)
@@ -554,7 +611,7 @@ func TestSetupNotice(t *testing.T) {
 // An installed-but-not-logged-in raptor must NOT be told to install again —
 // that sends the user down the wrong path.
 func TestSetupNotice_InstalledDoesNotSuggestInstalling(t *testing.T) {
-	got := setupNotice(raptorstate.State{Installed: true})
+	got := setupNotice(raptorstate.State{Installed: true}, credentials.Active{})
 	if strings.Contains(got, raptorInstallURL) {
 		t.Errorf("raptor is already installed; notice must not point at the install URL:\n%s", got)
 	}
@@ -587,7 +644,7 @@ func TestRaptorAssetName(t *testing.T) {
 // non-interactive hosts that cannot answer raptor's documented `sudo mv`.
 func TestRaptorStatusBlock_InstallHint(t *testing.T) {
 	t.Run("absent: README is the primary pointer", func(t *testing.T) {
-		b := raptorStatusBlockFor(raptorstate.State{}, "https://x.test", "darwin", "arm64")
+		b := raptorStatusBlockFor(raptorstate.State{}, credentials.Active{Profile: credentials.Profile{URL: "https://x.test"}}, "darwin", "arm64")
 		hint, _ := b["install_hint"].(map[string]any)
 		if hint == nil {
 			t.Fatal("install_hint missing when raptor is not installed")
@@ -603,7 +660,7 @@ func TestRaptorStatusBlock_InstallHint(t *testing.T) {
 	})
 
 	t.Run("hatch names this machine's asset and needs no sudo", func(t *testing.T) {
-		b := raptorStatusBlockFor(raptorstate.State{}, "https://x.test", "darwin", "arm64")
+		b := raptorStatusBlockFor(raptorstate.State{}, credentials.Active{Profile: credentials.Profile{URL: "https://x.test"}}, "darwin", "arm64")
 		hint, _ := b["install_hint"].(map[string]any)
 		if !strings.Contains(hint["asset_url"].(string), "raptor-darwin-arm64") {
 			t.Errorf("asset_url must name this machine's build, got %v", hint["asset_url"])
@@ -619,14 +676,14 @@ func TestRaptorStatusBlock_InstallHint(t *testing.T) {
 	})
 
 	t.Run("installed: no hint", func(t *testing.T) {
-		b := raptorStatusBlockFor(raptorstate.State{Installed: true}, "https://x.test", "darwin", "arm64")
+		b := raptorStatusBlockFor(raptorstate.State{Installed: true}, credentials.Active{Profile: credentials.Profile{URL: "https://x.test"}}, "darwin", "arm64")
 		if _, has := b["install_hint"]; has {
 			t.Error("install_hint must be omitted once raptor is installed")
 		}
 	})
 
 	t.Run("unpublished platform: docs only, no fabricated url", func(t *testing.T) {
-		b := raptorStatusBlockFor(raptorstate.State{}, "https://x.test", "windows", "amd64")
+		b := raptorStatusBlockFor(raptorstate.State{}, credentials.Active{Profile: credentials.Profile{URL: "https://x.test"}}, "windows", "amd64")
 		hint, _ := b["install_hint"].(map[string]any)
 		if hint == nil {
 			t.Fatal("install_hint missing")
@@ -645,8 +702,8 @@ func TestRaptorStatusBlock_InstallHint(t *testing.T) {
 	// #68's fields must survive untouched.
 	t.Run("preserves the #68 block", func(t *testing.T) {
 		b := raptorStatusBlockFor(raptorstate.State{Installed: true, Found: true,
-			Profile: "default", ControlPlaneURL: "https://x.test"}, "https://x.test", "darwin", "arm64")
-		for _, k := range []string{"installed", "found", "pinned", "control_plane_url", "matches_praxis_url"} {
+			Profile: "default", ControlPlaneURL: "https://x.test"}, credentials.Active{Profile: credentials.Profile{URL: "https://x.test"}}, "darwin", "arm64")
+		for _, k := range []string{"installed", "found", "control_plane_url", "matches_praxis_url"} {
 			if _, has := b[k]; !has {
 				t.Errorf("#68 field %q went missing", k)
 			}

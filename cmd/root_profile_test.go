@@ -9,8 +9,6 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
-	"github.com/Facets-cloud/praxis-cli/internal/paths"
-	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
 
@@ -21,7 +19,7 @@ func TestMain(m *testing.M) {
 	// raptor's credentials walk starts at cwd and climbs to /, which passes
 	// through the developer's real home. Start it at the (faked) HOME instead so
 	// no test reads a live ~/.facets/credentials.
-	restore := raptorstate.SetGetwdForTest(func() (string, error) { return os.Getenv("HOME"), nil })
+	restore := credentials.SetGetwdForTest(func() (string, error) { return os.Getenv("HOME"), nil })
 	code := m.Run()
 	restore()
 	os.Exit(code)
@@ -109,55 +107,12 @@ func TestRootProfileFlag_ParsedInEitherPosition(t *testing.T) {
 	}
 }
 
-// The flag must sit at the TOP of the resolution chain — above a project
-// pointer — otherwise it can't override a local-mode tree.
-func TestRootProfileFlag_OutranksProjectPointer(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	seedProfile(t, "pinned", "https://pinned.test", "tp")
-	seedProfile(t, "override", "https://override.test", "to")
-	repoUnderHome(t, home)
-	if _, err := credentials.SetActiveLocal("pinned"); err != nil {
-		t.Fatal(err)
-	}
-	if root, ok, _ := paths.ProjectRoot(); !ok {
-		t.Fatalf("project pointer not discoverable at %q", root)
-	}
-
-	// Baseline: inside the tree, the project pointer wins.
-	if a, _ := credentials.ResolveActive(rootProfile); a.Name != "pinned" {
-		t.Fatalf("without the flag, resolution = %q, want pinned", a.Name)
-	}
-
-	setRootProfile(t, "override")
-	active, err := credentials.ResolveActive(rootProfile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if active.Name != "override" {
-		t.Errorf("with --profile, resolution = %q, want override", active.Name)
-	}
-	if active.Source != credentials.SourceFlag {
-		t.Errorf("source = %v, want SourceFlag", active.Source)
-	}
-	if active.Profile.URL != "https://override.test" {
-		t.Errorf("URL = %q, want the flagged profile's", active.Profile.URL)
-	}
-	// Nothing on disk moved: the flag is per-invocation only.
-	if a, _ := credentials.ResolveActive(""); a.Name != "pinned" {
-		t.Errorf("after the flagged call, on-disk resolution = %q; the flag must not persist", a.Name)
-	}
-}
-
 // status reports what the CLI would actually use, so the flag must show up
 // there as profile_source=flag.
 func TestStatus_HonorsRootProfileFlag(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	seedProfile(t, "default", "https://d.test", "td")
 	seedProfile(t, "acme", "https://acme.test", "ta")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	setRootProfile(t, "acme")
 
 	var buf bytes.Buffer
@@ -181,9 +136,6 @@ func TestProfiles_HonorsRootProfileFlag(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	seedProfile(t, "default", "https://d.test", "td")
 	seedProfile(t, "acme", "https://acme.test", "ta")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	setRootProfile(t, "acme")
 
 	var buf bytes.Buffer
@@ -203,9 +155,6 @@ func TestActiveOrAuthExit_HonorsRootProfileFlag(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	seedProfile(t, "default", "https://d.test", "td")
 	seedProfile(t, "acme", "https://acme.test", "ta")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	setRootProfile(t, "acme")
 
 	active := activeOrAuthExit(&bytes.Buffer{})
@@ -267,9 +216,6 @@ func TestRootProfileFlag_RefusedWhereItCannotBeHonored(t *testing.T) {
 			seedProfile(t, "default", "https://d.test", "td")
 			seedProfile(t, "acme", "https://acme.test", "ta")
 			seedProfile(t, "other", "https://other.test", "tо")
-			if err := credentials.SetActive("default"); err != nil {
-				t.Fatal(err)
-			}
 			// Any refusal must happen before the network is touched.
 			stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
 				t.Error("a refused invocation must not reach the server")
@@ -295,8 +241,8 @@ func TestRootProfileFlag_RefusedWhereItCannotBeHonored(t *testing.T) {
 				t.Errorf("hint = %v, want it to mention %q", got["hint"], tc.wantHint)
 			}
 			// Nothing may have happened.
-			if g, _ := credentials.ResolveActiveGlobal(); g.Name != "default" {
-				t.Errorf("active profile moved to %q on a refused invocation", g.Name)
+			if got := onDiskActiveURL(t); got != "https://d.test" {
+				t.Errorf("active profile moved to %q on a refused invocation", got)
 			}
 			if call.count != 0 {
 				t.Errorf("postAuthSetup ran %d times on a refused invocation", call.count)
@@ -370,7 +316,7 @@ func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
 			setup: func(t *testing.T) string {
 				seedProfile(t, "default", "https://d.test", "td")
 				seedProfile(t, "acme", "https://acme.test", "ta")
-				if err := credentials.SetActive("acme"); err != nil {
+				if _, err := credentials.SetDefault("acme"); err != nil {
 					t.Fatal(err)
 				}
 				return "acme"
@@ -381,12 +327,15 @@ func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
 				return logoutCmd.RunE(logoutCmd, nil)
 			},
 			verify: func(t *testing.T, _ *postAuthCall) {
+				// [default] was the copy of acme the environment named; both hold
+				// the credentials being removed, so both go — leaving [acme] would
+				// make it the sole section and log the user straight back in.
 				store, _ := credentials.Load()
-				if _, still := store["acme"]; still {
-					t.Error("logout kept acme, the profile the environment named")
+				if _, gone := store["default"]; gone {
+					t.Error("logout kept the active [default] copy")
 				}
-				if _, gone := store["default"]; !gone {
-					t.Error("logout removed default; it must only touch the active profile")
+				if _, kept := store["acme"]; kept {
+					t.Error("logout kept acme, the section [default] was a copy of; the user is still logged in")
 				}
 			},
 		},
@@ -395,7 +344,7 @@ func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
 			setup: func(t *testing.T) string {
 				seedProfile(t, "default", "https://d.test", "td")
 				seedProfile(t, "acme", "https://acme.test", "ta")
-				if err := credentials.SetActive("acme"); err != nil {
+				if _, err := credentials.SetDefault("acme"); err != nil {
 					t.Fatal(err)
 				}
 				return "acme"
@@ -416,20 +365,17 @@ func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
 		},
 		{
 			// refresh-skills installs into the ACTIVE ROOT, so inside a pinned
-			// tree the profile it acts on is the project pointer's — not the
-			// global one. Comparing against the global pointer here would refuse
-			// a flag that names exactly what the command was about to do.
+			// tree the profile it acts on is the tree's [default] — a copy of
+			// the pinned profile. Naming that profile is not a divergence.
 			name: "refresh-skills names the project-pinned profile",
 			setup: func(t *testing.T) string {
-				seedProfile(t, "default", "https://d.test", "td")
-				seedProfile(t, "pinned", "https://pinned.test", "tp")
-				if err := credentials.SetActive("default"); err != nil {
+				seedPAT(t, "default", "https://d.test", "td")
+				seedPAT(t, "pinned", "https://pinned.test", "tp")
+				repo := repoUnderHome(t, os.Getenv("HOME"))
+				if err := credentials.SetDefaultLocal("pinned", repo); err != nil {
 					t.Fatal(err)
 				}
-				repoUnderHome(t, os.Getenv("HOME"))
-				if _, err := credentials.SetActiveLocal("pinned"); err != nil {
-					t.Fatal(err)
-				}
+				inDir(t, repo)
 				return "pinned"
 			},
 			run: func(t *testing.T, out *bytes.Buffer) error {
@@ -452,9 +398,6 @@ func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
 			setup: func(t *testing.T) string {
 				seedProfile(t, "default", "https://d.test", "td")
 				seedProfile(t, "acme", "https://acme.test", "ta")
-				if err := credentials.SetActive("default"); err != nil {
-					t.Fatal(err)
-				}
 				okAuthMe(t, "u@acme.test")
 				return "acme"
 			},
@@ -464,8 +407,8 @@ func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
 				return profilesUseCmd.RunE(profilesUseCmd, []string{"acme"})
 			},
 			verify: func(t *testing.T, call *postAuthCall) {
-				if g, _ := credentials.ResolveActiveGlobal(); g.Name != "acme" {
-					t.Errorf("active profile = %q, want the switch to have happened", g.Name)
+				if got := onDiskActiveURL(t); got != "https://acme.test" {
+					t.Errorf("active profile = %q, want the switch to have happened", got)
 				}
 				if call.count != 1 {
 					t.Errorf("postAuthSetup ran %d times, want 1", call.count)
@@ -559,9 +502,6 @@ func TestProfileSelection_MatchingFlagCannotSmuggleADivergingEnv(t *testing.T) {
 			code := stubOsExit(t)
 			seedProfile(t, "default", "https://d.test", "td")
 			seedProfile(t, "acme", "https://acme.test", "ta")
-			if err := credentials.SetActive("default"); err != nil {
-				t.Fatal(err)
-			}
 
 			// The flag agrees with the pointer, so the old guard waved it
 			// through; the env names something else and used to win downstream.
@@ -604,9 +544,6 @@ func TestLogoutAndRefresh_ActOnThePointerUnderAMatchingEnv(t *testing.T) {
 		code := stubOsExit(t)
 		seedProfile(t, "default", "https://d.test", "td")
 		seedProfile(t, "acme", "https://acme.test", "ta")
-		if err := credentials.SetActive("default"); err != nil {
-			t.Fatal(err)
-		}
 		// Env matches the pointer, so the guard allows it and the action runs.
 		t.Setenv(credentials.EnvProfile, "default")
 
@@ -634,9 +571,6 @@ func TestLogoutAndRefresh_ActOnThePointerUnderAMatchingEnv(t *testing.T) {
 		code := stubOsExit(t)
 		seedProfile(t, "default", "https://d.test", "td")
 		seedProfile(t, "acme", "https://acme.test", "ta")
-		if err := credentials.SetActive("default"); err != nil {
-			t.Fatal(err)
-		}
 		t.Setenv(credentials.EnvProfile, "default")
 
 		var buf bytes.Buffer
@@ -663,7 +597,7 @@ func TestEnvProfile_IsolatesConcurrentSessions(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	seedProfile(t, "acme", "https://acme.test", "ta")
 	seedProfile(t, "bigcorp", "https://bigcorp.test", "tb")
-	if err := credentials.SetActive("acme"); err != nil {
+	if _, err := credentials.SetDefault("acme"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -674,7 +608,7 @@ func TestEnvProfile_IsolatesConcurrentSessions(t *testing.T) {
 	}
 
 	// Session A performs the machine-global switch (what `profiles use` writes).
-	if err := credentials.SetActive("acme"); err != nil {
+	if _, err := credentials.SetDefault("acme"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -691,9 +625,6 @@ func TestStatus_ReportsEnvAsProfileSource(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	seedProfile(t, "default", "https://d.test", "td")
 	seedProfile(t, "acme", "https://acme.test", "ta")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	t.Setenv(credentials.EnvProfile, "acme")
 
 	var buf bytes.Buffer
@@ -752,9 +683,6 @@ func TestEnvProfile_RefusedByActiveProfileMutators(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			seedProfile(t, "default", "https://d.test", "td")
 			seedProfile(t, "acme", "https://acme.test", "ta")
-			if err := credentials.SetActive("default"); err != nil {
-				t.Fatal(err)
-			}
 			t.Setenv(credentials.EnvProfile, "acme")
 			call := stubPostAuthCapture(t)
 			code := stubOsExit(t)
@@ -793,9 +721,6 @@ func TestProfilesUse_EnvShadowsTheSwitchButIsAllowed(t *testing.T) {
 	seedProfile(t, "default", "https://d.test", "td")
 	seedProfile(t, "acme", "https://acme.test", "ta")
 	seedProfile(t, "scoped", "https://scoped.test", "ts")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	t.Setenv(credentials.EnvProfile, "scoped")
 	okAuthMe(t, "u@x")
 	stubPostAuthCapture(t)
@@ -824,9 +749,6 @@ func TestProfilesUse_GlobalSwitchAnnouncesMachineWideScope(t *testing.T) {
 	resetProfilesUseFlags(t)
 	seedProfile(t, "default", "https://d.test", "td")
 	seedProfile(t, "acme", "https://acme.test", "ta")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	okAuthMe(t, "u@x")
 	stubPostAuthCapture(t)
 
@@ -851,9 +773,6 @@ func TestProfilesUse_SingleProfileReSyncOmitsMachineWideScope(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	resetProfilesUseFlags(t)
 	seedProfile(t, "default", "https://d.test", "td")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	okAuthMe(t, "u@x")
 	call := stubPostAuthCapture(t)
 
@@ -901,9 +820,6 @@ func TestLogout_RefusesProfileFlagBeforeWipingAll(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	seedProfile(t, "default", "https://d.test", "td")
 	seedProfile(t, "acme", "https://acme.test", "ta")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	code := stubOsExit(t)
 	setRootProfile(t, "acme")
 
@@ -948,7 +864,45 @@ func TestLogin_ReadsRootProfileFlag(t *testing.T) {
 	if got := decodeMap(t, out); got["profile"] != "acme" {
 		t.Errorf("profile = %v, want acme (login must read the root flag)", got["profile"])
 	}
-	if a, _ := credentials.ResolveActiveGlobal(); a.Name != "acme" {
-		t.Errorf("active profile = %q, want acme", a.Name)
+	if got := onDiskActiveURL(t); got != "https://acme.test" {
+		t.Errorf("active profile = %q, want acme's control plane", got)
+	}
+}
+
+// The flag must sit at the TOP of the resolution chain — above the store's
+// own [default] — so one command can escape a local-mode tree's pin. Inside
+// that tree the store is the tree's file, so the flagged name resolves from
+// there (raptor's rule): a name only the home file has does not load.
+func TestRootProfileFlag_OutranksTreeDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	clearFacetsEnv(t)
+	seedPAT(t, "pinned", "https://pinned.test", "tp")
+	seedPAT(t, "override", "https://override.test", "to")
+	repo := repoUnderHome(t, home)
+	if err := credentials.SetDefaultLocal("pinned", repo); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.PutLocal("override", credentials.FacetsProfile("https://override.test", "u@x", "to"), repo); err != nil {
+		t.Fatal(err)
+	}
+	inDir(t, repo)
+
+	// Baseline: inside the tree, the tree's [default] wins.
+	if a, _ := credentials.ResolveActive(rootProfile); a.Profile.URL != "https://pinned.test" {
+		t.Fatalf("without the flag, resolution = %+v, want pinned", a)
+	}
+
+	setRootProfile(t, "override")
+	active, err := credentials.ResolveActive(rootProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Name != "override" || active.Source != credentials.SourceFlag || active.Profile.URL != "https://override.test" {
+		t.Errorf("with --profile, resolution = %+v, want override/flag", active)
+	}
+	// Nothing on disk moved: the flag is per-invocation only.
+	if a, _ := credentials.ResolveActive(""); a.Profile.URL != "https://pinned.test" {
+		t.Errorf("after the flagged call, on-disk resolution = %+v; the flag must not persist", a)
 	}
 }

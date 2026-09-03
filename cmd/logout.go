@@ -19,7 +19,7 @@ var (
 )
 
 func init() {
-	logoutCmd.Flags().BoolVar(&logoutAll, "all", false, "remove ALL profiles + active-profile pointer")
+	logoutCmd.Flags().BoolVar(&logoutAll, "all", false, "remove ALL profiles (both credentials files)")
 	logoutCmd.Flags().BoolVar(&logoutJSON, "json", false, "JSON output")
 	rootCmd.AddCommand(logoutCmd)
 }
@@ -33,6 +33,10 @@ still knows how to log back in.
 
   praxis logout         active profile: creds + org skills + manifest
   praxis logout --all   every profile's creds + every host's org skills
+
+Credentials are shared with raptor: a control-plane PAT lives in
+~/.facets/credentials, so removing that profile logs raptor out of it
+as well. --all removes ~/.praxis/credentials AND ~/.facets/credentials.
 
 To remove a NON-active profile, use ` + "`praxis profiles rm NAME`" + ` — it
 touches credentials only, and skips the double skill-cycle of switching just
@@ -55,16 +59,16 @@ exactly what a bare logout does.`,
 		// different profile's credentials without leaving the two out of step —
 		// which is why $PRAXIS_PROFILE is refused here too, not only the flag.
 		//
-		// Compared against the PERSISTED pointer, not ResolveActiveGlobal: the
-		// pointer is what owns the org skills on disk, and resolving through the
-		// environment would compare $PRAXIS_PROFILE with itself. Naming the
-		// profile logout would remove anyway is not a redirect, so it proceeds.
+		// Compared against the store's own active profile ([default], else the
+		// sole section), never through the environment, which would compare
+		// $PRAXIS_PROFILE with itself. Naming the profile logout would remove
+		// anyway is not a redirect, so it proceeds.
 		//
 		// Resolved ONCE, here, and used as the deletion target below. Letting the
-		// action re-resolve was a destructive bug: the guard compared the pointer
+		// action re-resolve was a destructive bug: the guard compared one answer
 		// while the deletion read the full chain, so `-p default logout` under
 		// PRAXIS_PROFILE=acme passed the check and deleted acme.
-		target := credentials.PersistedActiveName()
+		target := credentials.OnDiskActiveName()
 		if refusedExplicitProfile(out, asJSON, "logout",
 			"run `praxis profiles rm %s` to remove that profile's credentials "+
 				"(no skill cycle) — logout only ever removes the active profile",
@@ -72,13 +76,15 @@ exactly what a bare logout does.`,
 			return nil
 		}
 
-		// logout is a GLOBAL lifecycle operation, mirroring login: pin the
-		// active root to home so the org-skill wipe and snapshot removal
-		// always target the user-level state, never a project root that
-		// happens to be in the current directory's ancestry. To leave local
-		// mode, delete the repo's .praxis dir instead.
-		if home, herr := paths.Dir(); herr == nil {
-			restore := paths.OverrideActiveRoot(home)
+		// logout acts on the store visible from here — the tree's own
+		// credentials inside a local-mode tree, else home — and on the skills
+		// installed for that same root, so the two never go out of step. The
+		// root is pinned BEFORE any credential goes: inside a local tree the
+		// credentials file is also the local-mode marker, and removing its
+		// last section removes the file, which would otherwise retarget the
+		// skill wipe below at the home root.
+		if root, rerr := paths.ActiveRoot(); rerr == nil {
+			restore := paths.OverrideActiveRoot(root)
 			defer restore()
 		}
 
@@ -136,20 +142,31 @@ exactly what a bare logout does.`,
 			return nil
 		}
 
-		// `target` is the persisted global pointer, resolved above alongside the
-		// guard — the same name, by construction. logout is global (see the home
-		// pin above), so a project pointer in the cwd can't redirect it, and
-		// neither can $PRAXIS_PROFILE: the pointer is what owns the credentials
-		// and the org skills this removes, together.
+		// `target` is the store's own active profile, resolved above alongside the
+		// guard — the same name, by construction. $PRAXIS_PROFILE cannot redirect
+		// it: [default] is what owns the credentials and the org skills this
+		// removes, together.
+		//
+		// Every section that holds the same credentials goes with it: after
+		// `login -p acme` or `profiles use acme`, [default] is a copy of [acme],
+		// and removing only [default] would leave [acme] as the sole section —
+		// logged in again, with no skills.
 		store, _ := credentials.Load()
-		credsPresent := false
-		if _, ok := store[target]; ok {
-			credsPresent = true
-		}
+		_, credsPresent := store[target]
+		copies := credentials.SameAs(store, target)
 
-		if credsPresent {
-			if err := credentials.Delete(target); err != nil {
-				return err
+		var deleted credentials.Deleted
+		for _, name := range append([]string{target}, copies...) {
+			if _, ok := store[name]; !ok {
+				continue
+			}
+			d, derr := credentials.Delete(name)
+			if derr != nil {
+				return derr
+			}
+			deleted.Praxis = deleted.Praxis || d.Praxis
+			if d.Facets {
+				deleted.Facets, deleted.FacetsPath = true, d.FacetsPath
 			}
 		}
 
@@ -183,21 +200,40 @@ exactly what a bare logout does.`,
 			fmt.Fprintln(out, "✓ Removed use-ig hooks.")
 		}
 
+		// With one section left, raptor's sole-section rule makes it active
+		// again — for both CLIs. Say so, or "logged out" reads as "logged out".
+		stillActive := ""
+		if after, aerr := credentials.ResolveActive(""); aerr == nil && after.Loaded && after.Source == credentials.SourceSole {
+			stillActive = after.Name
+		}
+
 		if asJSON {
 			envelope := map[string]any{
-				"removed":        ifTrue(credsPresent, target),
-				"removed_skills": liteResults(removed),
-				"removed_agents": agentLogoutLite(removedAgents),
+				"removed":           ifTrue(credsPresent, target),
+				"removed_skills":    liteResults(removed),
+				"removed_agents":    agentLogoutLite(removedAgents),
+				"raptor_logged_out": deleted.Facets,
+			}
+			if len(copies) > 0 {
+				envelope["removed_copies"] = copies
+			}
+			if stillActive != "" {
+				envelope["now_active"] = stillActive
 			}
 			if len(warnings) > 0 {
 				envelope["warnings"] = warnings
 			}
 			return render.JSON(out, envelope)
 		}
-		if credsPresent {
+		if deleted.Facets {
+			fmt.Fprintf(out, "✓ Removed profile %q from %s — raptor is logged out of it too.\n", target, deleted.FacetsPath)
+		} else if credsPresent {
 			fmt.Fprintf(out, "✓ Removed profile %q.\n", target)
 		} else {
 			fmt.Fprintf(out, "No credentials to remove for profile %q.\n", target)
+		}
+		if len(copies) > 0 {
+			fmt.Fprintf(out, "  Also removed %q — the same credentials under another name.\n", copies)
 		}
 		if len(removed) > 0 {
 			fmt.Fprintf(out, "✓ Removed %d org skill(s) from %d host(s).\n",
@@ -205,6 +241,9 @@ exactly what a bare logout does.`,
 		}
 		if len(removedAgents) > 0 {
 			fmt.Fprintf(out, "✓ Removed %d agent file(s).\n", len(removedAgents))
+		}
+		if stillActive != "" {
+			fmt.Fprintf(out, "Note: %q is the only profile left, so praxis and raptor now use it. Run `praxis profiles rm %s` to remove it too.\n", stillActive, stillActive)
 		}
 		return nil
 	},

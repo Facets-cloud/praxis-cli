@@ -7,13 +7,17 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/term"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
+	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
+	"github.com/Facets-cloud/praxis-cli/internal/render"
 )
 
 // facetsAuthMode is the server's auth_mode when it validates control-plane PATs.
@@ -162,6 +166,86 @@ func promptLoginURL(asJSON bool) string {
 		u = "https://" + u
 	}
 	return normalizeBaseURL(u)
+}
+
+// pickProfile decides the profile for a login that named none, on a machine
+// with more than one. A bare global login keeps "default" (the documented
+// convention); returns "" for that and for single-profile machines. It steps
+// in for --local, and for a --url whose host is not default's control plane:
+// both would otherwise commit a directory or overwrite default on a guess.
+//
+// On a terminal it lists the store and asks — a number, an existing name, or
+// a NEW name (which then goes through the URL and PAT prompts). Without a
+// terminal, or with --json, it exits 2 with the list and a -p hint.
+func pickProfile(out io.Writer, asJSON, local bool, flagURL string) (string, error) {
+	// A global login writes the home store, and a pin copies a home section
+	// into the tree, so the choice is always among the home profiles — never
+	// the tree's, which a run from inside a local tree would otherwise see.
+	store, err := credentials.LoadHome()
+	if err != nil {
+		return "", nil
+	}
+	// Identical credentials under two names — [acme] and its [default] copy —
+	// are one deployment, not a choice to make.
+	names := credentials.Distinct(store)
+	if len(names) < 2 {
+		return "", nil
+	}
+	// A bare login means [default]; with one, or with a --url on its host,
+	// there is nothing to guess. Without one every login creates it.
+	if def, ok := store[credentials.DefaultProfileName]; ok && !local {
+		if flagURL == "" || raptorstate.MatchesHost(flagURL, def.URL) {
+			return "", nil
+		}
+	}
+	if asJSON || !stdinIsTTY() {
+		msg := fmt.Sprintf("%d profiles exist; say which one with -p", len(names))
+		render.PrintError(out, asJSON, msg,
+			"pass -p <name> (one of: "+strings.Join(names, ", ")+") or -p <new-name> --url <control-plane> to create one",
+			exitcode.Usage)
+		osExit(exitcode.Usage)
+		return "", fmt.Errorf("%s", msg)
+	}
+	fmt.Fprintln(os.Stderr, "Profiles:")
+	for i, n := range names {
+		alias := ""
+		if same := credentials.SameAs(store, n); len(same) > 0 {
+			alias = fmt.Sprintf(" (also %q)", same)
+		}
+		fmt.Fprintf(os.Stderr, "  %d) %-12s %s%s\n", i+1, n, store[n].URL, alias)
+	}
+	verb := "use"
+	if local {
+		verb = "pin here"
+	}
+	answer := prompt(fmt.Sprintf("Profile to %s [%s] (number, name, or a new name): ", verb, credentials.DefaultProfileName), readLine)
+	switch {
+	case answer == "":
+		return credentials.DefaultProfileName, nil
+	case isIndex(answer, len(names)):
+		i, _ := strconv.Atoi(answer)
+		return names[i-1], nil
+	}
+	// A number that is not a position is a slip, not a new profile name.
+	if _, nerr := strconv.Atoi(answer); nerr == nil {
+		msg := fmt.Sprintf("%q is not a position in the list", answer)
+		render.PrintError(out, asJSON, msg,
+			fmt.Sprintf("pick a number from 1 to %d, or type a name", len(names)), exitcode.Usage)
+		osExit(exitcode.Usage)
+		return "", fmt.Errorf("%s", msg)
+	}
+	if err := credentials.ValidateProfileName(answer); err != nil {
+		render.PrintError(out, asJSON, err.Error(), "pick a number from the list or a plain name", exitcode.Usage)
+		osExit(exitcode.Usage)
+		return "", err
+	}
+	return answer, nil
+}
+
+// isIndex reports whether s is a 1-based position in a list of n.
+func isIndex(s string, n int) bool {
+	i, err := strconv.Atoi(s)
+	return err == nil && i >= 1 && i <= n
 }
 
 // prompt writes the label to stderr — never stdout, which a caller may be

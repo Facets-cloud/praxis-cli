@@ -86,23 +86,25 @@ cmd/                  cobra command tree (only commands that DO something
   version.go          `praxis version`
   update.go           `praxis update` (self-update via GitHub Releases)
   completion.go       `praxis completion {bash|zsh|fish|powershell}`
-  logout.go           `praxis logout` (deletes ~/.praxis/credentials)
+  logout.go           `praxis logout` (removes the active profile from whichever file holds it)
   duty.go             `praxis duty *` (Agent Schedule runs/findings/reports)
   hook.go             `praxis hook user-prompt-submit` (hidden) — the AI-host
                        prompt hook that nudges toward a matching praxis skill
 internal/             pure logic, unit-tested
   paths/              Praxis filesystem locations. Two roots: the HOME root
-                       (~/.praxis, always holds credentials + global pointer)
+                       (~/.praxis, holds the API-key file + update cache)
                        and a discovered PROJECT root (<repo>/.praxis) that
                        becomes ActiveRoot for the receipt/snapshot/skills.
   duties/             REST client for Agent Schedules (duties): runs,
                        findings, artifacts — mirrors internal/memory
-  raptorstate/        praxis's view of raptor's store (~/.facets/credentials
-                       + FACETS_* env): mirrors raptor's profile resolution
-                       (including its cwd-upward file walk) so `status` can
-                       cross-check control planes, and Write() saves a PAT
-                       login as a raptor profile. The only package that
-                       touches that file.
+  credentials/        ONE store, two files: ~/.facets/credentials (raptor's,
+                       control-plane PATs, shared with raptor, located by
+                       raptor's cwd-upward walk) and ~/.praxis/credentials
+                       (Praxis API keys + loopback PATs). Load merges, facets
+                       wins; Put routes by credential type. See facets.go.
+  raptorstate/        which section a BARE raptor command would use here
+                       (FACETS_PROFILE → [default] → sole), so `status` can
+                       tell the host when to prefix FACETS_PROFILE
   selfupdate/         GitHub Releases fetch, checksum, atomic replace
   hosthooks/          merges praxis's hooks into each AI host's hook config.
                        ONE JSON merge engine, per-host differences in a Host
@@ -131,74 +133,96 @@ in-process MCP reference (`run_cloud_cli(...)`) is rewritten to a
 ## Local mode (per-directory profiles)
 
 `praxis login --profile X --local` pins a profile to the current
-directory tree: it writes a project pointer at `<cwd>/.praxis/config.json`
-(leaving the global pointer alone) and installs project-scoped.
-`refresh-skills --project` does the same for the already-active profile,
-minus auth. A `.praxis/` directory is discovered git-style by
-`paths.ProjectRoot()` (walking up from cwd, **bounded to `$HOME`**).
+directory tree by writing `<cwd>/.facets/credentials` — raptor's own
+local-mode file — with X's section and a `[default]` copy, and installs
+project-scoped. `profiles use X --local` and `refresh-skills --project`
+do the same for an already-authenticated profile. A tree is local mode
+exactly when that file exists; `paths.ProjectRoot()` discovers it
+git-style (walking up from cwd, **bounded to `$HOME`**) and reports
+`<dir>/.praxis` as the root for the receipt and snapshot.
 
 The active root (`paths.ActiveRoot()`) decides where the skill receipt
 (`installed.json`), MCP snapshot (`mcp-tools.json`), and installed skills
-live. It returns the discovered project root **only when local mode is
-genuinely active** — gated by the `paths.LocalModeActive` hook, which the
-credentials package wires up to check that the project pointer names a
-profile actually present in the store. Otherwise it returns the HOME root.
+live: the discovered project root, else the HOME root.
 
 Invariants to preserve when touching this area:
 
-- **Praxis credentials are always global.** `paths.Credentials()` is pinned
-  to the HOME root; never route it through `ActiveRoot()`. The RAPTOR
-  profile a PAT login writes is the exception, on purpose: `--local` puts
-  it in `<cwd>/.facets/credentials` because that is raptor's own local
-  mode — raptor reads the first `.facets/credentials` walking up from cwd
-  and ignores the home file when it finds one. `raptorstate.Resolve`
-  mirrors that walk (seam: `raptorstate.SetGetwdForTest`, wired in both
-  test mains so no test reads the developer's live file).
-- **A named profile inherits only its own raptor section.** `praxis login
-  -p X` with no `--url` takes the URL from raptor section `[X]` (or the
-  `--raptor-profile` pin), never from raptor's `[default]` — that is a
-  second tenant, not the first one again. `default` still follows raptor's
-  own resolution (default, else sole profile).
-- **A bare or foreign `.praxis` must stay inert.** Local mode activates
-  only via `LocalModeActive` (pointer names a known profile). Don't switch
-  any state on mere directory presence — that's what protects a user who
-  never opted in (a teammate-committed `.praxis` resolves to the global
-  profile *and* keeps receipt/snapshot/skills global).
+- **There is no pointer file.** The active profile is the store's
+  `[default]` section, else its sole section (`credentials.onDiskActive`) —
+  raptor's rule, so bare commands of both CLIs always agree.
+  `credentials.SetDefault(X)` copies X over `[default]` in X's file;
+  `SetDefaultLocal(X, dir)` writes the tree's file with X and a `[default]`
+  copy. `MigrateLegacyPointer` (run from `Execute`) retires the pre-v1.11
+  `~/.praxis/config.json`; `paths.LegacyProjectPointer` reports an old
+  `<dir>/.praxis/config.json` so `Execute` can print a one-line hint.
+- **The praxis file is always global; the facets file follows raptor.**
+  `paths.Credentials()` is pinned to the HOME root; never route it through
+  `ActiveRoot()`. A control-plane PAT lives in raptor's file instead, and
+  inside a local tree the store IS the tree's file — raptor reads the first
+  `.facets/credentials` walking up from cwd and ignores the home file when
+  it finds one. `credentials.FacetsPath` mirrors that walk (seam:
+  `credentials.SetGetwdForTest`, wired in every test main so no test reads
+  the developer's live file). Consequence: inside a pinned tree, `-p X`
+  only loads X if the tree's file has it (or X is an API key).
+- **A profile lives in exactly one file.** `credentials.Put` routes an https
+  PAT to the facets file and everything else to the praxis file, and drops
+  the same name from the other HOME file (never a tree's). A name in both
+  would make praxis and raptor disagree. `MigrateLegacyPATs` moves PATs an
+  older praxis kept in the praxis file.
+- **A named profile inherits only its own section.** `praxis login -p X`
+  with no `--url` takes the URL from section `[X]`, never from raptor's
+  `[default]` — that is a second tenant, not the first one again. `default`
+  still follows raptor's own resolution (default, else sole profile).
+- **Logout is shared and acts where you are.** Removing a PAT profile
+  removes raptor's section. Every section that holds the same credentials
+  goes with it: the `[default]` copy and the section it came from are one
+  login, and leaving either would resolve it as the sole section again.
+  Inside a local tree `logout` removes the tree's `[default]` and its copies;
+  `logout --all` removes both home files, and the tree's file when run inside
+  a tree. `profiles rm X` refuses an X whose credentials equal the active
+  section's, for the same reason.
+- **Never pin a directory to a guess.** On a multi-profile machine, `login
+  --local` (or `login --url <host≠default's>`) with no `-p` goes through
+  `pickProfile`: a terminal gets the list and may type a new name; `--json`
+  or no TTY exits 2 with the list. A bare global `login` still means
+  `default`, and single-profile machines never see the picker. Login prints
+  `Profile <name> → <url>` to stderr before any install output.
+- **A bare `.praxis` must stay inert.** Only the credentials file beside it
+  opts a tree in. A committed `.praxis` (receipt, snapshot, old pointer)
+  resolves to the home store *and* keeps receipt/snapshot/skills global.
 - **Receipt and install location share one root.** Both derive from
   `ActiveRoot()`, so the unconditional "wipe previous profile" step
   (`UninstallByPrefix`) only ever touches the active root. Callers set the
   scope up front by pinning via `paths.OverrideActiveRoot` (login --local /
   `profiles use --local` / refresh --project) or by being in an active local
   tree; never make a scope decision that diverges receipt from install.
-- **Moving the pointer and re-installing skills is one operation.** Both
+- **Changing `[default]` and re-installing skills is one operation.** Both
   callers that change the active profile (`praxis login`, `praxis profiles
-  use`) go through `cmd.activateProfile`, which flips the pointer AND pins
+  use`) go through `cmd.activateProfile`, which rewrites `[default]` AND pins
   the matching `ActiveRoot` in the same step, then run `postAuthSetup`.
-  Never flip a pointer without the re-sync: that's how you get profile A
+  Never change `[default]` without the re-sync: that's how you get profile A
   active with profile B's `praxis-*` skills on disk. `profiles use`
   additionally verifies the stored token via `/auth/me` BEFORE any write,
   so a dead token or an unreachable server changes nothing (exit 3 / 5).
-- **`login` (global), `logout`, and `profiles use` (no --local) are global
-  by design.** They pin the active root to home
-  (`paths.OverrideActiveRoot(home)`) and — for login/logout — resolve the
-  global profile (`credentials.ResolveActiveGlobal`), so being inside a
-  project tree never redirects them. A global `profiles use` run inside a
-  local-mode tree reports `shadowed_by_project_root` +
-  `effective_profile`, since the project pointer still wins there.
-- **Active-profile resolution** (`credentials.resolveName`): `--profile`
-  flag → `$PRAXIS_PROFILE` → project pointer → global pointer →
-  `"default"`. `SourceProject` marks the project case; a project pointer to
-  an unknown profile falls back to the global resolution, but an unknown
-  flag/env profile does NOT — an explicit choice must fail loudly (exit 3)
-  rather than silently route to a different org.
+- **`login` and `profiles use` (no --local) write the HOME store.** They
+  pin the active root to home (`paths.OverrideActiveRoot(home)`) and copy
+  over the home `[default]`, so being inside a project tree never repins
+  it. A global `profiles use` run inside a local-mode tree reports
+  `shadowed_by_project_root` + `effective_profile`, since the tree's file
+  still wins there.
+- **Active-profile resolution** (`credentials.ResolveActive`): `--profile`
+  flag → raptor's env credential → `$PRAXIS_PROFILE` → `$FACETS_PROFILE` →
+  `[default]` → sole section. An unknown flag/env profile does NOT fall
+  back — an explicit choice must fail loudly (exit 3) rather than silently
+  route to a different org.
 - **`$PRAXIS_PROFILE` is the concurrency-safe scope**
-  (`credentials.EnvProfile`). Both the active-profile pointer and the
-  installed `praxis-*` skills are machine-global, so `profiles use` repoints
-  every other shell/agent session on the box AND rewrites skill files those
-  sessions have already read. The env var lives in the process environment:
-  it writes nothing and is unobservable from another session. It MUST
-  outrank the project pointer, or a pinned repo couldn't be scoped per
-  session. Residual limitation — documented, not fixed: skill FILES still
+  (`credentials.EnvProfile`). Both `[default]` and the installed `praxis-*`
+  skills are machine-global, so `profiles use` repoints every other
+  shell/agent session on the box AND rewrites skill files those sessions
+  have already read. The env var lives in the process environment: it
+  writes nothing and is unobservable from another session. It MUST outrank
+  the store, or a pinned repo couldn't be scoped per session. Residual
+  limitation — documented, not fixed: skill FILES still
   belong to the globally-active profile, so `-p`/env give the right gateway
   with the active profile's skill text.
 - **`--profile` is ONE flag on `rootCmd`**, persistent, shorthand `-p`,
@@ -213,24 +237,23 @@ Invariants to preserve when touching this area:
 - **A command that can't honor `--profile` must REFUSE it**, never ignore
   it: `refusedProfileFlag` / `refusedExplicitProfile` (root.go) print a usage
   error and exit 2. Today that's `logout` and `refresh-skills` (both rewrite
-  the ACTIVE profile's org skills, so honoring the flag would split pointer
-  from skills) and `profiles use` (target is positional). For `logout` the
+  the ACTIVE profile's org skills, so honoring the flag would split
+  `[default]` from skills) and `profiles use` (target is positional). For `logout` the
   check MUST come before the `--all` branch — `-p X --all` is a
   contradiction, and ignoring `-p` there wipes every profile for a user who
   named one.
 - **Refuse on DIVERGENCE, not on presence.** Both helpers take the profile
-  the command acts on and stay silent when the selection names it: `praxis -p
-  default logout` on a single-profile machine asks for exactly what a bare
-  `logout` does. The comparison target MUST be resolved without the flag and
-  the environment, or it compares the selection with itself and never fires —
-  `credentials.PersistedActiveName()` for `logout` (global by design) and
-  `credentials.PointerActiveName()` for `refresh-skills` (project pointer
-  first, matching the root it installs into).
+  the command acts on and stay silent when the selection names it — or holds
+  the same credentials (`credentials.SameCreds`): after `profiles use acme`,
+  `-p acme logout` asks for exactly what a bare `logout` does to the
+  `[default]` copy. The comparison target MUST be resolved without the flag
+  and the environment, or it compares the selection with itself and never
+  fires — `credentials.OnDiskActiveName()` (the store in effect from cwd).
 - **A guard and its action MUST be one decision.** Resolve the target once and
   have the action use that same name; never let the action re-resolve through
   `ResolveActive*`, or the two disagree about "which profile?" and the action's
-  answer wins. This shipped as a destructive bug: the guard compared the
-  pointer while `logout` deleted `ResolveActiveGlobal()`, so `-p default
+  answer wins. This shipped as a destructive bug: the guard compared one
+  answer while `logout` deleted another, so `-p default
   logout` under `PRAXIS_PROFILE=acme` passed the check and deleted **acme**.
   Two defenses, keep both — `refusedExplicitProfile` checks the flag and the
   environment INDEPENDENTLY (not the flag-wins winner, which a matching `-p`

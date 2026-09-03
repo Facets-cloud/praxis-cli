@@ -173,9 +173,6 @@ func TestLoginDryRun_ProfileSwitchSkillsEffect(t *testing.T) {
 	t.Cleanup(func() { loginDryRun = false })
 	seedProfile(t, "default", "https://stored.test", "tok")
 	seedProfile(t, "acme", "https://acme.test", "tok2")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	stubBrowserLogin(t)
 	stubPostAuth(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
@@ -207,9 +204,6 @@ func TestLoginDryRun_EnvDoesNotHideAPendingProfileSwitch(t *testing.T) {
 	t.Cleanup(func() { loginDryRun = false })
 	seedProfile(t, "default", "https://stored.test", "tok")
 	seedProfile(t, "acme", "https://acme.test", "tok2")
-	if err := credentials.SetActive("default"); err != nil {
-		t.Fatal(err)
-	}
 	stubBrowserLogin(t)
 	stubPostAuth(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
@@ -236,15 +230,15 @@ func TestLoginDryRun_EnvDoesNotHideAPendingProfileSwitch(t *testing.T) {
 	}
 }
 
-// The mirror case: with the pointer already on acme, an env var naming acme
-// changes nothing, and the report must not invent a switch either.
+// The mirror case: with [default] already a copy of acme, an env var naming
+// acme changes nothing, and the report must not invent a switch either.
 func TestLoginDryRun_EnvMatchingThePointerReportsNoSwitch(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
 	t.Cleanup(func() { loginDryRun = false })
 	seedProfile(t, "default", "https://stored.test", "tok")
 	seedProfile(t, "acme", "https://acme.test", "tok2")
-	if err := credentials.SetActive("acme"); err != nil {
+	if _, err := credentials.SetDefault("acme"); err != nil {
 		t.Fatal(err)
 	}
 	stubBrowserLogin(t)
@@ -257,11 +251,11 @@ func TestLoginDryRun_EnvMatchingThePointerReportsNoSwitch(t *testing.T) {
 	rootProfile = "acme"
 
 	report := runDryRunJSON(t)
-	if report["active_profile"] != "acme" {
-		t.Fatalf("active_profile = %v, want acme", report["active_profile"])
+	if report["active_profile"] != "default" {
+		t.Fatalf("active_profile = %v, want default (a copy of acme)", report["active_profile"])
 	}
 	effect, _ := report["skills_effect"].(string)
 	if !strings.Contains(effect, "no profile switch") {
-		t.Errorf("skills_effect %q should report no switch — the pointer already names acme", effect)
+		t.Errorf("skills_effect %q should report no switch — default already holds acme's credentials", effect)
 	}
 }

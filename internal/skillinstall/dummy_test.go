@@ -55,13 +55,13 @@ func TestPraxisMetaSkill_RaptorProfileCrossCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The stores are independent; the meta-skill must teach the status
-	// `raptor` block, the pin, and the per-command FACETS_PROFILE prefix.
+	// One shared store, two selectors; the meta-skill must teach the status
+	// `raptor` block and the per-command FACETS_PROFILE prefix.
 	for _, want := range []string{
-		"## Raptor profile ≠ praxis profile",
+		"## Raptor profile vs praxis profile",
 		"~/.facets/credentials",
-		"FACETS_PROFILE=<profile> raptor",
-		"--raptor-profile",
+		"FACETS_PROFILE=<shared_profile> raptor",
+		"prefix_required",
 		"matches_praxis_url",
 	} {
 		if !strings.Contains(body, want) {
@@ -79,7 +79,7 @@ func TestPraxisMetaSkill_ExplainsLocalMode(t *testing.T) {
 		"## Per-directory profiles (local mode)",
 		"praxis login --profile acme --local",
 		"praxis refresh-skills --project",
-		".praxis/config.json",
+		".facets/credentials",
 		"project_root",
 	} {
 		if !strings.Contains(body, want) {

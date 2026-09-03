@@ -5,17 +5,17 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 )
 
-// writeCreds drops a raptor-style credentials file into a temp dir and
-// returns its path.
-func writeCreds(t *testing.T, body string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "credentials")
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
+// TestMain starts the facets-file walk at the faked HOME so no test reads the
+// developer's live ~/.facets/credentials.
+func TestMain(m *testing.M) {
+	restore := credentials.SetGetwdForTest(func() (string, error) { return os.Getenv("HOME"), nil })
+	code := m.Run()
+	restore()
+	os.Exit(code)
 }
 
 // clearRaptorEnv unsets every env var the resolver consults so tests are
@@ -41,93 +41,70 @@ func stubInstalled(t *testing.T, installed bool) {
 	}
 }
 
-const twoProfiles = `
-[default]
-control_plane_url = https://root.console.facets.cloud
-username = anuj@facets.cloud
-token = pat-root
+// seedHomeFacets writes a raptor-style ~/.facets/credentials into the faked HOME.
+func seedHomeFacets(t *testing.T, body string) {
+	t.Helper()
+	dir := filepath.Join(os.Getenv("HOME"), ".facets")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "credentials"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
 
-[acme]
-control_plane_url = https://acme.console.facets.cloud
-username = anuj@facets.cloud
-token = pat-acme
-`
+func pat(url, user string) credentials.Profile {
+	return credentials.FacetsProfile(url, user, "pat")
+}
+
+var twoProfiles = map[string]credentials.Profile{
+	"default": pat("https://root.console.facets.cloud", "anuj@facets.cloud"),
+	"acme":    pat("https://acme.console.facets.cloud", "anuj@facets.cloud"),
+}
 
 func TestResolve_Chain(t *testing.T) {
 	tests := []struct {
-		name    string
-		creds   string // credentials body; "" = no file
-		pin     string
-		env     map[string]string
-		want    State
-		wantURL string
+		name     string
+		profiles map[string]credentials.Profile
+		env      map[string]string
+		want     State
 	}{
 		{
-			name:  "env override wins over everything",
-			creds: twoProfiles,
-			pin:   "acme",
-			env:   map[string]string{"CONTROL_PLANE_URL": "https://env.example.com", "FACETS_USERNAME": "env@x"},
-			want:  State{Found: true, Profile: "env", Source: SourceEnv, ControlPlaneURL: "https://env.example.com", Username: "env@x"},
+			name:     "env override wins over everything",
+			profiles: twoProfiles,
+			env:      map[string]string{"CONTROL_PLANE_URL": "https://env.example.com", "FACETS_USERNAME": "env@x", "FACETS_PROFILE": "acme"},
+			want:     State{Found: true, Profile: "env", Source: SourceEnv, ControlPlaneURL: "https://env.example.com", Username: "env@x"},
 		},
 		{
-			name:  "pin beats FACETS_PROFILE",
-			creds: twoProfiles,
-			pin:   "acme",
-			env:   map[string]string{"FACETS_PROFILE": "default"},
-			want:  State{Found: true, Pinned: true, Profile: "acme", Source: SourcePin, ControlPlaneURL: "https://acme.console.facets.cloud", Username: "anuj@facets.cloud"},
+			name:     "FACETS_PROFILE selects named profile",
+			profiles: twoProfiles,
+			env:      map[string]string{"FACETS_PROFILE": "acme"},
+			want:     State{Found: true, Profile: "acme", Source: SourceEnvProfile, ControlPlaneURL: "https://acme.console.facets.cloud", Username: "anuj@facets.cloud"},
 		},
 		{
-			name:  "pin to missing profile reports the name, not found",
-			creds: twoProfiles,
-			pin:   "nope",
-			want:  State{Found: false, Pinned: true, Profile: "nope", Source: SourcePin},
+			name:     "FACETS_PROFILE naming a missing profile is reported unfound",
+			profiles: twoProfiles,
+			env:      map[string]string{"FACETS_PROFILE": "ghost"},
+			want:     State{Found: false, Profile: "ghost", Source: SourceEnvProfile},
 		},
 		{
-			name:  "FACETS_PROFILE selects named profile",
-			creds: twoProfiles,
-			env:   map[string]string{"FACETS_PROFILE": "acme"},
-			want:  State{Found: true, Profile: "acme", Source: SourceEnvProfile, ControlPlaneURL: "https://acme.console.facets.cloud", Username: "anuj@facets.cloud"},
+			name:     "default section when nothing else selects",
+			profiles: twoProfiles,
+			want:     State{Found: true, Profile: "default", Source: SourceDefault, ControlPlaneURL: "https://root.console.facets.cloud", Username: "anuj@facets.cloud"},
 		},
 		{
-			name:  "FACETS_PROFILE naming a missing profile is reported unfound",
-			creds: twoProfiles,
-			env:   map[string]string{"FACETS_PROFILE": "ghost"},
-			want:  State{Found: false, Profile: "ghost", Source: SourceEnvProfile},
+			name:     "sole profile used when no default exists",
+			profiles: map[string]credentials.Profile{"onlyone": pat("https://solo.console.facets.cloud", "solo@x")},
+			want:     State{Found: true, Profile: "onlyone", Source: SourceSole, ControlPlaneURL: "https://solo.console.facets.cloud", Username: "solo@x"},
 		},
 		{
-			name:  "default section when nothing else selects",
-			creds: twoProfiles,
-			want:  State{Found: true, Profile: "default", Source: SourceDefault, ControlPlaneURL: "https://root.console.facets.cloud", Username: "anuj@facets.cloud"},
+			name:     "multiple profiles without default resolve nothing",
+			profiles: map[string]credentials.Profile{"a": pat("https://a.example", "u"), "b": pat("https://b.example", "u")},
+			want:     State{Found: false},
 		},
 		{
-			name: "sole profile used when no default exists",
-			creds: `
-[onlyone]
-control_plane_url = https://solo.console.facets.cloud
-username = solo@x
-token = pat
-`,
-			want: State{Found: true, Profile: "onlyone", Source: SourceSole, ControlPlaneURL: "https://solo.console.facets.cloud", Username: "solo@x"},
-		},
-		{
-			name: "multiple profiles without default resolve nothing",
-			creds: `
-[a]
-control_plane_url = https://a.example
-username = u
-token = t
-
-[b]
-control_plane_url = https://b.example
-username = u
-token = t
-`,
+			name: "no store resolves nothing",
 			want: State{Found: false},
-		},
-		{
-			name:  "no credentials file resolves nothing",
-			creds: "",
-			want:  State{Found: false},
 		},
 	}
 	for _, tt := range tests {
@@ -137,12 +114,7 @@ token = t
 				t.Setenv(k, v)
 			}
 			stubInstalled(t, true)
-
-			path := ""
-			if tt.creds != "" {
-				path = writeCreds(t, tt.creds)
-			}
-			got := resolve(tt.pin, path)
+			got := resolve(tt.profiles)
 			tt.want.Installed = true // stubbed above for every case
 			if got != tt.want {
 				t.Errorf("resolve() = %+v, want %+v", got, tt.want)
@@ -154,50 +126,38 @@ token = t
 func TestResolve_InstalledFlag(t *testing.T) {
 	clearRaptorEnv(t)
 	stubInstalled(t, false)
-	got := resolve("", "")
-	if got.Installed {
+	if got := resolve(nil); got.Installed {
 		t.Errorf("Installed = true with lookPath failing; want false")
 	}
 }
 
-func TestResolve_DefaultPathMissingFile(t *testing.T) {
-	// Resolve (the exported entry) against a faked HOME with no
-	// ~/.facets/credentials must not error or find anything.
+func TestResolve_ReadsTheSharedStore(t *testing.T) {
+	// Resolve (the exported entry) reads the file raptor would: the home file
+	// here, a local one inside a `raptor login --local` tree.
 	clearRaptorEnv(t)
 	stubInstalled(t, true)
-	t.Setenv("HOME", t.TempDir())
-	got := Resolve("")
-	if got.Found {
-		t.Errorf("Resolve() with no credentials file: Found = true, want false")
-	}
-}
-
-func TestHasProfile(t *testing.T) {
-	path := writeCreds(t, twoProfiles)
-
-	ok, url := hasProfile("acme", path)
-	if !ok || url != "https://acme.console.facets.cloud" {
-		t.Errorf("hasProfile(acme) = (%v, %q), want (true, acme URL)", ok, url)
-	}
-	if ok, _ := hasProfile("ghost", path); ok {
-		t.Errorf("hasProfile(ghost) = true, want false")
-	}
-	if ok, _ := hasProfile("acme", filepath.Join(t.TempDir(), "nope")); ok {
-		t.Errorf("hasProfile with missing file = true, want false")
-	}
-
-	// Exported wrapper against a faked HOME.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	if err := os.MkdirAll(filepath.Join(home, ".facets"), 0o700); err != nil {
+
+	if got := Resolve(); got.Found {
+		t.Errorf("Resolve() with no credentials file: Found = true, want false")
+	}
+
+	seedHomeFacets(t, "[default]\ncontrol_plane_url = https://root.test\nusername = u@x\ntoken = pat\n")
+	if got := Resolve(); !got.Found || got.ControlPlaneURL != "https://root.test" || got.Source != SourceDefault {
+		t.Errorf("Resolve() = %+v, want the home default", got)
+	}
+
+	repo := filepath.Join(home, "repo", "sub")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".facets", "credentials"), []byte(twoProfiles), 0o600); err != nil {
+	if err := credentials.PutLocal("acme", pat("https://acme.test", "a@x"), filepath.Join(home, "repo")); err != nil {
 		t.Fatal(err)
 	}
-	ok, url = HasProfile("default")
-	if !ok || url != "https://root.console.facets.cloud" {
-		t.Errorf("HasProfile(default) = (%v, %q), want (true, root URL)", ok, url)
+	t.Cleanup(credentials.SetGetwdForTest(func() (string, error) { return repo, nil }))
+	if got := Resolve(); !got.Found || got.Profile != "acme" || got.Source != SourceSole {
+		t.Errorf("Resolve() inside the repo = %+v, want the local sole profile", got)
 	}
 }
 
@@ -226,14 +186,8 @@ token = pat_no_user
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			if err := os.MkdirAll(filepath.Join(home, ".facets"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(home, ".facets", "credentials"), []byte(body), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			t.Setenv("HOME", t.TempDir())
+			seedHomeFacets(t, body)
 			user, token, ok := PAT(tt.profile)
 			if ok != tt.wantOK || user != tt.wantUser || token != tt.wantToken {
 				t.Errorf("PAT(%q) = (%q, %q, %v), want (%q, %q, %v)",

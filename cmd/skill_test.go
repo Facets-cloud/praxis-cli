@@ -101,10 +101,10 @@ func TestRefreshSkills_ProjectFlag_ScopesToProjectDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	stubMCPManifestFetch(t)
+	clearFacetsEnv(t)
 
-	if err := credentialsPut("default", "https://x.test", "tester@x", "sk_test_T"); err != nil {
-		t.Fatal(err)
-	}
+	// --project pins the tree, which only a control-plane PAT can be.
+	seedPAT(t, "default", "https://x.test", "pat_T")
 
 	// Project dir under the faked home (ProjectRoot discovery is bounded to
 	// the home subtree).

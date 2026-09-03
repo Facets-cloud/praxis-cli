@@ -44,7 +44,7 @@ func seedIgProfile(t *testing.T, name string) {
 		t.Fatal(err)
 	}
 	if name != "default" {
-		if err := credentials.SetActive(name); err != nil {
+		if _, err := credentials.SetDefault(name); err != nil {
 			t.Fatal(err)
 		}
 	}

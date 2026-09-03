@@ -23,32 +23,24 @@ import (
 // reachable. Exit code 0 means the report is complete; exitcode.Network means
 // the server could not be reached, so login's behavior can't be predicted.
 func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, local bool) error {
-	store, _ := credentials.Load()
+	// The store login itself consults: home for a global login, so a run
+	// from inside a local tree cannot make the report reuse the tree's token.
+	store, _ := credentials.LoadHome()
+	if local {
+		store, _ = credentials.Load()
+	}
 	prof, exists := store[profileName]
 
-	// The profile whose org skills are on disk right now — which is a question
-	// about POINTERS, not about this invocation. $PRAXIS_PROFILE changes where
-	// commands route; it does not change which catalog was installed, so
-	// resolving through it made the report claim "no profile switch" for a login
-	// that was about to move the pointer and wipe the previous profile's skills.
-	//
-	// Scope still mirrors login's: a global login owns the home root, so only the
-	// persisted global pointer can have put skills there; --local installs into
-	// the project root, whose pointer wins when the tree is pinned.
-	var activeName string
-	if local {
-		pinned, perr := credentials.PointerActiveName()
-		if perr != nil {
-			return perr
-		}
-		activeName = pinned
-	} else {
-		activeName = credentials.PersistedActiveName()
-	}
+	// The profile whose org skills are on disk right now — the store's own
+	// answer, not this invocation's. $PRAXIS_PROFILE changes where commands
+	// route; it does not change which catalog was installed, so resolving
+	// through it made the report claim "no profile switch" for a login that was
+	// about to replace [default] and wipe the previous profile's skills.
+	activeName := credentials.OnDiskActiveName()
 
 	var probeAuth map[string]string
 	tokenSource := "none"
-	switch c, hasPAT := facetsPATCandidate(profileName, baseURL); {
+	switch c, hasPAT := facetsPATCandidate(profileName, baseURL, local); {
 	case loginToken != "":
 		probeAuth, tokenSource = credentials.Profile{Token: loginToken}.Auth(), "supplied"
 	case exists && prof.Token != "" && prof.URL == baseURL:
@@ -85,7 +77,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 			// returns handled=false and the PAT gets its turn. Probe it too, or
 			// the report says "browser" where login would use the PAT.
 			tokenStatus, action = "stored-invalid", "browser"
-			if c, hasPAT := facetsPATCandidate(profileName, baseURL); hasPAT && !loginForce {
+			if c, hasPAT := facetsPATCandidate(profileName, baseURL, local); hasPAT && !loginForce {
 				if _, perr := fetchAuthMe(baseURL, c.asProfile().Auth()); perr == nil {
 					tokenStatus, action = "stored-invalid, facets-pat-valid", "facets-pat (no browser)"
 				}
@@ -108,22 +100,27 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		action = "control-plane PAT prompt, else " + action
 	}
 
-	// A control-plane PAT is also saved as a raptor profile; an API key is not.
-	raptorEffect := "unchanged (only a control-plane PAT is saved for raptor)"
-	raptorTarget := fmt.Sprintf("raptor profile [%s] written to ~/.facets/credentials", raptorSection(profileName, raptorPin(profileName)))
+	// Where the credential lands: a control-plane PAT in raptor's store (shared
+	// with raptor), a Praxis API key in the praxis file.
+	facetsFile := "~/.facets/credentials"
 	if local {
-		raptorTarget = fmt.Sprintf("raptor profile [%s] written to <cwd>/.facets/credentials", raptorSection(profileName, raptorPin(profileName)))
+		facetsFile = "<cwd>/.facets/credentials"
 	}
+	storeEffect := fmt.Sprintf("~/.praxis/credentials [%s] (Praxis API key; raptor unchanged)", profileName)
 	switch {
 	case strings.HasPrefix(action, "facets-pat"),
 		strings.HasPrefix(action, "reuse-token") && prof.AuthMode == credentials.AuthModeBasic:
-		raptorEffect = raptorTarget
+		storeEffect = fmt.Sprintf("%s [%s] (shared with raptor)", facetsFile, profileName)
 	case strings.HasPrefix(action, "control-plane PAT prompt"):
-		raptorEffect = raptorTarget + " if a control-plane PAT is pasted"
+		storeEffect = fmt.Sprintf("%s [%s] (shared with raptor) if a control-plane PAT is pasted, else ~/.praxis/credentials", facetsFile, profileName)
+	}
+
+	if local && !strings.Contains(storeEffect, "shared with raptor") {
+		storeEffect = "refused: local mode needs a control-plane PAT (drop --local, or paste a PAT)"
 	}
 
 	skillsEffect := fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)
-	if activeName != profileName {
+	if !credentials.SameCreds(profileName, activeName) {
 		skillsEffect = fmt.Sprintf("active profile switches %q → %q; %q's praxis-* org skills are wiped and %q's catalog installed",
 			activeName, profileName, activeName, profileName)
 	}
@@ -141,7 +138,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 			"token_status":   tokenStatus,
 			"action":         action,
 			"skills_effect":  skillsEffect,
-			"raptor_effect":  raptorEffect,
+			"store_effect":   storeEffect,
 		}
 		if rerr := render.JSON(out, payload); rerr != nil {
 			return rerr
@@ -163,7 +160,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		fmt.Fprintf(out, "  token:    %s\n", tokenStatus)
 		fmt.Fprintf(out, "  action:   %s\n", action)
 		fmt.Fprintf(out, "  skills:   %s\n", skillsEffect)
-		fmt.Fprintf(out, "  raptor:   %s\n", raptorEffect)
+		fmt.Fprintf(out, "  store:    %s\n", storeEffect)
 	}
 
 	if !reachable {

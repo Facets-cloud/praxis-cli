@@ -59,7 +59,7 @@ type agentInstallationLite struct {
 }
 
 // runPostAuthSetup is the v0.7 invariant-keeper that runs after
-// credentials are saved + the active pointer is flipped:
+// credentials are saved + the profile is made active:
 //
 //  1. Install the meta-skill into every detected AI host (idempotent).
 //     Skipped when no hosts are detected.

@@ -32,12 +32,18 @@ type authCheckResult struct {
 
 // profileEntry is one row of the profiles listing.
 type profileEntry struct {
-	Name      string           `json:"name"`
-	URL       string           `json:"url"`
-	Username  string           `json:"username"`
-	Active    bool             `json:"active"`
-	LoggedIn  bool             `json:"logged_in"`
-	AuthCheck *authCheckResult `json:"auth_check,omitempty"`
+	Name     string `json:"name"`
+	URL      string `json:"url"`
+	Username string `json:"username"`
+	Active   bool   `json:"active"`
+	LoggedIn bool   `json:"logged_in"`
+	// Store is "facets" for a control-plane PAT in ~/.facets/credentials
+	// (shared with raptor) or "praxis" for a Praxis API key.
+	Store string `json:"store,omitempty"`
+	// SameAsActive marks a section whose credentials equal the active one —
+	// after `profiles use X`, X and [default] hold the same token.
+	SameAsActive bool             `json:"same_as_active,omitempty"`
+	AuthCheck    *authCheckResult `json:"auth_check,omitempty"`
 }
 
 // profilesOutput is the top-level JSON shape so AI hosts can dispatch on
@@ -86,15 +92,21 @@ the org skills so they match the profile you switched to.`,
 			return err
 		}
 
+		same := map[string]bool{}
+		for _, n := range credentials.SameAs(store, active.Name) {
+			same[n] = true
+		}
 		entries := make([]profileEntry, 0, len(names))
 		for _, name := range names {
 			p := store[name]
 			e := profileEntry{
-				Name:     name,
-				URL:      p.URL,
-				Username: p.Username,
-				Active:   name == active.Name,
-				LoggedIn: p.Token != "",
+				Name:         name,
+				URL:          p.URL,
+				Username:     p.Username,
+				Active:       name == active.Name,
+				LoggedIn:     p.Token != "",
+				Store:        p.Store,
+				SameAsActive: same[name],
 			}
 			// --refresh: live-verify only profiles that actually hold a
 			// token. A per-profile failure is recorded, never fatal — the
@@ -127,15 +139,17 @@ func renderProfilesText(out io.Writer, result profilesOutput) error {
 	}
 
 	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ACTIVE\tPROFILE\tURL\tUSERNAME\tLOGIN")
+	fmt.Fprintln(tw, "ACTIVE\tPROFILE\tURL\tUSERNAME\tLOGIN\tSTORE")
 	for _, p := range result.Profiles {
 		marker := ""
 		if p.Active {
 			marker = "*"
+		} else if p.SameAsActive {
+			marker = "="
 		}
 		login := loginCell(p)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			marker, p.Name, dashIfEmpty(p.URL), dashIfEmpty(p.Username), login)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			marker, p.Name, dashIfEmpty(p.URL), dashIfEmpty(p.Username), login, dashIfEmpty(p.Store))
 	}
 	return tw.Flush()
 }
