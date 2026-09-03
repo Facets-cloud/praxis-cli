@@ -125,7 +125,7 @@ Credentials are never moved: a control-plane PAT stays in
 		// [default] that already holds this profile's credentials is not a
 		// switch, whatever its name.
 		prior, _ := credentials.ResolveActive("")
-		if prior.Name != name && prior.Source != credentials.SourceEnv && credentials.SameCreds(prior.Name, name) {
+		if prior.Name != name && prior.Source != credentials.SourceEnv && prior.Source != credentials.SourceFacetsEnv && credentials.SameCreds(prior.Name, name) {
 			prior.Name = name
 		}
 
@@ -197,8 +197,9 @@ Credentials are never moved: a control-plane PAT stays in
 		}
 		// The switch is real but can be invisible where it was run: a session
 		// with the profile in its environment keeps using that.
-		if prior.Source == credentials.SourceEnv && prior.Name != name {
+		if (prior.Source == credentials.SourceEnv || prior.Source == credentials.SourceFacetsEnv) && prior.Name != name {
 			summary.ShadowedByEnv = prior.Name
+			summary.ShadowVar = credentials.EnvProfileVar()
 		}
 		// A global switch from inside a local-mode tree lands in the home store,
 		// which this tree does not read.
@@ -233,7 +234,7 @@ Credentials are never moved: a control-plane PAT stays in
 				payload["effective_profile"] = summary.Previous
 			}
 			if summary.ShadowedByEnv != "" {
-				payload["shadowed_by_env"] = credentials.EnvProfile + "=" + summary.ShadowedByEnv
+				payload["shadowed_by_env"] = summary.ShadowVar + "=" + summary.ShadowedByEnv
 				payload["effective_profile"] = summary.ShadowedByEnv
 			}
 			return render.JSON(out, payload)
@@ -261,6 +262,7 @@ type switchSummary struct {
 	ProjectRoot   string
 	ShadowedRoot  string
 	ShadowedByEnv string
+	ShadowVar     string // the variable that set ShadowedByEnv
 	MultiProfile  bool
 }
 
@@ -281,9 +283,13 @@ func renderProfileSwitchText(out io.Writer, s switchSummary) {
 			filepath.Join(filepath.Dir(s.ShadowedRoot), ".facets", "credentials"), s.Previous, s.Profile)
 	}
 	if s.ShadowedByEnv != "" {
+		v := s.ShadowVar
+		if v == "" {
+			v = credentials.EnvProfile
+		}
 		fmt.Fprintf(out, "\nNote: %s=%s is set in this shell, so commands HERE still use %q.\n"+
 			"      Other sessions now get %q. Unset it to follow the switch.\n",
-			credentials.EnvProfile, s.ShadowedByEnv, s.ShadowedByEnv, s.Profile)
+			v, s.ShadowedByEnv, s.ShadowedByEnv, s.Profile)
 	}
 	// A global switch is machine-wide. Anyone running several agent sessions
 	// needs to know their skills just changed underneath them.

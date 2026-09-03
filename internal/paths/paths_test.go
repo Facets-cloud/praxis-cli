@@ -523,3 +523,21 @@ func TestProjectRoot_BarePraxisDirIsNotLocalMode(t *testing.T) {
 		t.Error("LegacyProjectPointer() reported a pointer inside a real local tree")
 	}
 }
+
+// Reading the active root is not an opt-in: a read-only command inside a
+// `raptor login --local` tree must not create <dir>/.praxis. Writers do that.
+func TestActiveRoot_DoesNotCreateTheProjectDir(t *testing.T) {
+	home := withHome(t)
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := mkProjectRoot(t, repo)
+	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
+	if got, _ := ActiveRoot(); got != root {
+		t.Fatalf("ActiveRoot() = %q, want %q", got, root)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("ActiveRoot() created %s; only writers may", root)
+	}
+}

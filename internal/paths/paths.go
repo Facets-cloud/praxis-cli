@@ -116,8 +116,8 @@ func ProjectRoot() (string, bool, error) {
 // ActiveRoot returns the project root if one is discovered (or pinned via
 // OverrideActiveRoot), else the home root. The skill receipt and MCP snapshot
 // follow this root so a project-local session keeps its skills, receipt, and
-// snapshot together. The project .praxis directory is created on demand: the
-// marker that defines the tree is the credentials file beside it.
+// snapshot together. Nothing is created here — writers make the directory
+// when they first write, so a read-only command leaves a tree untouched.
 func ActiveRoot() (string, error) {
 	if activeRootOverride != "" {
 		return activeRootOverride, nil
@@ -127,7 +127,7 @@ func ActiveRoot() (string, error) {
 		return "", err
 	}
 	if ok {
-		return root, os.MkdirAll(root, 0o700)
+		return root, nil
 	}
 	return Dir()
 }

@@ -504,3 +504,31 @@ func TestLogin_Local_MultiProfile_RefusesWithoutTerminal(t *testing.T) {
 		}
 	}
 }
+
+// A refusal must name the variable the user actually exported. FACETS_PROFILE
+// is a selector too now, and telling its user to unset PRAXIS_PROFILE sends
+// them to a variable that is not set.
+func TestLogout_RefusalNamesFacetsProfileWhenThatIsTheSelector(t *testing.T) {
+	isolateHome(t)
+	clearFacetsEnv(t)
+	seedRaptorCreds(t, threeSections)
+	t.Setenv("FACETS_PROFILE", "acme")
+	code := stubOsExit(t)
+
+	var buf bytes.Buffer
+	logoutCmd.SetOut(&buf)
+	t.Cleanup(func() { logoutCmd.SetOut(nil) })
+	if err := logoutCmd.RunE(logoutCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	if *code != exitcode.Usage {
+		t.Fatalf("exit = %d, want usage refusal", *code)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "FACETS_PROFILE=acme") || !strings.Contains(out, "unset FACETS_PROFILE") {
+		t.Errorf("refusal should name FACETS_PROFILE:\n%s", out)
+	}
+	if strings.Contains(out, "PRAXIS_PROFILE") {
+		t.Errorf("refusal names PRAXIS_PROFILE, which is not set:\n%s", out)
+	}
+}

@@ -240,6 +240,18 @@ func EnvProfileName() string {
 // PRAXIS_PROFILE so one exported variable can drive both CLIs.
 const FacetsEnvProfile = "FACETS_PROFILE"
 
+// EnvProfileVar names the variable that supplied EnvProfileName, so a message
+// about the selection points at the one the user actually exported.
+func EnvProfileVar() string {
+	if strings.TrimSpace(os.Getenv(EnvProfile)) != "" {
+		return EnvProfile
+	}
+	if strings.TrimSpace(os.Getenv(FacetsEnvProfile)) != "" {
+		return FacetsEnvProfile
+	}
+	return ""
+}
+
 func envProfile() (string, Source) {
 	if name := strings.TrimSpace(os.Getenv(EnvProfile)); name != "" {
 		return name, SourceEnv

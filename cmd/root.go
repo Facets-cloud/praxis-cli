@@ -70,7 +70,7 @@ func explicitProfile() (string, string) {
 		return rootProfile, "--profile"
 	}
 	if name := credentials.EnvProfileName(); name != "" {
-		return name, credentials.EnvProfile
+		return name, credentials.EnvProfileVar()
 	}
 	return "", ""
 }
@@ -119,7 +119,7 @@ func refusedExplicitProfile(out io.Writer, asJSON bool, what, hintFmt, acts stri
 		return refuseSelection(out, asJSON, what, hintFmt, rootProfile, "--profile", acts)
 	}
 	if env := credentials.EnvProfileName(); env != "" && !credentials.SameCreds(env, acts) {
-		return refuseSelection(out, asJSON, what, hintFmt, env, credentials.EnvProfile, acts)
+		return refuseSelection(out, asJSON, what, hintFmt, env, credentials.EnvProfileVar(), acts)
 	}
 	return false
 }
@@ -135,8 +135,8 @@ func refusedExplicitProfile(out io.Writer, asJSON bool, what, hintFmt, acts stri
 // that they switch to the profile they were already on.
 func refuseSelection(out io.Writer, asJSON bool, what, hintFmt, name, how, acts string) bool {
 	hint := fmt.Sprintf(hintFmt, name)
-	if how == credentials.EnvProfile {
-		hint = "unset " + credentials.EnvProfile + " for this command, or " + hint
+	if how == credentials.EnvProfile || how == credentials.FacetsEnvProfile {
+		hint = "unset " + how + " for this command, or " + hint
 	}
 	render.PrintError(out, asJSON,
 		fmt.Sprintf("%s can't be pointed at another profile (%s=%s); it acts on %q", what, how, name, acts),
