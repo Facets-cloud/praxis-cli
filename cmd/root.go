@@ -156,10 +156,17 @@ func Execute() {
 	// raptor's file, the shared store; its active-profile pointer becomes the
 	// [default] section. Silent and best-effort.
 	_, _ = credentials.MigrateLegacyPATs()
-	_, _ = credentials.MigrateLegacyPointer()
-	// A pre-v1.11 per-directory pointer no longer pins anything; say so once
-	// per run to a human, so a repo that used to be local mode is not a mystery.
+	promoted, kept, _ := credentials.MigrateLegacyPointer()
 	if render.IsTTY(os.Stderr) && !skipUpdateCheck(os.Args[1:]) {
+		if promoted != "" {
+			note := fmt.Sprintf("Note: profile %q is now the [default] section (your old active-profile pointer was retired).", promoted)
+			if kept != "" {
+				note += fmt.Sprintf(" The previous default was kept as [%s].", kept)
+			}
+			fmt.Fprintln(os.Stderr, note)
+		}
+		// A pre-v1.11 per-directory pointer no longer pins anything; say so once
+		// per run to a human, so a repo that used to be local mode is not a mystery.
 		if p, profile, ok := paths.LegacyProjectPointer(); ok {
 			fmt.Fprintf(os.Stderr, "Note: %s is an old per-directory pointer and is ignored. To pin this tree again run `praxis profiles use %s --local`, or delete that file.\n", p, profile)
 		}

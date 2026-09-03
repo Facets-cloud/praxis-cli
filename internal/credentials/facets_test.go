@@ -407,7 +407,7 @@ func TestMigrateLegacyPointer(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			promoted, err := MigrateLegacyPointer()
+			promoted, _, err := MigrateLegacyPointer()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -421,7 +421,7 @@ func TestMigrateLegacyPointer(t *testing.T) {
 				t.Errorf("[default] = %q, want %q", got, tt.wantDefault)
 			}
 			// Idempotent.
-			if p, err := MigrateLegacyPointer(); err != nil || p != "" {
+			if p, _, err := MigrateLegacyPointer(); err != nil || p != "" {
 				t.Errorf("second run = %q, %v", p, err)
 			}
 		})
@@ -486,7 +486,7 @@ func TestSetDefault_FromInsideATree_TargetsHome(t *testing.T) {
 	if err := os.WriteFile(legacy, []byte("[default]\nprofile = root\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	promoted, err := MigrateLegacyPointer()
+	promoted, _, err := MigrateLegacyPointer()
 	if err != nil || promoted != "root" {
 		t.Errorf("MigrateLegacyPointer from inside a tree = %q, %v; want root promoted from the home store", promoted, err)
 	}

@@ -661,38 +661,37 @@ func sortedKeys(m map[string]Profile) []string {
 // MigrateLegacyPointer retires the active-profile pointer an older praxis
 // kept at ~/.praxis/config.json. The profile it named becomes [default] (a
 // copy, so raptor follows too), then the file is removed. Returns the profile
-// promoted, or "" when the pointer named default, a missing profile, or was
-// absent.
-func MigrateLegacyPointer() (string, error) {
+// promoted — "" when the pointer named default, a missing profile, or was
+// absent — and the name a displaced, unduplicated [default] was kept under.
+func MigrateLegacyPointer() (promoted, kept string, err error) {
 	path, err := paths.LegacyConfig()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", nil
+			return "", "", nil
 		}
-		return "", err
+		return "", "", err
 	}
 	name := ""
 	if def, ok := parseRawINI(data)[DefaultProfileName]; ok {
 		name = def["profile"]
 	}
-	promoted := ""
 	if name != "" && name != DefaultProfileName {
 		store, err := loadHome()
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		if _, ok := store[name]; ok {
-			if _, err := SetDefault(name); err != nil {
-				return "", err
+			if kept, err = SetDefault(name); err != nil {
+				return "", "", err
 			}
 			promoted = name
 		}
 	}
-	return promoted, os.Remove(path)
+	return promoted, kept, os.Remove(path)
 }
 
 // ─── Hand-rolled INI parser (flat sections, key=value, # or ; comments) ──
