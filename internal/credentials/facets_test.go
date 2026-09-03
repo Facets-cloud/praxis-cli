@@ -427,3 +427,70 @@ func TestMigrateLegacyPointer(t *testing.T) {
 		})
 	}
 }
+
+// A tree's file displaces nothing global: pinning a PAT named like a global
+// API key must leave the API key in the praxis file.
+func TestPutLocal_DoesNotTouchThePraxisFile(t *testing.T) {
+	home := withHome(t)
+	if err := Put("default", Profile{URL: "https://k.test", Username: "k", Token: "sk"}); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := PutLocal("default", FacetsProfile("https://acme.test", "u@x", "pat"), repo); err != nil {
+		t.Fatal(err)
+	}
+	praxis, _ := loadPraxis()
+	if praxis["default"].Token != "sk" {
+		t.Errorf("praxis file [default] = %+v; a local pin must not delete it", praxis["default"])
+	}
+}
+
+// SetDefault and the pointer migration are HOME operations: run from inside a
+// local tree they must read and write the home store, not the tree's file.
+func TestSetDefault_FromInsideATree_TargetsHome(t *testing.T) {
+	home := withHome(t)
+	seedFacets(t, homeFacets(t), twoRaptorSections) // default=root, acme
+	repo := filepath.Join(home, "repo")
+	if err := SetDefaultLocal("acme", repo); err != nil {
+		t.Fatal(err)
+	}
+	// A profile only the home store has.
+	if err := Put("zed", FacetsProfile("https://zed.test", "z", "pat-zed")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
+
+	kept, err := SetDefault("zed")
+	if err != nil {
+		t.Fatalf("SetDefault from inside a tree: %v", err)
+	}
+	// The home [default] (root.test) had no duplicate, so it is kept under
+	// its host label — from the HOME store, not the tree's.
+	if kept != "root" {
+		t.Errorf("kept %q, want root", kept)
+	}
+	if h := loadFacets(homeFacets(t)); h["default"].URL != "https://zed.test" || h["root"].Token != "pat-root" {
+		t.Errorf("home store = %+v, want default=zed and root kept", h)
+	}
+	if tree := loadFacets(FacetsPathIn(repo)); tree["default"].URL != "https://acme.test" {
+		t.Errorf("tree [default] = %+v; a global switch must not repin the tree", tree["default"])
+	}
+
+	legacy, _ := paths.LegacyConfig()
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("[default]\nprofile = root\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	promoted, err := MigrateLegacyPointer()
+	if err != nil || promoted != "root" {
+		t.Errorf("MigrateLegacyPointer from inside a tree = %q, %v; want root promoted from the home store", promoted, err)
+	}
+	if h := loadFacets(homeFacets(t)); h["default"].URL != "https://root.test" {
+		t.Errorf("home [default] after migration = %+v, want root", h["default"])
+	}
+}

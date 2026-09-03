@@ -315,7 +315,9 @@ func SetDefault(name string) (kept string, err error) {
 	if name == DefaultProfileName {
 		return "", nil
 	}
-	store, err := Load()
+	// The home store, not Load(): a global switch run from inside a local
+	// tree must still read and write the home [default].
+	store, err := loadHome()
 	if err != nil {
 		return "", err
 	}
@@ -401,6 +403,24 @@ func Load() (map[string]Profile, error) {
 	return store, nil
 }
 
+// loadHome is Load without the directory walk: the praxis file plus the HOME
+// facets file. Global operations (SetDefault, the pointer migration) use it so
+// running them from inside a local tree cannot redirect them to the tree.
+func loadHome() (map[string]Profile, error) {
+	store, err := loadPraxis()
+	if err != nil {
+		return nil, err
+	}
+	home, err := FacetsHome()
+	if err != nil {
+		return nil, err
+	}
+	for name, p := range loadFacets(home) {
+		store[name] = p
+	}
+	return store, nil
+}
+
 // loadPraxis reads ~/.praxis/credentials only.
 func loadPraxis() (map[string]Profile, error) {
 	path, err := paths.Credentials()
@@ -464,9 +484,8 @@ func put(name string, p Profile, dir string) error {
 			return err
 		}
 		if dir != "" {
-			if err := ensureGitignore(path); err != nil {
-				return err
-			}
+			// A tree's file displaces nothing global.
+			return ensureGitignore(path)
 		}
 		praxis, err := loadPraxis()
 		if err != nil {
@@ -662,7 +681,7 @@ func MigrateLegacyPointer() (string, error) {
 	}
 	promoted := ""
 	if name != "" && name != DefaultProfileName {
-		store, err := Load()
+		store, err := loadHome()
 		if err != nil {
 			return "", err
 		}
