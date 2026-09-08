@@ -123,6 +123,17 @@ func TestResolve_Chain(t *testing.T) {
 	}
 }
 
+func TestInstalled(t *testing.T) {
+	stubInstalled(t, true)
+	if !Installed() {
+		t.Error("Installed() = false when raptor is on PATH; want true")
+	}
+	stubInstalled(t, false)
+	if Installed() {
+		t.Error("Installed() = true when raptor is absent; want false")
+	}
+}
+
 func TestResolve_InstalledFlag(t *testing.T) {
 	clearRaptorEnv(t)
 	stubInstalled(t, false)

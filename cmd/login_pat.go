@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,16 +24,46 @@ func patPageURL(baseURL string) string {
 	return normalizeBaseURL(baseURL) + "/v2/home#personal-access-tokens"
 }
 
-// Prompt seams: tests drive the interactive flow without a terminal.
+// buildPATLoginURL is patPageURL plus a cli_session nonce the control-plane UI
+// reads to deposit the freshly-created token straight back to the CLI — the same
+// nonce handshake the Praxis API-key flow uses (browserSessionPollLogin).
+// Composed from patPageURL so the page URL exists exactly once; the nonce rides
+// as a query param BEFORE the fragment so it survives the SPA's hash routing.
+func buildPATLoginURL(baseURL, nonce string) string {
+	return strings.Replace(patPageURL(baseURL), "#", "?cli_session="+nonce+"#", 1)
+}
+
+// patDeposit is the JSON the control-plane UI deposits for a control-plane PAT.
+// A PAT authenticates as Bearer + X-Facets-Username, so the session value must
+// carry BOTH the token and the username — unlike a Praxis API key, which is the
+// bearer string alone. The session endpoint relays this verbatim as an opaque
+// plaintext_key, so carrying the username needs no server change.
+type patDeposit struct {
+	Username string `json:"username"`
+	Token    string `json:"token"`
+}
+
+// decodePATDeposit parses the value the control-plane UI deposited. A payload
+// that isn't the expected {username, token} JSON reads as "no usable PAT", so
+// the caller falls through to the Praxis API-key flow rather than failing.
+func decodePATDeposit(raw string) (username, token string, err error) {
+	var d patDeposit
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		return "", "", err
+	}
+	if d.Username == "" || d.Token == "" {
+		return "", "", errors.New("deposit missing username or token")
+	}
+	return d.Username, d.Token, nil
+}
+
+// Prompt seams: tests drive the URL prompt and the Enter-to-skip gesture
+// without a terminal.
 var (
 	stdinIsTTY = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
-	readSecret = func() (string, error) {
-		b, err := term.ReadPassword(int(os.Stdin.Fd()))
-		return string(b), err
-	}
-	// readLine reads one line unbuffered. A bufio.Reader would consume past the
-	// newline into its own buffer, and readSecret reads the raw fd — so a
-	// username and token pasted together would lose the token.
+	// readLine reads one line from stdin, one byte at a time so nothing past
+	// the newline is consumed — used by promptLoginURL and the PAT tier's
+	// Enter-to-skip watcher.
 	readLine = func() (string, error) {
 		var line []byte
 		buf := make([]byte, 1)
@@ -60,40 +92,69 @@ func interactivePATEligible(baseURL string, asJSON bool) bool {
 	return !asJSON && stdinIsTTY() && patTransportOK(baseURL)
 }
 
-// tryInteractivePAT opens the control plane's personal-access-token page and
-// takes the token the user creates there, the way `raptor login` does. It is
-// the tier between raptor's stored PAT and minting a Praxis API key, so a
-// control-plane PAT is what praxis authenticates with whether or not raptor
-// ever ran here.
-//
-// handled=false (never an error) sends the caller on to the Praxis API-key
-// flow: not eligible, an empty answer at either prompt, or a PAT the server
-// would not take. That last case matches tryFacetsPAT rather than failing the
-// login — the API key is the final fallback, so the chain keeps walking.
+// tryInteractivePAT opens the control plane's personal-access-token page with a
+// cli_session nonce and polls the same session endpoint the API-key flow uses
+// until the page deposits the token the user creates there. The deposit is JSON
+// ({username, token}) — a control-plane PAT needs the username for its
+// X-Facets-Username header (see patDeposit) — and Enter skips the wait, the
+// escape the paste flow had. handled=false (never an error) sends the caller on
+// to the Praxis API-key flow: not eligible, skipped, nothing deposited in time,
+// an unexpected payload, or a PAT the server would not take.
 func tryInteractivePAT(out io.Writer, asJSON bool, profileName, baseURL string, local bool) (bool, error) {
 	if !interactivePATEligible(baseURL, asJSON) {
 		return false, nil
 	}
 
-	page := patPageURL(baseURL)
+	nonce := randomNonce()
+	page := buildPATLoginURL(baseURL, nonce)
 	fmt.Fprintln(os.Stderr, "Opening the control plane to create a personal access token…")
 	fmt.Fprintf(os.Stderr, "  %s\n", page)
 	if err := openBrowser(page); err != nil {
 		fmt.Fprintf(os.Stderr, "\nCouldn't auto-open browser (%v). Open the URL above manually.\n", err)
 	}
-	fmt.Fprintln(os.Stderr, "Create a token there, then paste it below.")
-	fmt.Fprintln(os.Stderr, "(Press Enter at either prompt to create a Praxis API key instead.)")
+	fmt.Fprintf(os.Stderr, "Create the token there — it's picked up automatically (up to %s).\n", loginTimeout)
+	fmt.Fprintln(os.Stderr, "(Press Enter to skip and create a Praxis API key instead.)")
 
-	username := prompt("Username (your control-plane email): ", readLine)
-	if username == "" {
-		return false, nil
-	}
-	token := prompt("Personal access token: ", readSecret)
-	fmt.Fprintln(os.Stderr)
-	if token == "" {
-		return false, nil
+	ctx, cancel := context.WithTimeout(context.Background(), loginTimeout)
+	defer cancel()
+	// Enter = skip. Without it a user who wants the API key waits out this whole
+	// tier, then the API-key browser's own timeout — --timeout twice over.
+	// readLine is captured before the goroutine starts: the goroutine can outlive
+	// this call (stdin has no cancel), so it must not touch the package var.
+	skipped := make(chan struct{})
+	read := readLine
+	go func() {
+		if _, err := read(); err == nil {
+			close(skipped)
+			cancel()
+		}
+	}()
+
+	deposited, err := pollSessionKey(ctx, baseURL, nonce, pollInterval)
+	if err != nil {
+		select {
+		case <-skipped:
+			return patFallThrough("Skipping the control-plane token")
+		default:
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return patFallThrough("No token was created within %s", loginTimeout)
+		}
+		return patFallThrough("Couldn't pick up a control-plane token (%v)", err)
 	}
 
+	username, token, err := decodePATDeposit(deposited)
+	if err != nil {
+		return patFallThrough("The control plane returned an unexpected token payload (%v)", err)
+	}
+	return verifyAndPersistPAT(out, asJSON, profileName, baseURL, username, token, local)
+}
+
+// verifyAndPersistPAT is the tail every interactive PAT acquisition shares:
+// prove the pair against /auth/me, then persist it (credentials, raptor profile,
+// post-auth setup). handled=false hands the chain on when the server won't vouch
+// for the token.
+func verifyAndPersistPAT(out io.Writer, asJSON bool, profileName, baseURL, username, token string, local bool) (bool, error) {
 	prof := credentials.FacetsProfile(baseURL, username, token)
 	user, err := fetchAuthMe(baseURL, prof.Auth())
 	if err != nil {
@@ -101,12 +162,17 @@ func tryInteractivePAT(out io.Writer, asJSON bool, profileName, baseURL string, 
 		if errors.Is(err, errTokenRejected) {
 			verdict = "was not accepted"
 		}
-		fmt.Fprintf(os.Stderr,
-			"The control-plane token for %s %s at %s (%v); opening browser to create a Praxis API key…\n",
-			username, verdict, baseURL, err)
-		return false, nil
+		return patFallThrough("The control-plane token for %s %s at %s (%v)", username, verdict, baseURL, err)
 	}
 	return true, persistVerified(out, asJSON, profileName, prof, user, username, local)
+}
+
+// patFallThrough reports why the PAT tier is handing off to the API-key flow.
+// Stderr in both output modes: it can't corrupt --json, and a silent fallback is
+// the one thing an AI host can't diagnose.
+func patFallThrough(format string, args ...any) (bool, error) {
+	fmt.Fprintf(os.Stderr, format+"; opening browser to create a Praxis API key…\n", args...)
+	return false, nil
 }
 
 // promptLoginURL asks for the control-plane URL when no flag, saved profile or

@@ -37,10 +37,10 @@ Once logged in, you (the AI host) can, on the user's behalf:
    ```
 
    It opens the control plane's personal-access-token page in the user's
-   browser — the same page `raptor login` uses — and asks them to paste the
-   token they create there. **The prompt is in their terminal, so hand the
-   terminal back to them for this step.** If `raptor` is already logged in on
-   the machine, login reuses that token instead and there is nothing to do.
+   browser — the same page `raptor login` uses. **The user creates a token
+   there and login picks it up automatically; nothing is typed into the
+   terminal.** If `raptor` is already logged in on the machine, login reuses
+   that token instead and no browser opens at all.
    Either way it then saves the credential, saves the same token as a
    `raptor` profile (so `raptor` needs no separate login), installs the
    org's skills, and writes the MCP tool snapshot. For multiple orgs use
@@ -67,7 +67,7 @@ log in).
 
 ## Don'ts
 
-- **Don't** ask the user to paste a token into the chat — `praxis login`
-  prompts for it in the terminal, with the input hidden.
+- **Don't** ask the user to paste a token anywhere — `praxis login` picks the
+  token up from the browser by itself.
 - **Don't** guess a console URL — it comes from their facets.cloud/signup.
 - **Don't** tell the user to run praxis commands; run them yourself.

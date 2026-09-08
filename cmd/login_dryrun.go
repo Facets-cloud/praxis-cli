@@ -94,10 +94,10 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 	}
 
 	// Every path that lands on the API-key browser now passes through the
-	// control-plane PAT prompt first, so the report has to say so or it claims
-	// a browser where login would ask for a token.
+	// control-plane PAT browser first, so the report has to say so or it claims
+	// a plain API-key browser where login would create a control-plane token.
 	if strings.HasPrefix(action, "browser") && interactivePATEligible(baseURL, asJSON) {
-		action = "control-plane PAT prompt, else " + action
+		action = "control-plane PAT (browser), else " + action
 	}
 
 	// Where the credential lands: a control-plane PAT in raptor's store (shared
@@ -111,12 +111,12 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 	case strings.HasPrefix(action, "facets-pat"),
 		strings.HasPrefix(action, "reuse-token") && prof.AuthMode == credentials.AuthModeBasic:
 		storeEffect = fmt.Sprintf("%s [%s] (shared with raptor)", facetsFile, profileName)
-	case strings.HasPrefix(action, "control-plane PAT prompt"):
-		storeEffect = fmt.Sprintf("%s [%s] (shared with raptor) if a control-plane PAT is pasted, else ~/.praxis/credentials", facetsFile, profileName)
+	case strings.HasPrefix(action, "control-plane PAT"):
+		storeEffect = fmt.Sprintf("%s [%s] (shared with raptor) if a control-plane PAT is created, else ~/.praxis/credentials", facetsFile, profileName)
 	}
 
 	if local && !strings.Contains(storeEffect, "shared with raptor") {
-		storeEffect = "refused: local mode needs a control-plane PAT (drop --local, or paste a PAT)"
+		storeEffect = "refused: local mode needs a control-plane PAT (drop --local, or create a PAT)"
 	}
 
 	skillsEffect := fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)
