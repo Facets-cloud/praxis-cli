@@ -96,7 +96,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 	// Every path that lands on the API-key browser now passes through the
 	// control-plane PAT browser first, so the report has to say so or it claims
 	// a plain API-key browser where login would create a control-plane token.
-	if strings.HasPrefix(action, "browser") && interactivePATEligible(baseURL, asJSON) {
+	if strings.HasPrefix(action, "browser") && interactivePATEligible(baseURL) {
 		action = "control-plane PAT (browser), else " + action
 	}
 

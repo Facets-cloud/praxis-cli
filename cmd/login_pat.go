@@ -85,23 +85,27 @@ var (
 	}
 )
 
-// interactivePATEligible reports whether login can ask for a control-plane PAT.
-// Shared with --dry-run so the report cannot disagree with the chain. Every
-// deployment validates control-plane PATs, so only local gates apply.
-func interactivePATEligible(baseURL string, asJSON bool) bool {
-	return !asJSON && stdinIsTTY() && patTransportOK(baseURL)
+// interactivePATEligible reports whether login should use the control-plane PAT
+// pickup: any control plane reachable over a safe transport. Deliberately NOT
+// gated on a TTY or JSON mode — the pickup is a browser-deposit flow that reads
+// no keyboard, exactly like the Praxis API-key flow (browserSessionPollLogin),
+// which already runs for agents. So an agent driving `praxis login` gets a
+// raptor-usable control-plane PAT, not a Praxis API key. No auth-mode probe:
+// every deployment validates control-plane PATs. Shared with --dry-run so the
+// report can't disagree with the chain.
+func interactivePATEligible(baseURL string) bool {
+	return patTransportOK(baseURL)
 }
 
 // tryInteractivePAT opens the control plane's personal-access-token page with a
 // cli_session nonce and polls the same session endpoint the API-key flow uses
 // until the page deposits the token the user creates there. The deposit is JSON
 // ({username, token}) — a control-plane PAT needs the username for its
-// X-Facets-Username header (see patDeposit) — and Enter skips the wait, the
-// escape the paste flow had. handled=false (never an error) sends the caller on
-// to the Praxis API-key flow: not eligible, skipped, nothing deposited in time,
-// an unexpected payload, or a PAT the server would not take.
+// X-Facets-Username header (see patDeposit). handled=false (never an error)
+// sends the caller on to the Praxis API-key flow: not eligible, skipped, nothing
+// deposited in time, an unexpected payload, or a PAT the server would not take.
 func tryInteractivePAT(out io.Writer, asJSON bool, profileName, baseURL string, local bool) (bool, error) {
-	if !interactivePATEligible(baseURL, asJSON) {
+	if !interactivePATEligible(baseURL) {
 		return false, nil
 	}
 
@@ -113,22 +117,27 @@ func tryInteractivePAT(out io.Writer, asJSON bool, profileName, baseURL string, 
 		fmt.Fprintf(os.Stderr, "\nCouldn't auto-open browser (%v). Open the URL above manually.\n", err)
 	}
 	fmt.Fprintf(os.Stderr, "Create the token there — it's picked up automatically (up to %s).\n", loginTimeout)
-	fmt.Fprintln(os.Stderr, "(Press Enter to skip and create a Praxis API key instead.)")
 
 	ctx, cancel := context.WithTimeout(context.Background(), loginTimeout)
 	defer cancel()
-	// Enter = skip. Without it a user who wants the API key waits out this whole
-	// tier, then the API-key browser's own timeout — --timeout twice over.
-	// readLine is captured before the goroutine starts: the goroutine can outlive
-	// this call (stdin has no cancel), so it must not touch the package var.
-	skipped := make(chan struct{})
-	read := readLine
-	go func() {
-		if _, err := read(); err == nil {
-			close(skipped)
-			cancel()
-		}
-	}()
+	// Enter = skip to the Praxis API-key flow — but only at a real terminal,
+	// where a human can press it. An agent has no keyboard (and can pass --token
+	// for an API key), so its stdin is left untouched and `skipped` stays nil (a
+	// nil channel never fires in the select below). readLine is captured before
+	// the goroutine starts: the goroutine can outlive this call (stdin has no
+	// cancel), so it must not touch the package var.
+	var skipped chan struct{}
+	if stdinIsTTY() {
+		fmt.Fprintln(os.Stderr, "(Press Enter to skip and create a Praxis API key instead.)")
+		skipped = make(chan struct{})
+		read := readLine
+		go func() {
+			if _, err := read(); err == nil {
+				close(skipped)
+				cancel()
+			}
+		}()
+	}
 
 	deposited, err := pollSessionKey(ctx, baseURL, nonce, pollInterval)
 	if err != nil {

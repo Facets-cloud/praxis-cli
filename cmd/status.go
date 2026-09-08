@@ -226,21 +226,6 @@ func raptorInstallHint(goos, goarch string) map[string]any {
 	return hint
 }
 
-// raptorInstallCommand is the copy-paste sudo one-liner login's install hint
-// shows a human — the interactive counterpart of raptorInstallHint's
-// no_sudo_commands, kept beside it so the two recipes can't drift apart. -f
-// makes a failed download exit non-zero instead of installing an HTML error
-// page as the binary. "" when raptor publishes no build for this platform.
-func raptorInstallCommand() string {
-	asset := raptorAssetName(runtime.GOOS, runtime.GOARCH)
-	if asset == "" {
-		return ""
-	}
-	url := raptorDownloadURL + asset
-	return fmt.Sprintf("curl -fsSL %s -o %s && chmod +x %s && sudo mv %s /usr/local/bin/raptor",
-		url, asset, asset, asset)
-}
-
 // raptorStatusBlock shapes a raptorstate.State for JSON output. `installed`
 // and `found` are always present; resolution detail only when it exists, and
 // the praxis-URL comparison only when a control plane actually resolved.

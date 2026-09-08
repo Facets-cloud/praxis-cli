@@ -37,10 +37,12 @@ Once logged in, you (the AI host) can, on the user's behalf:
    ```
 
    It opens the control plane's personal-access-token page in the user's
-   browser — the same page `raptor login` uses. **The user creates a token
-   there and login picks it up automatically; nothing is typed into the
-   terminal.** If `raptor` is already logged in on the machine, login reuses
-   that token instead and no browser opens at all.
+   browser — the same page `raptor login` uses. **A browser tab opens; tell
+   the user to create the token there and login picks it up automatically —
+   nothing is typed back to you or the terminal.** This works the same whether
+   a person or you (an agent) runs the command. If `raptor` is already logged
+   in on the machine, login reuses that token instead and no browser opens at
+   all.
    Either way it then saves the credential, saves the same token as a
    `raptor` profile (so `raptor` needs no separate login), installs the
    org's skills, and writes the MCP tool snapshot. For multiple orgs use

@@ -139,15 +139,18 @@ func TestDecodePATDeposit(t *testing.T) {
 // ─── the skip gates ──────────────────────────────────────────────────────
 
 func TestTryInteractivePAT_Skips(t *testing.T) {
+	// Only an unsafe transport skips the PAT pickup — NOT a missing TTY or JSON
+	// mode. An agent (no TTY, --json) still gets it on any control plane, exactly
+	// like the Praxis API-key flow. Both cases vary TTY/JSON to prove only the
+	// transport decides.
 	tests := []struct {
 		name    string
 		asJSON  bool
 		tty     bool
 		baseURL string
 	}{
-		{name: "json output is machine-invoked", asJSON: true, tty: true, baseURL: "https://cp.test"},
-		{name: "no tty to interact on", tty: false, baseURL: "https://cp.test"},
 		{name: "plaintext non-loopback url", tty: true, baseURL: "http://cp.test"},
+		{name: "plaintext non-loopback url, even for an agent", asJSON: true, tty: false, baseURL: "http://cp.test"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -164,6 +167,37 @@ func TestTryInteractivePAT_Skips(t *testing.T) {
 				t.Errorf("handled=%v err=%v, want false/nil so the API-key flow runs", handled, err)
 			}
 		})
+	}
+}
+
+func TestTryInteractivePAT_AgentReachesPickup(t *testing.T) {
+	// The regression that matters: an agent (no TTY, --json) on a facets
+	// deployment must reach the PAT pickup and end up with a control-plane PAT —
+	// not fall through to a Praxis API key.
+	isolateHome(t)
+	resetLoginFlags(t)
+	stubPostAuth(t)
+	stubTTY(t, false) // agent: no terminal
+	opened := stubOpenBrowser(t)
+	var gotAuth map[string]string
+	stubAuthMe(t, func(_ string, auth map[string]string) (*authMeResponse, error) {
+		gotAuth = auth
+		return &authMeResponse{Email: "u@corp"}, nil
+	})
+	srv := patDepositServer(t, depositJSON(t, "u@corp", "agent-pat"))
+
+	handled, err := tryInteractivePAT(io.Discard, true /*asJSON*/, "default", srv.URL, false)
+	if !handled || err != nil {
+		t.Fatalf("handled=%v err=%v, want the agent to be logged in via the PAT pickup", handled, err)
+	}
+	if !strings.Contains(*opened, "/v2/home?cli_session=") {
+		t.Errorf("agent opened %q, want the control-plane PAT page (not the API-key page)", *opened)
+	}
+	if gotAuth["X-Facets-Username"] != "u@corp" {
+		t.Errorf("auth headers = %v, want a control-plane PAT (Bearer + X-Facets-Username)", gotAuth)
+	}
+	if prof := mustLoadProfile(t, "default"); prof.AuthMode != credentials.AuthModeBasic {
+		t.Errorf("persisted %+v, want a control-plane PAT (auth_mode=basic), not an API key", prof)
 	}
 }
 
@@ -441,18 +475,17 @@ func TestInteractivePATEligible_DoesNotProbeServer(t *testing.T) {
 		t.Errorf("login probed %s before offering the PAT prompt", r.URL.Path)
 	}))
 	defer srv.Close()
-	origTTY := stdinIsTTY
-	stdinIsTTY = func() bool { return true }
-	t.Cleanup(func() { stdinIsTTY = origTTY })
 
-	if !interactivePATEligible(srv.URL, false) {
-		t.Error("eligible = false on a tty with a loopback url, want true")
+	if !interactivePATEligible(srv.URL) {
+		t.Error("eligible = false on a loopback url, want true")
 	}
 }
 
 func TestRunLoginDryRun_ReportsPATPrompt(t *testing.T) {
-	// --dry-run exists to predict login. Once the PAT browser sits in front of
-	// the api-key browser, a report that still says only "browser" is wrong.
+	// --dry-run predicts login. The PAT browser now sits in front of the api-key
+	// browser for EVERY facets deployment — TTY or not, JSON or not — so the
+	// report says so in all those cases; only a non-facets deployment is a plain
+	// api-key browser.
 	tests := []struct {
 		name   string
 		asJSON bool
@@ -460,10 +493,10 @@ func TestRunLoginDryRun_ReportsPATPrompt(t *testing.T) {
 		want   string
 	}{
 		{name: "human at a tty", tty: true, want: "control-plane PAT (browser), else browser"},
-		{name: "no tty means login would not open a PAT browser either", tty: false, want: "browser"},
-		// JSON output means an AI host is calling, and login skips the PAT browser
-		// there too — so the report must keep saying browser.
-		{name: "json output", asJSON: true, tty: true, want: "browser"},
+		{name: "agent (no tty) still gets the PAT browser", tty: false,
+			want: "control-plane PAT (browser), else browser"},
+		{name: "agent (json) still gets the PAT browser", asJSON: true, tty: false,
+			want: "control-plane PAT (browser), else browser"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
