@@ -175,7 +175,7 @@ func yamlString(s string) string {
 }
 
 // Fetch is the HTTP seam — tests swap it to avoid hitting the network.
-var Fetch = func(baseURL string, auth map[string]string) ([]Skill, error) {
+var Fetch = func(baseURL string, auth map[string]string, capabilities ...string) ([]Skill, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("baseURL is required")
 	}
@@ -187,6 +187,11 @@ var Fetch = func(baseURL string, auth map[string]string) ([]Skill, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
+	}
+	if caps := Capabilities(capabilities); len(caps) > 0 {
+		query := req.URL.Query()
+		query.Set("consolidated", strings.Join(caps, ","))
+		req.URL.RawQuery = query.Encode()
 	}
 	for k, v := range auth {
 		req.Header.Set(k, v)
@@ -216,7 +221,7 @@ var Fetch = func(baseURL string, auth map[string]string) ([]Skill, error) {
 	if err := json.Unmarshal(body, &skills); err != nil {
 		return nil, fmt.Errorf("parse bundle: %w", err)
 	}
-	return skills, nil
+	return FilterConsolidated(skills, capabilities), nil
 }
 
 func truncate(s string, max int) string {

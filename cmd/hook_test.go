@@ -6,6 +6,14 @@ import (
 	"testing"
 )
 
+func TestPromptNudge_MixedGatewayEnvironmentKeepsPraxisRoute(t *testing.T) {
+	for _, prompt := range []string{"debug kubernetes pods in production environment", "query New Relic for this Facets environment", "inspect cloud integrations and blueprint overrides"} {
+		if got := promptNudge(prompt); !strings.Contains(got, praxisNudge) {
+			t.Errorf("gateway route lost for %q: %s", prompt, got)
+		}
+	}
+}
+
 func TestMatches(t *testing.T) {
 	tests := []struct {
 		prompt string
@@ -76,9 +84,9 @@ func TestHookRejectsUnknownArg(t *testing.T) {
 // report-back clause fails here: an earlier "say so if none fit" made every
 // trigger-word prompt open with "no praxis skill applies".
 func TestNudgeText(t *testing.T) {
-	const want = "This prompt mentions Facets. Check whether a skill named praxis-* is " +
-		"relevant and invoke it before doing any other work."
-	if got := nudgeContext(t, runHook(t, `{"prompt":"check the blueprint"}`)); got != want {
-		t.Errorf("nudge = %q, want %q", got, want)
+	for _, tc := range []struct{ prompt, want string }{{"check the blueprint", "`raptor`"}, {"Praxis memory", "`praxis`"}, {"Kubernetes pod failure", "`praxis`"}, {"read the ig catalog", "`praxis`"}} {
+		if got := nudgeContext(t, runHook(t, `{"prompt":"`+tc.prompt+`"}`)); !strings.Contains(got, tc.want) || strings.Contains(got, "praxis-*") {
+			t.Errorf("prompt %q routed to %q, want canonical %s", tc.prompt, got, tc.want)
+		}
 	}
 }

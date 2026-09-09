@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/selfupdate"
+	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
 
 // withFakeRelease swaps the package-level seam to return the supplied release
@@ -156,6 +157,14 @@ func TestUpdateCmd_RefusesAHomebrewInstall(t *testing.T) {
 // A non-Homebrew install still updates, and targets the real file behind any
 // symlink rather than the link.
 func TestUpdateCmd_ResolvesTheLinkForANonBrewInstall(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	oldRefresh := refreshSkills
+	calledOldRefresh := false
+	refreshSkills = func() ([]skillinstall.Installation, error) { calledOldRefresh = true; return nil, nil }
+	t.Cleanup(func() { refreshSkills = oldRefresh })
+	originalRepair := updateRepairHooks
+	updateRepairHooks = func() ([]string, string) { return []string{"claude-code"}, "invalid codex hook settings" }
+	t.Cleanup(func() { updateRepairHooks = originalRepair })
 	withFakeRelease(t, newerRelease(), nil)
 
 	dir := t.TempDir()
@@ -193,5 +202,14 @@ func TestUpdateCmd_ResolvesTheLinkForANonBrewInstall(t *testing.T) {
 	}
 	if replacedTarget != want {
 		t.Fatalf("replaced %q, want the real file %q (never the link)", replacedTarget, want)
+	}
+	if calledOldRefresh {
+		t.Error("update used old running embedded bytes to refresh skills")
+	}
+	if !strings.Contains(buf.String(), `"skill_refresh_deferred": true`) {
+		t.Errorf("update must explicitly defer to newly installed binary setup: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), `"hook_repair_warning": "invalid codex hook settings"`) {
+		t.Errorf("update discarded hook repair warning: %s", buf.String())
 	}
 }

@@ -16,12 +16,14 @@ import (
 //   - use-ig: the Praxis-MCP read variant of ig's use-ig skill; reads run
 //     server-side via `praxis mcp ig`, so the host needs no local `ig`.
 //
-//go:embed embedded/praxis-onboarding embedded/use-ig
+// all: includes hidden template/assets files in the canonical package.
+//
+//go:embed all:embedded/praxis embedded/praxis-onboarding embedded/use-ig
 var treeSkillFiles embed.FS
 
 // treeSkillNames is the set of binary-embedded tree skills, in the order they
 // are declared in the embed directive above.
-var treeSkillNames = []string{"praxis-onboarding", "use-ig"}
+var treeSkillNames = []string{"praxis", "praxis-onboarding", "use-ig"}
 
 // treeSkills maps a binary-embedded multi-file skill name to its rooted file
 // tree (SKILL.md at the root, plus subdirectories like flows/). Tree skills

@@ -810,18 +810,24 @@ func activateProfile(profileName string, local bool) (string, func(), error) {
 // share it verbatim so an AI host can parse either one with the same reader.
 func setupPayload(profileName, username, baseURL, projectRoot string, local bool, state postAuthState) map[string]any {
 	payload := map[string]any{
-		"ok":               true,
-		"profile":          profileName,
-		"username":         username,
-		"url":              baseURL,
-		"scope":            scopeLabel(local),
-		"meta_skill":       state.metaSkill,
-		"catalog_skills":   state.catalogSkills,
-		"removed_skills":   state.removedSkills,
-		"agents":           state.agents,
-		"removed_agents":   state.removedAgents,
-		"snapshot_path":    state.snapshotPath,
-		"snapshot_warning": state.snapshotWarning,
+		"ok":                       true,
+		"profile":                  profileName,
+		"username":                 username,
+		"url":                      baseURL,
+		"scope":                    scopeLabel(local),
+		"meta_skill":               state.metaSkill,
+		"raptor_binary":            state.raptorBinary,
+		"raptor_skills":            state.raptorSkills,
+		"raptor_warning":           state.raptorWarning,
+		"catalog_skills":           state.catalogSkills,
+		"removed_skills":           state.removedSkills,
+		"agents":                   state.agents,
+		"removed_agents":           state.removedAgents,
+		"snapshot_path":            state.snapshotPath,
+		"snapshot_warning":         state.snapshotWarning,
+		"skill_warning":            state.skillWarning,
+		"skill_sync_complete":      state.skillWarning == "" && state.raptorWarning == "",
+		"skill_recovery_directory": state.skillRecoveryDirectory,
 	}
 	if projectRoot != "" {
 		payload["project_root"] = projectRoot

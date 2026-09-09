@@ -8,16 +8,17 @@
 
 Once installed and logged in, your local AI host can:
 
-- **Run skills published by your org** — release-debugging,
-  k8s-operations, cloud-operations, terraform-import, blueprint
-  management, module authoring, and any custom skills your team
-  publishes. The catalog is fetched fresh on every login.
+- **Use one lazy Praxis skill** — cloud/Kubernetes operations, memory,
+  duties, catalogs and migrations unfold from the CLI-owned `praxis` package.
+  The independent `raptor` skill owns Facets configuration, imports, modules
+  and releases. Your org's custom skills remain separately catalog-sourced.
 - **Investigate Kubernetes** — list connected clusters and run
   read-only kubectl against them through the `k8s_cli` MCP.
   No kubeconfig on your laptop; the server resolves credentials.
 - **Query cloud infra** — run read-only `aws`, `gcloud`, and `az`
   commands against your org's integrations through the `cloud_cli`
-  MCP. Mutating verbs blocked at the validator.
+  MCP. Most mutations are blocked; allowed exceptions such as SSM
+  `send-command` still require authorization for their actual effects.
 - **Drive Facets via Raptor** — the full `raptor` verb surface, read
   and write (projects, releases, environments, schemas, logs). Raptor
   runs as a **local CLI** under your own `raptor login` (PAT in
@@ -73,8 +74,9 @@ curl -fsSL -o praxis \
 chmod +x praxis && sudo mv praxis /usr/local/bin/
 ```
 
-Once installed, `praxis update` self-updates against GitHub Releases
-on both platforms. Latest release: <https://github.com/Facets-cloud/praxis-cli/releases/latest>.
+Once installed, `praxis update` checks Praxis releases and also runs `raptor upgrade`,
+even if Praxis is already current. Homebrew-managed Praxis is left to Homebrew;
+Raptor uses its own upgrader. Latest Praxis release: <https://github.com/Facets-cloud/praxis-cli/releases/latest>.
 
 ## Set up — one command
 
@@ -85,10 +87,11 @@ praxis login
 That's literally it. `praxis login` is a single, idempotent command
 that does everything you need:
 
-1. Installs the **praxis meta-skill** into every detected AI host
+1. Installs the **complete Praxis skill tree** into every detected AI host
    (`~/.claude/skills/praxis/`, `~/.agents/skills/praxis/`,
-   `~/.gemini/skills/praxis/`). The meta-skill teaches your AI how to
-   drive the rest of the CLI.
+   `~/.gemini/config/skills/praxis/` for Antigravity; Codex/Gemini share
+   `~/.agents/skills/`). Its root routes to references, helpers
+   and assets loaded only when needed.
 2. **Authenticates** with a control-plane token wherever it can get one:
    - If `raptor` is already logged in, login reuses that control-plane
      token (and its control plane) — nothing to click.
@@ -104,9 +107,16 @@ that does everything you need:
    profile, so `raptor` works with no second login and a `raptor login`
    is already a praxis login. A Praxis API key is not a raptor
    credential; it goes to `~/.praxis/credentials`.
-3. **Wipes any leftover org skills** from a previous profile.
-4. **Fetches your org's catalog of skills** from the Praxis server
-   and installs each one as `praxis-<name>` across every AI host.
+3. **Installs Raptor if missing**, using the public platform binary and its
+   published SHA-256 digest, without sudo. Existing binaries are not upgraded
+   by login. It installs the **complete Raptor skill** from that binary into
+   the selected host scope, then verifies both replacement packages. Existing
+   valid Raptor skills/source symlinks are preserved. An older binary without
+   the consolidated package reports incomplete setup and requires an upgrade.
+4. **Fetches and stages your org's catalog** before reconciling managed
+   skill files. Organization/personal namesakes are not obsolete merely
+   because their names start with `praxis-`. Failed fetches retain existing
+   files; uncertain or modified files require preservation and review.
 5. Writes a snapshot of available **MCP tools** to
    `~/.praxis/mcp-tools.json` so your AI can discover the gateway's
    functions without a network call.
@@ -139,8 +149,48 @@ That's it. Open Claude Code (or Codex, or Gemini CLI) and try:
 > *(your AI runs `praxis mcp ...` against your org's gateway)*
 >
 > "Debug my failed release."
-> *(your AI loads the `praxis-release-debugging` skill that login
-> just installed and walks the diagnosis with you)*
+> *(your AI follows the canonical Raptor skill's release-debugging route)*
+
+### Skill source and rolling upgrades
+
+The tracked source is [internal/skillinstall/embedded/praxis](internal/skillinstall/embedded/praxis/SKILL.md).
+The Go binary embeds its whole directory, including hidden assets. A source
+edit does not update an installed binary or an already-loaded host session.
+
+```text
+praxis-cli source -> binary -> local praxis/SKILL.md
+                                    +-- references/ (lazy)
+                                    +-- scripts/ + assets/
+                                    +-- Raptor task -> separate raptor skill
+raptor source -> Raptor binary -> staged export -> local raptor/SKILL.md
+
+AF catalog -> org/personal skills (no consolidated legacy globals)
+AF seeds   -> hosted pod skills (unchanged by CLI consolidation)
+```
+
+Agent Factory stops CLI export of all 16 Praxis and 14 Raptor legacy GLOBALs,
+even for older clients. Web/pod delivery and organization/personal skills are
+unchanged. Upgrade the CLI for bundled Praxis and install the independent Raptor
+skill; the updated server does not supply legacy fallback copies.
+
+Clients still advertise `consolidated=praxis-v1,raptor-v1` only for verified
+packages and filter exact GLOBAL replacements from older servers that still
+return them. Those compatibility checks do not override the updated server's
+export policy. Never delete server seed files or local `praxis-*` globs to
+achieve unsharing.
+
+`praxis setup` installs both skills without login, installing a missing Raptor
+binary first. Raptor downloads need network access; an existing binary can
+export its skill offline. Silent first-use bootstrap only installs the embedded
+Praxis skill and never runs or downloads Raptor. User-local binaries go to
+`~/.local/bin/raptor`; output warns if that directory needs adding to PATH.
+After self-update,
+run setup with the **new binary**: the old running process cannot supply new
+embedded bytes. Catalog refresh still requires the selected deployment's
+credentials. Review warnings and recovery paths; inspect
+[the lifecycle guide](internal/skillinstall/embedded/praxis/references/skill-lifecycle.md)
+before a repair or downgrade. Evaluation and source-preservation evidence live
+under [tests/skills/praxis](tests/skills/praxis/evaluation.md).
 
 ## Command surface
 
@@ -264,8 +314,11 @@ praxis refresh-skills [--project] [--json]
    Pass --project to pin the current directory to the active profile
    (like `praxis login --local`, minus auth) and install there.
 
-praxis update [--yes] [--json]
-   Self-update binary. --json implies --yes.
+praxis update [--yes] [--json]       # alias: praxis upgrade
+   Update Praxis and run raptor upgrade. --json implies --yes for both tools.
+   JSON reports each tool's outcome; Raptor failure does not undo a successful
+   Praxis update. Praxis skill refresh is explicitly
+   deferred to `praxis setup` using the newly installed binary.
 
 praxis version [--json]   build metadata
 praxis completion <shell> shell completion script (bash/zsh/fish/ps)
@@ -274,15 +327,17 @@ praxis help               cobra help
 
 ### Core invariant
 
-> **Whatever changes the active profile also re-installs the skills.**
-> The CLI's on-disk state always matches the active profile.
+> **Changing the active profile also attempts to synchronize its catalog.**
+> Inspect synchronization warnings: saved credentials and installed skill
+> context are separate, especially after a fetch or filesystem failure.
 
 The active profile is the `[default]` section of the credentials store —
-the same rule raptor uses, so the two CLIs always agree. Only two commands
+the same rule Raptor uses for shared Facets PAT profiles. Explicit profile/env
+selection and project-local stores can still differ. Only two commands
 change it — `praxis login [--profile X]` and `praxis profiles use X` —
-both by copying X's section over `[default]`, and both wipe the previous
-profile's org skills and install X's in the same step. At the **user
-(global) level** there's never a mixed-profile state on disk.
+both by copying X's section over `[default]`, followed by staged catalog
+synchronization in the active install root. Existing content is retained on
+fetch failure; unproven ownership requires review, not a prefix-wide wipe.
 `refresh-skills` runs the same post-login flow without changing
 credentials.
 
@@ -326,8 +381,8 @@ It only:
    API key in `~/.praxis/credentials`)
 2. Copies it over `[default]`, making it the active profile for praxis
    and raptor alike
-3. Wipes the *previous* profile's `praxis-*` org skills from disk
-4. Installs the *new* profile's catalog skills in their place
+3. Fetches and stages the new profile's complete catalog
+4. Reconciles managed skills, preserving uncertain/modified content for recovery
 5. Refreshes `~/.praxis/mcp-tools.json` to match
 
 The meta-skill (`~/.claude/skills/praxis/SKILL.md`) is profile-
@@ -341,7 +396,7 @@ Before login --profile bigcorp:
 After login --profile bigcorp --url ...:
   ~/.praxis/credentials:  [default] [acme] [bigcorp]   active = bigcorp
   ~/.claude/skills:       praxis  praxis-bigcorp-* (8)
-                          (acme's skills wiped — bigcorp's installed)
+                          (after successful managed-catalog reconciliation)
 ```
 
 `[acme]`'s saved URL and token are still there.
@@ -355,7 +410,7 @@ praxis profiles use acme     # switch back to acme
 
 No `--url` and no browser: acme's URL is already saved and its stored
 token is re-validated against the deployment. The `praxis-acme-*` skills
-come back from the server, `praxis-bigcorp-*` get wiped, and the MCP
+come back from the server, prior managed catalog entries are reconciled, and the MCP
 snapshot is rewritten — the invariant above, in one command.
 
 For a **single** command against another deployment, don't switch at all
