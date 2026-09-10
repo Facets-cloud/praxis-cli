@@ -1,63 +1,25 @@
 package cmd
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/term"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
-	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 )
-
-// facetsAuthMode is the server's auth_mode when it validates control-plane PATs.
-const facetsAuthMode = "facets"
-
-// authModeTimeout bounds the auth-mode probe; an unanswered probe just means
-// "keep the API-key flow", so there is nothing to wait for.
-const authModeTimeout = 3 * time.Second
 
 // patPageURL is the control-plane page that mints a personal access token — the
 // same page `raptor login` opens, so one token serves both CLIs.
 func patPageURL(baseURL string) string {
 	return normalizeBaseURL(baseURL) + "/v2/home#personal-access-tokens"
-}
-
-// fetchAuthMode reports the deployment's auth mode from GET
-// /ai-api/auth/status, which is public and never 401s by contract. Returns ""
-// for any unusable answer — unreachable, non-200, unparseable, or a deployment
-// old enough not to serve it — which callers read as "not facets mode", so an
-// older deployment keeps the behavior it had before this probe existed.
-var fetchAuthMode = func(baseURL string) string {
-	req, err := http.NewRequest(http.MethodGet, baseURL+"/ai-api/auth/status", nil)
-	if err != nil {
-		return ""
-	}
-	resp, err := httpclient.New(authModeTimeout).Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return ""
-	}
-	var body struct {
-		AuthMode string `json:"auth_mode"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return ""
-	}
-	return strings.ToLower(strings.TrimSpace(body.AuthMode))
 }
 
 // Prompt seams: tests drive the interactive flow without a terminal.
@@ -92,13 +54,10 @@ var (
 )
 
 // interactivePATEligible reports whether login can ask for a control-plane PAT.
-// Shared with --dry-run so the report cannot disagree with the chain. Ordered
-// cheapest-first: the network probe runs only once the local gates pass.
+// Shared with --dry-run so the report cannot disagree with the chain. Every
+// deployment validates control-plane PATs, so only local gates apply.
 func interactivePATEligible(baseURL string, asJSON bool) bool {
-	if asJSON || !stdinIsTTY() || !patTransportOK(baseURL) {
-		return false
-	}
-	return fetchAuthMode(baseURL) == facetsAuthMode
+	return !asJSON && stdinIsTTY() && patTransportOK(baseURL)
 }
 
 // tryInteractivePAT opens the control plane's personal-access-token page and
