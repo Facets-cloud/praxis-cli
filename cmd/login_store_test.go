@@ -60,7 +60,6 @@ func driveInteractivePAT(t *testing.T, username, token string) {
 	t.Helper()
 	clearFacetsEnv(t)
 	stubPrompts(t, username, token)
-	stubAuthMode(t, facetsAuthMode)
 	stubOpenBrowser(t)
 	orig := interactivePATFn
 	interactivePATFn = func(out io.Writer, _ bool, profileName, baseURL string, local bool) (bool, error) {
