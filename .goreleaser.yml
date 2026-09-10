@@ -72,10 +72,6 @@ homebrew_casks:
     homepage: https://facets.cloud
     description: Bring Praxis cloud capabilities to any local AI host
     license: MIT
-    # Helps `brew audit` pass when homepage domain differs from the
-    # GitHub Releases download domain.
-    url:
-      verified: github.com/Facets-cloud/praxis-cli/
     # Binary is unsigned/un-notarized — strip the macOS quarantine
     # attribute on install so Gatekeeper doesn't block first launch.
     # Operate on staged_path (the dir) rather than a specific filename:
