@@ -125,7 +125,7 @@ func TestRefreshSkills_ProjectFlag_ScopesToProjectDir(t *testing.T) {
 		}, nil, nil)
 
 	origFetchSk := fetchCatalog
-	fetchCatalog = func(_ string, _ map[string]string) ([]skillcatalog.Skill, error) { return nil, nil }
+	fetchCatalog = func(_ string, _ map[string]string, _ ...string) ([]skillcatalog.Skill, error) { return nil, nil }
 	t.Cleanup(func() { fetchCatalog = origFetchSk })
 	origFetchAg := fetchAgents
 	fetchAgents = func(_ string, _ map[string]string) ([]agentcatalog.Agent, error) { return nil, nil }

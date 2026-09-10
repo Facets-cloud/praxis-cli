@@ -27,7 +27,7 @@ func TestCanonicalGitURL(t *testing.T) {
 
 func TestNudgeContextNamesCatalogsAndSkill(t *testing.T) {
 	got := NudgeContext([]string{"capillary-cloud", "saas-cp"})
-	for _, sub := range []string{"capillary-cloud", "saas-cp", "use-ig", "praxis mcp ig"} {
+	for _, sub := range []string{"capillary-cloud", "saas-cp", "`praxis`", "references/catalog-read.md", "praxis mcp ig"} {
 		if !contains(got, sub) {
 			t.Errorf("nudge missing %q: %s", sub, got)
 		}
