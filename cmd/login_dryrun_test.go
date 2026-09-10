@@ -104,15 +104,15 @@ func TestLoginDryRun_TokenAndReachabilityMatrix(t *testing.T) {
 	}{
 		{
 			name: "no token, reachable server (401 on empty probe)", authErr: errTokenRejected,
-			wantStatus: "none", wantAction: "browser", wantOK: true, wantExit: -1,
+			wantStatus: "none", wantAction: "control-plane PAT (browser), else browser", wantOK: true, wantExit: -1,
 		},
 		{
 			name: "stored token rejected falls back to browser", seedToken: "dead", authErr: errTokenRejected,
-			wantStatus: "stored-invalid", wantAction: "browser", wantOK: true, wantExit: -1,
+			wantStatus: "stored-invalid", wantAction: "control-plane PAT (browser), else browser", wantOK: true, wantExit: -1,
 		},
 		{
 			name: "stored token valid with --force still browsers", seedToken: "tok", force: true,
-			wantStatus: "stored-valid", wantAction: "browser (--force)", wantOK: true, wantExit: -1,
+			wantStatus: "stored-valid", wantAction: "control-plane PAT (browser), else browser (--force)", wantOK: true, wantExit: -1,
 		},
 		{
 			name: "supplied token valid", suppliedTok: "sk_new",

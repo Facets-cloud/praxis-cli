@@ -71,7 +71,8 @@ func init() {
 	loginCmd.Flags().BoolVar(&loginLocal, "local", false,
 		"pin this profile to the current directory tree (writes <cwd>/.facets/credentials, which raptor reads too, and <cwd>/.praxis) and install its skills project-scoped, instead of switching the global profile; needs a control-plane PAT")
 	loginCmd.Flags().BoolVar(&loginJSON, "json", false, "JSON output")
-	loginCmd.Flags().DurationVar(&loginTimeout, "timeout", 90*time.Second, "max time to wait for browser callback")
+	loginCmd.Flags().DurationVar(&loginTimeout, "timeout", 90*time.Second,
+		"max time to wait for each browser step (the control-plane token pickup, then the API-key callback if login falls through to it)")
 	loginCmd.Flags().BoolVar(&loginDryRun, "dry-run", false,
 		"report what login would do (profile, URL reachability, browser-or-reuse, skill effect) and exit — no browser, no API key, no credential or skill changes")
 	rootCmd.AddCommand(loginCmd)
@@ -91,7 +92,8 @@ var loginCmd = &cobra.Command{
        b. the control-plane PAT in raptor's ~/.facets/credentials
           (no browser)
        c. the control plane's personal-access-token page — the same page
-          "raptor login" opens; create a token, paste it back
+          "raptor login" opens; create a token there and login picks it
+          up automatically
        d. a Praxis API key, created in the browser
      Login walks the chain until one works. Use --token to supply a
      Praxis API key directly, or --force to skip (a) and

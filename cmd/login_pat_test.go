@@ -2,28 +2,36 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 )
 
 // ─── test helpers ────────────────────────────────────────────────────────
 
-// stubPrompts makes the interactive PAT path answerable from a test: a TTY is
-// claimed, the line prompt reads from `username`, and the masked prompt returns
-// `token`.
-func stubPrompts(t *testing.T, username, token string) {
+// stubTTY claims (or denies) a terminal so the PAT eligibility gate can be
+// driven without a real stdin.
+func stubTTY(t *testing.T, on bool) {
 	t.Helper()
-	origTTY, origSecret, origLine := stdinIsTTY, readSecret, readLine
-	stdinIsTTY = func() bool { return true }
-	readLine = func() (string, error) { return username, nil }
-	readSecret = func() (string, error) { return token, nil }
-	t.Cleanup(func() { stdinIsTTY, readSecret, readLine = origTTY, origSecret, origLine })
+	orig := stdinIsTTY
+	stdinIsTTY = func() bool { return on }
+	t.Cleanup(func() { stdinIsTTY = orig })
+}
+
+// stubReadLine drives the Enter-to-skip watcher (and the URL prompt) from a
+// test: readLine returns line without touching a real stdin.
+func stubReadLine(t *testing.T, line string) {
+	t.Helper()
+	orig := readLine
+	readLine = func() (string, error) { return line, nil }
+	t.Cleanup(func() { readLine = orig })
 }
 
 // stubOpenBrowser records the URL login would open without opening it.
@@ -36,7 +44,38 @@ func stubOpenBrowser(t *testing.T) *string {
 	return &got
 }
 
-// ─── patPageURL ──────────────────────────────────────────────────────────
+// patDepositServer stands in for the control plane's cli-session endpoint that
+// the PAT flow polls: 200 with the given plaintext_key, or — when it is "" —
+// 204 (nothing deposited yet) so the poll runs until the caller's timeout.
+func patDepositServer(t *testing.T, plaintextKey string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/key") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if plaintextKey == "" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"plaintext_key": plaintextKey})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// depositJSON is the {username, token} payload the control-plane UI deposits.
+func depositJSON(t *testing.T, username, token string) string {
+	t.Helper()
+	b, err := json.Marshal(patDeposit{Username: username, Token: token})
+	if err != nil {
+		t.Fatalf("marshal deposit: %v", err)
+	}
+	return string(b)
+}
+
+// ─── patPageURL / buildPATLoginURL ───────────────────────────────────────
 
 func TestPatPageURL(t *testing.T) {
 	// Must stay byte-identical to what `raptor login` opens
@@ -58,25 +97,66 @@ func TestPatPageURL(t *testing.T) {
 	}
 }
 
+func TestBuildPATLoginURL(t *testing.T) {
+	// The nonce must ride as a query param BEFORE the fragment, or the SPA's hash
+	// routing swallows it and the deposit can't find the session.
+	got := buildPATLoginURL("https://cp.test/", "abc123")
+	want := "https://cp.test/v2/home?cli_session=abc123#personal-access-tokens"
+	if got != want {
+		t.Errorf("buildPATLoginURL = %q, want %q", got, want)
+	}
+	if strings.Index(got, "?cli_session=") > strings.Index(got, "#") {
+		t.Errorf("nonce query must precede the fragment: %q", got)
+	}
+}
+
+func TestDecodePATDeposit(t *testing.T) {
+	tests := []struct {
+		name, raw, wantUser, wantTok string
+		wantErr                      bool
+	}{
+		{name: "valid", raw: `{"username":"u@corp","token":"pat"}`, wantUser: "u@corp", wantTok: "pat"},
+		{name: "not json", raw: "just-a-token", wantErr: true},
+		{name: "missing token", raw: `{"username":"u@corp"}`, wantErr: true},
+		{name: "missing username", raw: `{"token":"pat"}`, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			user, tok, err := decodePATDeposit(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("want error for %q, got user=%q tok=%q", tc.raw, user, tok)
+				}
+				return
+			}
+			if err != nil || user != tc.wantUser || tok != tc.wantTok {
+				t.Errorf("decodePATDeposit(%q) = %q,%q,%v; want %q,%q,nil", tc.raw, user, tok, err, tc.wantUser, tc.wantTok)
+			}
+		})
+	}
+}
+
 // ─── the skip gates ──────────────────────────────────────────────────────
 
 func TestTryInteractivePAT_Skips(t *testing.T) {
+	// Only an unsafe transport skips the PAT pickup — NOT a missing TTY or JSON
+	// mode. An agent (no TTY, --json) still gets it on any control plane, exactly
+	// like the Praxis API-key flow. Both cases vary TTY/JSON to prove only the
+	// transport decides.
 	tests := []struct {
 		name    string
 		asJSON  bool
 		tty     bool
 		baseURL string
 	}{
-		{name: "json output is machine-invoked", asJSON: true, tty: true, baseURL: "https://cp.test"},
-		{name: "no tty to prompt on", tty: false, baseURL: "https://cp.test"},
 		{name: "plaintext non-loopback url", tty: true, baseURL: "http://cp.test"},
+		{name: "plaintext non-loopback url, even for an agent", asJSON: true, tty: false, baseURL: "http://cp.test"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateHome(t)
 			resetLoginFlags(t)
-			stubPrompts(t, "u@corp", "pat-should-not-be-sent")
-			stdinIsTTY = func() bool { return tc.tty }
+			stubTTY(t, tc.tty)
 			stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
 				t.Fatal("verified a PAT on a path that should have been skipped")
 				return nil, nil
@@ -90,41 +170,128 @@ func TestTryInteractivePAT_Skips(t *testing.T) {
 	}
 }
 
-func TestTryInteractivePAT_EmptyAnswerFallsThrough(t *testing.T) {
-	// Pressing Enter at either prompt is the documented way to say "skip this,
-	// give me a Praxis API key" — it must not be an error.
-	tests := []struct {
-		name, username, token string
-	}{
-		{"blank username", "", "tok"},
-		{"blank token", "u@corp", ""},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			isolateHome(t)
-			resetLoginFlags(t)
-			stubPrompts(t, tc.username, tc.token)
-			stubOpenBrowser(t)
-			stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
-				t.Fatal("verified empty credentials")
-				return nil, nil
-			})
+func TestTryInteractivePAT_AgentReachesPickup(t *testing.T) {
+	// The regression that matters: an agent (no TTY, --json) on a facets
+	// deployment must reach the PAT pickup and end up with a control-plane PAT —
+	// not fall through to a Praxis API key.
+	isolateHome(t)
+	resetLoginFlags(t)
+	stubPostAuth(t)
+	stubTTY(t, false) // agent: no terminal
+	opened := stubOpenBrowser(t)
+	var gotAuth map[string]string
+	stubAuthMe(t, func(_ string, auth map[string]string) (*authMeResponse, error) {
+		gotAuth = auth
+		return &authMeResponse{Email: "u@corp"}, nil
+	})
+	srv := patDepositServer(t, depositJSON(t, "u@corp", "agent-pat"))
 
-			handled, err := tryInteractivePAT(io.Discard, false, "default", "https://cp.test", false)
-			if handled || err != nil {
-				t.Errorf("handled=%v err=%v, want false/nil", handled, err)
-			}
-		})
+	handled, err := tryInteractivePAT(io.Discard, true /*asJSON*/, "default", srv.URL, false)
+	if !handled || err != nil {
+		t.Fatalf("handled=%v err=%v, want the agent to be logged in via the PAT pickup", handled, err)
+	}
+	if !strings.Contains(*opened, "/v2/home?cli_session=") {
+		t.Errorf("agent opened %q, want the control-plane PAT page (not the API-key page)", *opened)
+	}
+	if gotAuth["X-Facets-Username"] != "u@corp" {
+		t.Errorf("auth headers = %v, want a control-plane PAT (Bearer + X-Facets-Username)", gotAuth)
+	}
+	if prof := mustLoadProfile(t, "default"); prof.AuthMode != credentials.AuthModeBasic {
+		t.Errorf("persisted %+v, want a control-plane PAT (auth_mode=basic), not an API key", prof)
+	}
+}
+
+// ─── fall-through paths ──────────────────────────────────────────────────
+
+func TestTryInteractivePAT_TimeoutFallsThrough(t *testing.T) {
+	// Nothing deposited before the timeout is the documented "no token created"
+	// case — it must not fail login, it hands off to the Praxis API-key flow.
+	isolateHome(t)
+	resetLoginFlags(t)
+	stubTTY(t, true)
+	stubOpenBrowser(t)
+	readStderr := captureStderr(t)
+	stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
+		t.Fatal("verified a PAT despite nothing being deposited")
+		return nil, nil
+	})
+	srv := patDepositServer(t, "")
+	loginTimeout = 60 * time.Millisecond
+
+	handled, err := tryInteractivePAT(io.Discard, false, "default", srv.URL, false)
+	stderr := readStderr()
+	if handled || err != nil {
+		t.Fatalf("handled=%v err=%v, want false/nil so the api-key flow runs", handled, err)
+	}
+	if !strings.Contains(stderr, "No token was created") {
+		t.Errorf("stderr = %q, want it to mention the timeout", stderr)
+	}
+	if prof := mustLoadProfile(t, "default"); prof.Token != "" {
+		t.Errorf("persisted a profile on timeout: %+v", prof)
+	}
+}
+
+func TestTryInteractivePAT_EnterSkips(t *testing.T) {
+	// Pressing Enter hands off to the API-key flow immediately — the escape the
+	// paste flow had. Without it a user waits out the full timeout, twice.
+	isolateHome(t)
+	resetLoginFlags(t)
+	stubTTY(t, true)
+	stubOpenBrowser(t)
+	readStderr := captureStderr(t)
+	stubReadLine(t, "")
+	stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
+		t.Fatal("verified a PAT despite the user skipping")
+		return nil, nil
+	})
+	srv := patDepositServer(t, "")
+	loginTimeout = 10 * time.Second // must NOT be waited out
+
+	start := time.Now()
+	handled, err := tryInteractivePAT(io.Discard, false, "default", srv.URL, false)
+	stderr := readStderr()
+	if handled || err != nil {
+		t.Fatalf("handled=%v err=%v, want false/nil", handled, err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("skip took %s — Enter did not cut the wait short", elapsed)
+	}
+	if !strings.Contains(stderr, "Skipping the control-plane token") {
+		t.Errorf("stderr = %q, want the skip notice", stderr)
+	}
+}
+
+func TestTryInteractivePAT_BadPayloadFallsThrough(t *testing.T) {
+	// A deposited value that isn't {username, token} JSON reads as "no usable
+	// PAT" and hands off, rather than failing the login.
+	isolateHome(t)
+	resetLoginFlags(t)
+	stubTTY(t, true)
+	stubOpenBrowser(t)
+	readStderr := captureStderr(t)
+	stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
+		t.Fatal("verified an undecodable payload")
+		return nil, nil
+	})
+	srv := patDepositServer(t, "not-json-token")
+
+	handled, err := tryInteractivePAT(io.Discard, false, "default", srv.URL, false)
+	stderr := readStderr()
+	if handled || err != nil {
+		t.Fatalf("handled=%v err=%v, want false/nil", handled, err)
+	}
+	if !strings.Contains(stderr, "unexpected token payload") {
+		t.Errorf("stderr = %q, want it to mention the bad payload", stderr)
 	}
 }
 
 // ─── the happy path ──────────────────────────────────────────────────────
 
-func TestTryInteractivePAT_PersistsPastedPAT(t *testing.T) {
+func TestTryInteractivePAT_PersistsDepositedPAT(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
 	stubPostAuth(t)
-	stubPrompts(t, "u@corp", "pat-pasted")
+	stubTTY(t, true)
 	opened := stubOpenBrowser(t)
 	restoreStderr := captureStderr(t)
 
@@ -133,28 +300,31 @@ func TestTryInteractivePAT_PersistsPastedPAT(t *testing.T) {
 		gotAuth = auth
 		return &authMeResponse{Email: "u@corp"}, nil
 	})
+	srv := patDepositServer(t, depositJSON(t, "u@corp", "pat-deposited"))
 
-	handled, err := tryInteractivePAT(io.Discard, false, "default", "https://cp.test", false)
+	handled, err := tryInteractivePAT(io.Discard, false, "default", srv.URL, false)
 	restoreStderr()
 	if !handled || err != nil {
 		t.Fatalf("handled=%v err=%v, want true/nil", handled, err)
 	}
-	if *opened != "https://cp.test/v2/home#personal-access-tokens" {
-		t.Errorf("opened %q, want the control plane's PAT page", *opened)
+	// The browser must open the PAT page carrying a cli_session nonce.
+	if !strings.HasPrefix(*opened, srv.URL+"/v2/home?cli_session=") ||
+		!strings.HasSuffix(*opened, "#personal-access-tokens") {
+		t.Errorf("opened %q, want the PAT page with a cli_session nonce", *opened)
 	}
 	// A control-plane PAT is only valid alongside the identity header.
-	if gotAuth["Authorization"] != "Bearer pat-pasted" || gotAuth["X-Facets-Username"] != "u@corp" {
-		t.Errorf("auth headers = %v, want Bearer pat-pasted + X-Facets-Username u@corp", gotAuth)
+	if gotAuth["Authorization"] != "Bearer pat-deposited" || gotAuth["X-Facets-Username"] != "u@corp" {
+		t.Errorf("auth headers = %v, want Bearer pat-deposited + X-Facets-Username u@corp", gotAuth)
 	}
 	prof := mustLoadProfile(t, "default")
-	if prof.Token != "pat-pasted" || prof.Username != "u@corp" || prof.AuthMode != credentials.AuthModeBasic {
-		t.Errorf("persisted profile = %+v, want the pasted PAT in %q mode", prof, credentials.AuthModeBasic)
+	if prof.Token != "pat-deposited" || prof.Username != "u@corp" || prof.AuthMode != credentials.AuthModeBasic {
+		t.Errorf("persisted profile = %+v, want the deposited PAT in %q mode", prof, credentials.AuthModeBasic)
 	}
 }
 
 func TestTryInteractivePAT_RejectedPATFallsThrough(t *testing.T) {
-	// The API key is the final fallback, so a PAT the server won't take keeps
-	// the chain walking instead of failing the login — matching tryFacetsPAT.
+	// The API key is the final fallback, so a PAT the server won't take keeps the
+	// chain walking instead of failing the login — matching tryFacetsPAT.
 	tests := []struct {
 		name     string
 		authErr  error
@@ -167,14 +337,15 @@ func TestTryInteractivePAT_RejectedPATFallsThrough(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateHome(t)
 			resetLoginFlags(t)
-			stubPrompts(t, "u@corp", "bad-pat")
+			stubTTY(t, true)
 			stubOpenBrowser(t)
 			readStderr := captureStderr(t)
 			stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
 				return nil, tc.authErr
 			})
+			srv := patDepositServer(t, depositJSON(t, "u@corp", "bad-pat"))
 
-			handled, err := tryInteractivePAT(io.Discard, false, "default", "https://cp.test", false)
+			handled, err := tryInteractivePAT(io.Discard, false, "default", srv.URL, false)
 			stderr := readStderr()
 			if handled || err != nil {
 				t.Fatalf("handled=%v err=%v, want false/nil so the api-key flow runs", handled, err)
@@ -193,7 +364,7 @@ func TestTryInteractivePAT_RejectedPATFallsThrough(t *testing.T) {
 // ─── chain order, through login's RunE ───────────────────────────────────
 
 // stubInteractivePAT swaps the interactive-PAT seam. `handled` is what it
-// reports, so a test can place it in the chain without driving a prompt.
+// reports, so a test can place it in the chain without driving the browser flow.
 func stubInteractivePAT(t *testing.T, handled bool) *bool {
 	t.Helper()
 	called := false
@@ -207,9 +378,9 @@ func stubInteractivePAT(t *testing.T, handled bool) *bool {
 }
 
 func TestLoginRunE_ChainOrder(t *testing.T) {
-	// Tier 2 sits between raptor's stored PAT and the Praxis API key: login
-	// must ask for a control-plane PAT before minting an API key, and only
-	// reach the API-key browser when the PAT step declines.
+	// Tier 2 sits between raptor's stored PAT and the Praxis API key: login must
+	// try a control-plane PAT before minting an API key, and only reach the
+	// API-key browser when the PAT step declines.
 	tests := []struct {
 		name        string
 		patHandled  bool
@@ -269,7 +440,7 @@ func TestLoginRunE_ForceStillTriesPAT(t *testing.T) {
 }
 
 func TestLoginRunE_RaptorPATBeatsInteractivePrompt(t *testing.T) {
-	// Tier 1 still wins: a PAT already on the machine means no prompt at all.
+	// Tier 1 still wins: a PAT already on the machine means no browser at all.
 	isolateHome(t)
 	resetLoginFlags(t)
 	clearFacetsEnv(t)
@@ -304,29 +475,28 @@ func TestInteractivePATEligible_DoesNotProbeServer(t *testing.T) {
 		t.Errorf("login probed %s before offering the PAT prompt", r.URL.Path)
 	}))
 	defer srv.Close()
-	origTTY := stdinIsTTY
-	stdinIsTTY = func() bool { return true }
-	t.Cleanup(func() { stdinIsTTY = origTTY })
 
-	if !interactivePATEligible(srv.URL, false) {
-		t.Error("eligible = false on a tty with a loopback url, want true")
+	if !interactivePATEligible(srv.URL) {
+		t.Error("eligible = false on a loopback url, want true")
 	}
 }
 
 func TestRunLoginDryRun_ReportsPATPrompt(t *testing.T) {
-	// --dry-run exists to predict login. Once the PAT prompt sits in front of
-	// the api-key browser, a report that still says "browser" is wrong.
+	// --dry-run predicts login. The PAT browser now sits in front of the api-key
+	// browser for EVERY facets deployment — TTY or not, JSON or not — so the
+	// report says so in all those cases; only a non-facets deployment is a plain
+	// api-key browser.
 	tests := []struct {
 		name   string
 		asJSON bool
 		tty    bool
 		want   string
 	}{
-		{name: "human at a tty", tty: true, want: "control-plane PAT prompt, else browser"},
-		{name: "no tty means login would not prompt either", tty: false, want: "browser"},
-		// JSON output means an AI host is calling, and login skips the prompt
-		// there too — so the report must keep saying browser.
-		{name: "json output", asJSON: true, tty: true, want: "browser"},
+		{name: "human at a tty", tty: true, want: "control-plane PAT (browser), else browser"},
+		{name: "agent (no tty) still gets the PAT browser", tty: false,
+			want: "control-plane PAT (browser), else browser"},
+		{name: "agent (json) still gets the PAT browser", asJSON: true, tty: false,
+			want: "control-plane PAT (browser), else browser"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -334,9 +504,7 @@ func TestRunLoginDryRun_ReportsPATPrompt(t *testing.T) {
 			resetLoginFlags(t)
 			t.Cleanup(func() { loginDryRun = false })
 			stubPostAuth(t)
-			origTTY := stdinIsTTY
-			stdinIsTTY = func() bool { return tc.tty }
-			t.Cleanup(func() { stdinIsTTY = origTTY })
+			stubTTY(t, tc.tty)
 			stubOsExit(t)
 			stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
 				return nil, errTokenRejected // reachable, no credentials

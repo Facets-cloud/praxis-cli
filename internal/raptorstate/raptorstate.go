@@ -50,6 +50,14 @@ type State struct {
 // installed" without depending on the machine's PATH.
 var lookPath = exec.LookPath
 
+// Installed reports whether the raptor binary is on PATH. Single source of
+// truth for the check, shared by Resolve (which stamps State.Installed) and by
+// callers that only need this one bit (e.g. login's post-auth hint).
+func Installed() bool {
+	_, err := lookPath("raptor")
+	return err == nil
+}
+
 // Resolve reports raptor's effective auth state from the working directory.
 // It never fails: an unreadable or missing credentials file simply yields
 // Found=false (plus whatever the env override provides).
@@ -69,9 +77,7 @@ func ResolveIn(profiles map[string]credentials.Profile) State { return resolve(p
 // resolve is the testable core — the store is explicit.
 func resolve(profiles map[string]credentials.Profile) State {
 	st := State{}
-	if _, err := lookPath("raptor"); err == nil {
-		st.Installed = true
-	}
+	st.Installed = Installed()
 
 	// 1. Full env override — raptor requires only CONTROL_PLANE_URL here.
 	if cpURL := os.Getenv("CONTROL_PLANE_URL"); cpURL != "" {
