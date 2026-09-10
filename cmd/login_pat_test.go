@@ -26,14 +26,6 @@ func stubPrompts(t *testing.T, username, token string) {
 	t.Cleanup(func() { stdinIsTTY, readSecret, readLine = origTTY, origSecret, origLine })
 }
 
-// stubAuthMode swaps the /auth/status probe.
-func stubAuthMode(t *testing.T, mode string) {
-	t.Helper()
-	orig := fetchAuthMode
-	fetchAuthMode = func(string) string { return mode }
-	t.Cleanup(func() { fetchAuthMode = orig })
-}
-
 // stubOpenBrowser records the URL login would open without opening it.
 func stubOpenBrowser(t *testing.T) *string {
 	t.Helper()
@@ -70,17 +62,14 @@ func TestPatPageURL(t *testing.T) {
 
 func TestTryInteractivePAT_Skips(t *testing.T) {
 	tests := []struct {
-		name     string
-		asJSON   bool
-		tty      bool
-		authMode string
-		baseURL  string
+		name    string
+		asJSON  bool
+		tty     bool
+		baseURL string
 	}{
-		{name: "json output is machine-invoked", asJSON: true, tty: true, authMode: facetsAuthMode, baseURL: "https://cp.test"},
-		{name: "no tty to prompt on", tty: false, authMode: facetsAuthMode, baseURL: "https://cp.test"},
-		{name: "not a facets deployment", tty: true, authMode: "general", baseURL: "https://cp.test"},
-		{name: "probe unreachable or too old", tty: true, authMode: "", baseURL: "https://cp.test"},
-		{name: "plaintext non-loopback url", tty: true, authMode: facetsAuthMode, baseURL: "http://cp.test"},
+		{name: "json output is machine-invoked", asJSON: true, tty: true, baseURL: "https://cp.test"},
+		{name: "no tty to prompt on", tty: false, baseURL: "https://cp.test"},
+		{name: "plaintext non-loopback url", tty: true, baseURL: "http://cp.test"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -88,7 +77,6 @@ func TestTryInteractivePAT_Skips(t *testing.T) {
 			resetLoginFlags(t)
 			stubPrompts(t, "u@corp", "pat-should-not-be-sent")
 			stdinIsTTY = func() bool { return tc.tty }
-			stubAuthMode(t, tc.authMode)
 			stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
 				t.Fatal("verified a PAT on a path that should have been skipped")
 				return nil, nil
@@ -116,7 +104,6 @@ func TestTryInteractivePAT_EmptyAnswerFallsThrough(t *testing.T) {
 			isolateHome(t)
 			resetLoginFlags(t)
 			stubPrompts(t, tc.username, tc.token)
-			stubAuthMode(t, facetsAuthMode)
 			stubOpenBrowser(t)
 			stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
 				t.Fatal("verified empty credentials")
@@ -138,7 +125,6 @@ func TestTryInteractivePAT_PersistsPastedPAT(t *testing.T) {
 	resetLoginFlags(t)
 	stubPostAuth(t)
 	stubPrompts(t, "u@corp", "pat-pasted")
-	stubAuthMode(t, facetsAuthMode)
 	opened := stubOpenBrowser(t)
 	restoreStderr := captureStderr(t)
 
@@ -182,7 +168,6 @@ func TestTryInteractivePAT_RejectedPATFallsThrough(t *testing.T) {
 			isolateHome(t)
 			resetLoginFlags(t)
 			stubPrompts(t, "u@corp", "bad-pat")
-			stubAuthMode(t, facetsAuthMode)
 			stubOpenBrowser(t)
 			readStderr := captureStderr(t)
 			stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
@@ -291,7 +276,6 @@ func TestLoginRunE_RaptorPATBeatsInteractivePrompt(t *testing.T) {
 	seedRaptorCreds(t, "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat-from-raptor\n")
 	stubPostAuth(t)
 	browsed := stubBrowserLogin(t)
-	stubAuthMode(t, facetsAuthMode)
 	stdinIsTTY = func() bool { t.Fatal("checked for a TTY despite a usable raptor PAT"); return false }
 	t.Cleanup(func() { stdinIsTTY = func() bool { return false } })
 	stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
@@ -310,50 +294,22 @@ func TestLoginRunE_RaptorPATBeatsInteractivePrompt(t *testing.T) {
 	}
 }
 
-// ─── the auth-mode probe against a real server ───────────────────────────
+// ─── no server probe decides the PAT prompt ──────────────────────────────
 
-func TestFetchAuthMode(t *testing.T) {
-	tests := []struct {
-		name    string
-		status  int
-		body    string
-		want    string
-		wantHit bool
-	}{
-		{name: "facets mode", status: 200, body: `{"auth_mode":"facets"}`, want: "facets", wantHit: true},
-		{name: "case and space tolerant", status: 200, body: `{"auth_mode":" FACETS "}`, want: "facets", wantHit: true},
-		{name: "general mode", status: 200, body: `{"auth_mode":"general"}`, want: "general", wantHit: true},
-		{name: "endpoint missing on an old deployment", status: 404, body: "", want: "", wantHit: true},
-		{name: "unparseable body", status: 200, body: "not json", want: "", wantHit: true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var path string
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				path = r.URL.Path
-				w.WriteHeader(tc.status)
-				_, _ = w.Write([]byte(tc.body))
-			}))
-			defer srv.Close()
+func TestInteractivePATEligible_DoesNotProbeServer(t *testing.T) {
+	// Every deployment validates control-plane PATs, so eligibility is decided
+	// by the local gates alone. A probe here would make an unreachable or
+	// slow server silently demote login to the API-key browser flow.
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("login probed %s before offering the PAT prompt", r.URL.Path)
+	}))
+	defer srv.Close()
+	origTTY := stdinIsTTY
+	stdinIsTTY = func() bool { return true }
+	t.Cleanup(func() { stdinIsTTY = origTTY })
 
-			if got := fetchAuthMode(srv.URL); got != tc.want {
-				t.Errorf("fetchAuthMode = %q, want %q", got, tc.want)
-			}
-			if tc.wantHit && path != "/ai-api/auth/status" {
-				t.Errorf("probed %q, want /ai-api/auth/status", path)
-			}
-		})
-	}
-}
-
-func TestFetchAuthMode_UnreachableIsEmpty(t *testing.T) {
-	// A closed port must not be reported as any mode — "" keeps the API-key
-	// flow, which is the pre-probe behavior.
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	url := srv.URL
-	srv.Close()
-	if got := fetchAuthMode(url); got != "" {
-		t.Errorf("fetchAuthMode on a closed server = %q, want \"\"", got)
+	if !interactivePATEligible(srv.URL, false) {
+		t.Error("eligible = false on a tty with a loopback url, want true")
 	}
 }
 
@@ -361,19 +317,16 @@ func TestRunLoginDryRun_ReportsPATPrompt(t *testing.T) {
 	// --dry-run exists to predict login. Once the PAT prompt sits in front of
 	// the api-key browser, a report that still says "browser" is wrong.
 	tests := []struct {
-		name     string
-		asJSON   bool
-		tty      bool
-		authMode string
-		want     string
+		name   string
+		asJSON bool
+		tty    bool
+		want   string
 	}{
-		{name: "human at a tty on a facets deployment", tty: true, authMode: facetsAuthMode,
-			want: "control-plane PAT prompt, else browser"},
-		{name: "not a facets deployment", tty: true, authMode: "general", want: "browser"},
-		{name: "no tty means login would not prompt either", tty: false, authMode: facetsAuthMode, want: "browser"},
+		{name: "human at a tty", tty: true, want: "control-plane PAT prompt, else browser"},
+		{name: "no tty means login would not prompt either", tty: false, want: "browser"},
 		// JSON output means an AI host is calling, and login skips the prompt
 		// there too — so the report must keep saying browser.
-		{name: "json output", asJSON: true, tty: true, authMode: facetsAuthMode, want: "browser"},
+		{name: "json output", asJSON: true, tty: true, want: "browser"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -381,7 +334,6 @@ func TestRunLoginDryRun_ReportsPATPrompt(t *testing.T) {
 			resetLoginFlags(t)
 			t.Cleanup(func() { loginDryRun = false })
 			stubPostAuth(t)
-			stubAuthMode(t, tc.authMode)
 			origTTY := stdinIsTTY
 			stdinIsTTY = func() bool { return tc.tty }
 			t.Cleanup(func() { stdinIsTTY = origTTY })
