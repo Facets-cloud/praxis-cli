@@ -93,8 +93,9 @@ that does everything you need:
    - If `raptor` is already logged in, login reuses that control-plane
      token (and its control plane) — nothing to click.
    - Otherwise it opens the control plane's **personal access token**
-     page — the same page `raptor login` opens — and you paste the token
-     you create there. On a terminal with no `--url`, it asks for the
+     page — the same page `raptor login` opens. Create a token there and
+     the CLI picks it up automatically (press Enter to skip to an API
+     key instead). On a terminal with no `--url`, it asks for the
      control plane URL first, the way `raptor login` does.
    - Failing both, it opens your browser to create a **Praxis API key**
      (you click "Create" once; the CLI polls the deployment for the new

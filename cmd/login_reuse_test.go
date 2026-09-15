@@ -85,10 +85,17 @@ func resetLoginFlags(t *testing.T) {
 	rootProfile, loginURL, loginToken = "", "", ""
 	loginForce, loginLocal, loginJSON, loginDryRun = false, false, false, false
 	loginTimeout = 90 * time.Second
+	// The control-plane PAT tier now runs for machine invocations too (no TTY
+	// gate), so default it to fall-through: a test that isn't about the pickup
+	// must never reach the real browser poll. Chain tests override this via
+	// stubInteractivePAT; the pickup's own tests call tryInteractivePAT directly.
+	origPAT := interactivePATFn
+	interactivePATFn = func(_ io.Writer, _ bool, _, _ string, _ bool) (bool, error) { return false, nil }
 	t.Cleanup(func() {
 		rootProfile, loginURL, loginToken = "", "", ""
 		loginForce, loginLocal, loginJSON, loginDryRun = false, false, false, false
 		loginTimeout = 90 * time.Second
+		interactivePATFn = origPAT
 	})
 }
 
