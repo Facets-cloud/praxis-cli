@@ -68,7 +68,7 @@ func TestLoginRunE_FacetsPATIsPrimary(t *testing.T) {
 	clearFacetsEnv(t)
 	seedRaptorCreds(t, "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat123\n")
 	stubPostAuth(t)
-	browsed := stubBrowserLogin(t)
+	browsed := stubNoPAT(t)
 	var gotAuth map[string]string
 	stubAuthMe(t, func(_ string, auth map[string]string) (*authMeResponse, error) {
 		gotAuth = auth
@@ -103,7 +103,7 @@ func TestLoginRunE_BareLoginAdoptsRaptorControlPlane(t *testing.T) {
 	clearFacetsEnv(t)
 	seedRaptorCreds(t, "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat123\n")
 	stubPostAuth(t)
-	browsed := stubBrowserLogin(t)
+	browsed := stubNoPAT(t)
 	var gotURL string
 	stubAuthMe(t, func(baseURL string, _ map[string]string) (*authMeResponse, error) {
 		gotURL = baseURL
@@ -130,7 +130,7 @@ func TestLoginRunE_FallsBackToBrowserWhenPATRejected(t *testing.T) {
 	clearFacetsEnv(t)
 	seedRaptorCreds(t, "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat123\n")
 	stubPostAuth(t)
-	browsed := stubBrowserLogin(t)
+	browsed := stubNoPAT(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return nil, errTokenRejected
 	})
@@ -162,7 +162,7 @@ func TestLoginRunE_TransientErrorIsNotAPATVerdict(t *testing.T) {
 	clearFacetsEnv(t)
 	seedRaptorCreds(t, "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat123\n")
 	stubPostAuth(t)
-	browsed := stubBrowserLogin(t)
+	browsed := stubNoPAT(t)
 	code := stubOsExit(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return nil, errors.New("dial tcp: i/o timeout")
@@ -189,7 +189,7 @@ func TestLoginRunE_NoFacetsCredsGoesStraightToBrowser(t *testing.T) {
 	resetLoginFlags(t)
 	clearFacetsEnv(t)
 	stubPostAuth(t)
-	browsed := stubBrowserLogin(t)
+	browsed := stubNoPAT(t)
 	authMeCalls := 0
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		authMeCalls++

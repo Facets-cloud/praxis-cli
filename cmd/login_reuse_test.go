@@ -52,16 +52,18 @@ func stubPostAuth(t *testing.T) *bool {
 	return &called
 }
 
-// stubBrowserLogin swaps the browser-flow seam with a recorder.
-func stubBrowserLogin(t *testing.T) *bool {
+// stubNoPAT swaps the no-PAT terminal seam with a recorder, so a test asserts
+// whether login fell through every PAT tier without invoking the real failure
+// exit. *bool is true once the terminal outcome was reached.
+func stubNoPAT(t *testing.T) *bool {
 	t.Helper()
 	called := false
-	orig := browserLoginFn
-	browserLoginFn = func(out io.Writer, asJSON bool, profileName, baseURL string, timeout time.Duration, local bool) error {
+	orig := noPATFn
+	noPATFn = func(out io.Writer, asJSON bool, baseURL string) error {
 		called = true
 		return nil
 	}
-	t.Cleanup(func() { browserLoginFn = orig })
+	t.Cleanup(func() { noPATFn = orig })
 	return &called
 }
 
@@ -300,7 +302,7 @@ func TestTryReuseStoredToken(t *testing.T) {
 func TestLoginRunE_NewDefaultRequiresURLBeforeSideEffects(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
-	browser := stubBrowserLogin(t)
+	browser := stubNoPAT(t)
 	post := stubPostAuth(t)
 
 	out, err := runLoginRunE(t)
@@ -336,7 +338,7 @@ func TestLoginRunE_ValidStoredTokenSkipsBrowser(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
 	seedProfile(t, "default", "https://stored.test", "tok")
-	browser := stubBrowserLogin(t)
+	browser := stubNoPAT(t)
 	stubPostAuth(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x"}, nil
@@ -353,7 +355,7 @@ func TestLoginRunE_TransientErrorDoesNotOpenBrowser(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
 	seedProfile(t, "default", "https://stored.test", "still-good")
-	browser := stubBrowserLogin(t)
+	browser := stubNoPAT(t)
 	stubPostAuth(t)
 	exitCode := stubOsExit(t) // production exits here; stub keeps the test alive
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
@@ -383,7 +385,7 @@ func TestLoginRunE_RejectedTokenOpensBrowser(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
 	seedProfile(t, "default", "https://stored.test", "expired")
-	browser := stubBrowserLogin(t)
+	browser := stubNoPAT(t)
 	stubPostAuth(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return nil, fmt.Errorf("%w (HTTP 401)", errTokenRejected)
@@ -401,7 +403,7 @@ func TestLoginRunE_ForceOpensBrowser(t *testing.T) {
 	resetLoginFlags(t)
 	seedProfile(t, "default", "https://stored.test", "tok")
 	loginForce = true
-	browser := stubBrowserLogin(t)
+	browser := stubNoPAT(t)
 	stubPostAuth(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		t.Fatal("--force must not verify/reuse the stored token")
@@ -419,7 +421,7 @@ func TestLoginRunE_NoStoredTokenOpensBrowser(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
 	loginURL = "https://new.test"
-	browser := stubBrowserLogin(t)
+	browser := stubNoPAT(t)
 	stubPostAuth(t)
 	if _, err := runLoginRunE(t); err != nil {
 		t.Fatalf("login err: %v", err)
@@ -434,7 +436,7 @@ func TestLoginRunE_URLRetargetOpensBrowser(t *testing.T) {
 	resetLoginFlags(t)
 	seedProfile(t, "default", "https://stored.test", "tok")
 	loginURL = "https://other.test" // re-target away from the stored URL
-	browser := stubBrowserLogin(t)
+	browser := stubNoPAT(t)
 	stubPostAuth(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		t.Fatal("token must not be reused when --url re-targets the profile")
@@ -452,7 +454,7 @@ func TestLoginRunE_NewNamedProfileWithoutURLErrors(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
 	rootProfile = "acme" // does not exist, no --url
-	browser := stubBrowserLogin(t)
+	browser := stubNoPAT(t)
 	stubPostAuth(t)
 	_, err := runLoginRunE(t)
 	if err == nil {

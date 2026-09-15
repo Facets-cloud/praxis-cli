@@ -66,7 +66,7 @@ func driveInteractivePAT(t *testing.T, username, token string) {
 		return verifyAndPersistPAT(out, false, profileName, baseURL, username, token, local)
 	}
 	t.Cleanup(func() { interactivePATFn = orig })
-	browsed := stubBrowserLogin(t)
+	browsed := stubNoPAT(t)
 	t.Cleanup(func() {
 		if *browsed {
 			t.Error("login fell through to the API-key browser")
@@ -155,7 +155,7 @@ func TestLogin_RaptorLoginIsAlreadyAPraxisLogin(t *testing.T) {
 	resetLoginFlags(t)
 	clearFacetsEnv(t)
 	stubPostAuth(t)
-	browsed := stubBrowserLogin(t)
+	browsed := stubNoPAT(t)
 	stubAuthMeOK(t)
 	seedRaptorCreds(t, "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat\n")
 	before, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".facets", "credentials"))
@@ -182,7 +182,7 @@ func TestLogin_NamedProfile_AdoptsRaptorsPATForSameHost(t *testing.T) {
 	resetLoginFlags(t)
 	clearFacetsEnv(t)
 	stubPostAuth(t)
-	browsed := stubBrowserLogin(t)
+	browsed := stubNoPAT(t)
 	stubAuthMeOK(t)
 	seedRaptorCreds(t, "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat\n")
 
@@ -371,7 +371,7 @@ func TestLoginDryRun_ReportsStoreEffect(t *testing.T) {
 		want  string
 	}{
 		{name: "raptor PAT reuse stays in the shared store", creds: "[default]\ncontrol_plane_url = https://cp.test\nusername = u\ntoken = pat\n", want: "~/.facets/credentials [default] (shared with raptor)"},
-		{name: "stored API key stays in the praxis file", key: true, want: "~/.praxis/credentials [default] (Praxis API key; raptor unchanged)"},
+		{name: "stored API key stays in the praxis file", key: true, want: "~/.praxis/credentials [default] (existing Praxis API key; raptor unchanged)"},
 		{name: "local scope names the project file", creds: "[default]\ncontrol_plane_url = https://cp.test\nusername = u\ntoken = pat\n", local: true, want: "<cwd>/.facets/credentials [default] (shared with raptor)"},
 	}
 	for _, tt := range tests {

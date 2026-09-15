@@ -26,7 +26,7 @@ func patPageURL(baseURL string) string {
 
 // buildPATLoginURL is patPageURL plus a cli_session nonce the control-plane UI
 // reads to deposit the freshly-created token straight back to the CLI — the same
-// nonce handshake the Praxis API-key flow uses (browserSessionPollLogin).
+// nonce handshake pollSessionKey uses to pick the deposited token back up.
 // Composed from patPageURL so the page URL exists exactly once; the nonce rides
 // as a query param BEFORE the fragment so it survives the SPA's hash routing.
 func buildPATLoginURL(baseURL, nonce string) string {
@@ -88,9 +88,9 @@ var (
 // interactivePATEligible reports whether login should use the control-plane PAT
 // pickup: any control plane reachable over a safe transport. Deliberately NOT
 // gated on a TTY or JSON mode — the pickup is a browser-deposit flow that reads
-// no keyboard, exactly like the Praxis API-key flow (browserSessionPollLogin),
-// which already runs for agents. So an agent driving `praxis login` gets a
-// raptor-usable control-plane PAT, not a Praxis API key. No auth-mode probe:
+// no keyboard, so it runs for agents too. An agent driving `praxis login` gets a
+// raptor-usable control-plane PAT; there is no Praxis API-key path behind it. No
+// auth-mode probe:
 // every deployment validates control-plane PATs. Shared with --dry-run so the
 // report can't disagree with the chain.
 func interactivePATEligible(baseURL string) bool {
@@ -120,15 +120,15 @@ func tryInteractivePAT(out io.Writer, asJSON bool, profileName, baseURL string, 
 
 	ctx, cancel := context.WithTimeout(context.Background(), loginTimeout)
 	defer cancel()
-	// Enter = skip to the Praxis API-key flow — but only at a real terminal,
-	// where a human can press it. An agent has no keyboard (and can pass --token
-	// for an API key), so its stdin is left untouched and `skipped` stays nil (a
+	// Enter = stop waiting for the token — but only at a real terminal, where a
+	// human can press it. An agent has no keyboard (and can pass --token for an
+	// existing key), so its stdin is left untouched and `skipped` stays nil (a
 	// nil channel never fires in the select below). readLine is captured before
 	// the goroutine starts: the goroutine can outlive this call (stdin has no
 	// cancel), so it must not touch the package var.
 	var skipped chan struct{}
 	if stdinIsTTY() {
-		fmt.Fprintln(os.Stderr, "(Press Enter to skip and create a Praxis API key instead.)")
+		fmt.Fprintln(os.Stderr, "(Press Enter to stop waiting — login then reports how to create a token.)")
 		skipped = make(chan struct{})
 		read := readLine
 		go func() {
@@ -176,11 +176,12 @@ func verifyAndPersistPAT(out io.Writer, asJSON bool, profileName, baseURL, usern
 	return true, persistVerified(out, asJSON, profileName, prof, user, username, local)
 }
 
-// patFallThrough reports why the PAT tier is handing off to the API-key flow.
-// Stderr in both output modes: it can't corrupt --json, and a silent fallback is
-// the one thing an AI host can't diagnose.
+// patFallThrough reports why the browser PAT pickup produced no token, then hands
+// back to RunE — which now ends the login with token-creation guidance rather than
+// minting a Praxis API key. Stderr in both output modes: it can't corrupt --json,
+// and a silent hand-off is the one thing an AI host can't diagnose.
 func patFallThrough(format string, args ...any) (bool, error) {
-	fmt.Fprintf(os.Stderr, format+"; opening browser to create a Praxis API key…\n", args...)
+	fmt.Fprintf(os.Stderr, format+"; no control-plane token was obtained.\n", args...)
 	return false, nil
 }
 

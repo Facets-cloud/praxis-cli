@@ -12,7 +12,7 @@ import (
 )
 
 // runLoginDryRun reports what `praxis login` WOULD do with the given flags —
-// without opening a browser, minting an API key, writing credentials, or
+// without opening a browser, writing credentials, or
 // touching installed skills (issue #66: login is not a safe probe).
 //
 // Network traffic is read-only GETs only: /ai-api/auth/me, plus the public
@@ -22,6 +22,8 @@ import (
 // without one, an HTTP 401/403 answer still proves the deployment is
 // reachable. Exit code 0 means the report is complete; exitcode.Network means
 // the server could not be reached, so login's behavior can't be predicted.
+const noPATAction = "no control-plane PAT available — login fails"
+
 func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, local bool) error {
 	// The store login itself consults: home for a global login, so a run
 	// from inside a local tree cannot make the report reuse the tree's token.
@@ -50,7 +52,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 	}
 
 	reachable := true
-	tokenStatus, action := tokenSource, "browser"
+	tokenStatus, action := tokenSource, noPATAction
 	_, err := fetchAuthMe(baseURL, probeAuth)
 	switch {
 	case err == nil:
@@ -59,7 +61,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 			tokenStatus, action = "supplied-valid", "save-token (no browser)"
 		case "stored":
 			if loginForce {
-				tokenStatus, action = "stored-valid", "browser (--force)"
+				tokenStatus, action = "stored-valid (--force)", noPATAction
 			} else {
 				tokenStatus, action = "stored-valid", "reuse-token (no browser)"
 			}
@@ -76,14 +78,14 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 			// Login doesn't stop at a dead stored token: tryReuseStoredToken
 			// returns handled=false and the PAT gets its turn. Probe it too, or
 			// the report says "browser" where login would use the PAT.
-			tokenStatus, action = "stored-invalid", "browser"
+			tokenStatus, action = "stored-invalid", noPATAction
 			if c, hasPAT := facetsPATCandidate(profileName, baseURL, local); hasPAT && !loginForce {
 				if _, perr := fetchAuthMe(baseURL, c.asProfile().Auth()); perr == nil {
 					tokenStatus, action = "stored-invalid, facets-pat-valid", "facets-pat (no browser)"
 				}
 			}
 		case "facets-pat":
-			tokenStatus, action = "facets-pat-invalid", "browser"
+			tokenStatus, action = "facets-pat-invalid", noPATAction
 		}
 	default:
 		reachable = false
@@ -93,11 +95,10 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		action = "unknown (server unreachable)"
 	}
 
-	// Every path that lands on the API-key browser now passes through the
-	// control-plane PAT browser first, so the report has to say so or it claims
-	// a plain API-key browser where login would create a control-plane token.
-	if strings.HasPrefix(action, "browser") && interactivePATEligible(baseURL) {
-		action = "control-plane PAT (browser), else " + action
+	// A PAT-eligible URL tries the control-plane PAT browser pickup. There is no
+	// API-key fallback behind it anymore: if the pickup yields nothing, login fails.
+	if action == noPATAction && interactivePATEligible(baseURL) {
+		action = "control-plane PAT (browser), else login fails"
 	}
 
 	// Where the credential lands: a control-plane PAT in raptor's store (shared
@@ -106,17 +107,16 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 	if local {
 		facetsFile = "<cwd>/.facets/credentials"
 	}
-	storeEffect := fmt.Sprintf("~/.praxis/credentials [%s] (Praxis API key; raptor unchanged)", profileName)
+	storeEffect := "nothing written (no control-plane PAT available; login fails)"
 	switch {
 	case strings.HasPrefix(action, "facets-pat"),
 		strings.HasPrefix(action, "reuse-token") && prof.AuthMode == credentials.AuthModeBasic:
 		storeEffect = fmt.Sprintf("%s [%s] (shared with raptor)", facetsFile, profileName)
+	case strings.HasPrefix(action, "reuse-token"):
+		// An existing Praxis API key, reused (not minted).
+		storeEffect = fmt.Sprintf("~/.praxis/credentials [%s] (existing Praxis API key; raptor unchanged)", profileName)
 	case strings.HasPrefix(action, "control-plane PAT"):
-		storeEffect = fmt.Sprintf("%s [%s] (shared with raptor) if a control-plane PAT is created, else ~/.praxis/credentials", facetsFile, profileName)
-	}
-
-	if local && !strings.Contains(storeEffect, "shared with raptor") {
-		storeEffect = "refused: local mode needs a control-plane PAT (drop --local, or create a PAT)"
+		storeEffect = fmt.Sprintf("%s [%s] (shared with raptor) if a control-plane PAT is created, else login fails", facetsFile, profileName)
 	}
 
 	skillsEffect := fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)
@@ -144,7 +144,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 			return rerr
 		}
 	} else {
-		fmt.Fprintln(out, "Dry run — nothing was changed (no browser, no API key, no skill churn).")
+		fmt.Fprintln(out, "Dry run — nothing was changed (no browser, no credential write, no skill churn).")
 		fmt.Fprintf(out, "  profile:  %s", profileName)
 		if !exists {
 			fmt.Fprint(out, " (new)")
