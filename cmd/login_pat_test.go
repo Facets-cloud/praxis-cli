@@ -395,7 +395,7 @@ func TestLoginRunE_ChainOrder(t *testing.T) {
 			resetLoginFlags(t)
 			clearFacetsEnv(t)
 			stubPostAuth(t)
-			browsed := stubBrowserLogin(t)
+			browsed := stubNoPAT(t)
 			patCalled := stubInteractivePAT(t, tc.patHandled)
 
 			loginURL = "https://cp.test"
@@ -420,7 +420,7 @@ func TestLoginRunE_ForceStillTriesPAT(t *testing.T) {
 	clearFacetsEnv(t)
 	seedProfile(t, "default", "https://cp.test", "stale-token")
 	stubPostAuth(t)
-	browsed := stubBrowserLogin(t)
+	browsed := stubNoPAT(t)
 	patCalled := stubInteractivePAT(t, true)
 	stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
 		t.Fatal("verified the stored token despite --force")
@@ -446,7 +446,7 @@ func TestLoginRunE_RaptorPATBeatsInteractivePrompt(t *testing.T) {
 	clearFacetsEnv(t)
 	seedRaptorCreds(t, "[default]\ncontrol_plane_url = https://cp.test\nusername = u@corp\ntoken = pat-from-raptor\n")
 	stubPostAuth(t)
-	browsed := stubBrowserLogin(t)
+	browsed := stubNoPAT(t)
 	stdinIsTTY = func() bool { t.Fatal("checked for a TTY despite a usable raptor PAT"); return false }
 	t.Cleanup(func() { stdinIsTTY = func() bool { return false } })
 	stubAuthMe(t, func(string, map[string]string) (*authMeResponse, error) {
@@ -492,11 +492,11 @@ func TestRunLoginDryRun_ReportsPATPrompt(t *testing.T) {
 		tty    bool
 		want   string
 	}{
-		{name: "human at a tty", tty: true, want: "control-plane PAT (browser), else browser"},
+		{name: "human at a tty", tty: true, want: "control-plane PAT (browser), else login fails"},
 		{name: "agent (no tty) still gets the PAT browser", tty: false,
-			want: "control-plane PAT (browser), else browser"},
+			want: "control-plane PAT (browser), else login fails"},
 		{name: "agent (json) still gets the PAT browser", asJSON: true, tty: false,
-			want: "control-plane PAT (browser), else browser"},
+			want: "control-plane PAT (browser), else login fails"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

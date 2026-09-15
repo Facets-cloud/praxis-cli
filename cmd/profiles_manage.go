@@ -11,7 +11,7 @@ import (
 
 // Subcommands of `praxis profiles` for managing the credentials store
 // without a login round-trip (issue #66: the only in-band alternatives were
-// hand-editing ~/.praxis/credentials or minting another API key). Both are
+// hand-editing the credentials file or re-running login). Both are
 // power-user tools: a single-profile user never needs them, and neither
 // touches installed skills or opens a browser.
 
@@ -35,8 +35,8 @@ whichever credentials file holds it (~/.facets/credentials for a control-plane
 PAT, ~/.praxis/credentials for a Praxis API key).
 
 Installed skills are not touched: they belong to the profile's org, not its
-name. No browser opens and no API key is created — this fixes the "re-login
-just to rename" workaround that minted an orphaned key each time.
+name. No browser opens — rename edits only the credentials file, so you don't
+have to re-run login (which would re-sync skills) just to change a name.
 
 A [default] section that is a copy of OLD is not renamed; it stays the
 active profile. Directory trees pinned with --local have their own

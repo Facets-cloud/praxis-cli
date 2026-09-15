@@ -48,12 +48,12 @@ var (
 	loginDryRun  bool
 )
 
-// browserLoginFn and postAuthSetup are package-level seams so tests can
-// exercise login's path selection (reuse vs. browser) and persistence
-// without opening a browser, hitting the network, or installing skills.
+// interactivePATFn, noPATFn and postAuthSetup are package-level seams so tests
+// can exercise login's path selection (reuse vs. PAT vs. the no-PAT terminal
+// outcome) and persistence without a browser, network, or skill install.
 var (
-	browserLoginFn   = browserSessionPollLogin
 	interactivePATFn = tryInteractivePAT
+	noPATFn          = noControlPlanePAT
 	postAuthSetup    = runPostAuthSetup
 )
 
@@ -66,15 +66,15 @@ func init() {
 	// --profile is the global flag on rootCmd (see root.go): for login it names
 	// the profile to create or update. One flag, one variable, both positions.
 	loginCmd.Flags().StringVar(&loginURL, "url", "", "Praxis deployment URL (a new profile needs one: pass it here, or login asks for it on a terminal; existing profiles reuse their saved URL)")
-	loginCmd.Flags().StringVar(&loginToken, "token", "", "skip browser flow; save and verify the given API key directly")
+	loginCmd.Flags().StringVar(&loginToken, "token", "", "save and verify an existing Praxis API key directly (no browser); a control-plane PAT comes from the browser flow, not here")
 	loginCmd.Flags().BoolVar(&loginForce, "force", false, "skip the stored token and re-authenticate from the start of the chain")
 	loginCmd.Flags().BoolVar(&loginLocal, "local", false,
 		"pin this profile to the current directory tree (writes <cwd>/.facets/credentials, which raptor reads too, and <cwd>/.praxis) and install its skills project-scoped, instead of switching the global profile; needs a control-plane PAT")
 	loginCmd.Flags().BoolVar(&loginJSON, "json", false, "JSON output")
 	loginCmd.Flags().DurationVar(&loginTimeout, "timeout", 90*time.Second,
-		"max time to wait for each browser step (the control-plane token pickup, then the API-key callback if login falls through to it)")
+		"max time to wait for the control-plane token pickup in the browser")
 	loginCmd.Flags().BoolVar(&loginDryRun, "dry-run", false,
-		"report what login would do (profile, URL reachability, browser-or-reuse, skill effect) and exit — no browser, no API key, no credential or skill changes")
+		"report what login would do (profile, URL reachability, browser-or-reuse, skill effect) and exit — no browser, no credential or skill changes")
 	rootCmd.AddCommand(loginCmd)
 }
 
@@ -86,7 +86,7 @@ var loginCmd = &cobra.Command{
   1. Install the praxis meta-skill into every detected AI host
      (~/.claude/skills/praxis, plus ~/.agents/skills/praxis — the
       shared alias Codex and Gemini CLI both read) — idempotent.
-  2. Authenticate, preferring a control-plane PAT at every step:
+  2. Authenticate with a control-plane PAT:
        a. the active profile's stored token, if still valid for this URL
           (no browser)
        b. the control-plane PAT in raptor's ~/.facets/credentials
@@ -94,15 +94,16 @@ var loginCmd = &cobra.Command{
        c. the control plane's personal-access-token page — the same page
           "raptor login" opens; create a token there and login picks it
           up automatically
-       d. a Praxis API key, created in the browser
-     Login walks the chain until one works. Use --token to supply a
-     Praxis API key directly, or --force to skip (a) and
-     re-authenticate.
+     Login walks the chain until one works; if none does, it stops and
+     points you at the token page. Creating a new Praxis API key in the
+     browser is no longer part of login. Existing Praxis API keys still
+     work — reused from (a) or supplied with --token — but no new one is
+     minted. Use --force to skip (a) and re-authenticate.
   3. Save credentials and make the profile active. praxis saves a
      control-plane PAT to ~/.facets/credentials, the store raptor reads too.
      The section has this profile's name. praxis also copies it over
-     [default], the section a bare praxis or raptor command uses. A Praxis
-     API key goes to ~/.praxis/credentials.
+     [default], the section a bare praxis or raptor command uses. An existing
+     Praxis API key (via --token) goes to ~/.praxis/credentials.
   4. Wipe any praxis-* org skills from the previous profile.
   5. Fetch this profile's skill catalog from the server and install
      each entry as praxis-<name> across all detected AI hosts.
@@ -179,6 +180,11 @@ installed skills — then exits without changing anything.`,
 			fmt.Fprintf(os.Stderr, "Profile %s → %s%s\n", profileName, baseURL, scope)
 		}
 
+		// A pasted --token often carries stray whitespace; trim it so a value
+		// that is only spaces reads as "no token" (falls through the chain like
+		// an omitted flag) instead of a Bearer of blanks the server would reject.
+		loginToken = strings.TrimSpace(loginToken)
+
 		// --dry-run: report the plan and exit before ANY side effect —
 		// no browser, no key minted, no credential write, no skill churn.
 		if loginDryRun {
@@ -209,17 +215,32 @@ installed skills — then exits without changing anything.`,
 				return ferr
 			}
 		}
-		// A control-plane PAT beats a Praxis API key even when raptor left none.
+		// The control-plane PAT is the only way to authenticate a new login.
+		// Minting a Praxis API key was removed: existing keys keep working
+		// (reuse above, or --token), but none are created here anymore.
 		if handled, perr := interactivePATFn(out, asJSON, profileName, baseURL, loginLocal); handled {
 			return perr
 		}
-		// The browser mints a Praxis API key. A pin needs a control-plane
-		// PAT, so refuse here — before a key is minted and saved globally.
-		if loginLocal {
-			return refuseLocalAPIKey(out, asJSON)
-		}
-		return browserLoginFn(out, asJSON, profileName, baseURL, loginTimeout, loginLocal)
+		return noPATFn(out, asJSON, baseURL, loginLocal)
 	},
+}
+
+// noControlPlanePAT is the terminal outcome when every PAT tier — stored token,
+// raptor's ~/.facets/credentials, and the browser pickup — failed to produce a
+// control-plane PAT. Login used to mint a Praxis API key here; that path is gone,
+// so this points the user at the token page and exits rather than creating a key.
+func noControlPlanePAT(out io.Writer, asJSON bool, baseURL string, local bool) error {
+	msg := "could not obtain a control-plane personal access token"
+	hint := fmt.Sprintf("create one at %s/v2/home#personal-access-tokens and re-run",
+		strings.TrimRight(baseURL, "/"))
+	if !local {
+		// --token saves a Praxis API key, which a --local tree can't hold
+		// (refuseLocalAPIKey), so only suggest it for a global login.
+		hint += ", or pass --token <existing-key>"
+	}
+	render.PrintError(out, asJSON, msg, hint, exitcode.Auth)
+	osExit(exitcode.Auth)
+	return fmt.Errorf("%s", msg)
 }
 
 // refuseLocalAPIKey is the exit for a --local login that would end with a
@@ -339,14 +360,15 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 	user, err := fetchAuthMe(baseURL, prof.Auth())
 	if err != nil {
 		if errors.Is(err, errTokenRejected) {
-			// The server gave a verdict: this token is dead. Falling back to
-			// the browser to mint a fresh one is exactly right.
+			// The server gave a verdict: this token is dead. Fall through to
+			// the control-plane PAT tiers (which may open the browser pickup, or
+			// end at the token-page guidance) — no API key is minted anymore.
 			if !asJSON {
 				fmt.Fprintf(os.Stderr,
-					"Stored token for profile %q is no longer valid (%v); opening browser…\n",
+					"Stored token for profile %q is no longer valid (%v); trying a control-plane PAT…\n",
 					profileName, err)
 			}
-			return false, nil // graceful fallback to the browser
+			return false, nil // fall through to the PAT tiers
 		}
 		// Transient: timeout, connection refused, 5xx — the token's validity
 		// is unknown. Do NOT mislabel it "no longer valid" or force a browser
@@ -365,49 +387,6 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 	// Reuse the stored profile as-is otherwise — notably its Username/AuthMode,
 	// so a facets profile's identity header keeps working across reuse.
 	return true, persistAndSetup(out, asJSON, profileName, applyCanonical(prof, user), user.Email, local)
-}
-
-// browserSessionPollLogin opens the browser to the api-keys page with a
-// cli_session nonce, then polls the server-side session endpoint until
-// the modal deposits the freshly-created key (or timeout elapses).
-//
-// This replaces the earlier http://127.0.0.1:<port>/key listener design,
-// which was increasingly blocked by browser security policies (Brave
-// Shields' localhost protection, Chromium Private Network Access). The
-// browser → server hop is now strictly same-origin, so neither CORS nor
-// PNA nor Shields are involved.
-func browserSessionPollLogin(out io.Writer, asJSON bool, profileName, baseURL string, timeout time.Duration, local bool) error {
-	sessionNonce := randomNonce()
-
-	openURL, err := buildLoginURL(baseURL, sessionNonce, suggestedKeyName())
-	if err != nil {
-		render.PrintError(out, asJSON, err.Error(),
-			"check the --url value — it must be a valid URL",
-			exitcode.Usage)
-		os.Exit(exitcode.Usage)
-	}
-	fmt.Fprintln(os.Stderr, "Opening browser to create a Praxis API key…")
-	fmt.Fprintln(os.Stderr, "  ", openURL)
-	fmt.Fprintf(os.Stderr, "Waiting for the key (timeout %s)…\n", timeout)
-	if err := openBrowser(openURL); err != nil {
-		fmt.Fprintf(os.Stderr, "\nCouldn't auto-open browser (%v). Open the URL above manually.\n", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	key, err := pollSessionKey(ctx, baseURL, sessionNonce, pollInterval)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			render.PrintError(out, asJSON, "login timed out",
-				"finish the API key creation in the browser within the timeout", exitcode.Auth)
-			os.Exit(exitcode.Auth)
-		}
-		render.PrintError(out, asJSON, err.Error(),
-			"the login handshake failed", exitcode.Auth)
-		os.Exit(exitcode.Auth)
-	}
-	return saveAndVerifyToken(out, asJSON, profileName, baseURL, key, local)
 }
 
 // pollSessionKey polls GET {baseURL}/ai-api/v1/cli-session/{nonce}/key
@@ -498,29 +477,6 @@ func pollSessionOnce(ctx context.Context, client *http.Client, endpoint string) 
 		// 5xx or unexpected 2xx — keep trying.
 		return "", pollTransient, nil
 	}
-}
-
-func buildLoginURL(baseURL, sessionNonce, suggestedName string) (string, error) {
-	u, err := url.Parse(baseURL + "/ui/ai/settings/api-keys")
-	if err != nil {
-		return "", fmt.Errorf("invalid login URL %q: %w", baseURL, err)
-	}
-	q := u.Query()
-	q.Set("cli_session", sessionNonce)
-	q.Set("suggested_name", suggestedName)
-	u.RawQuery = q.Encode()
-	return u.String(), nil
-}
-
-// suggestedKeyName produces a unique-per-invocation key name so a
-// developer re-running `praxis login` doesn't hit the modal's
-// "name already exists" validation. 5 hex chars = 20 bits of
-// randomness, plenty to avoid collisions across a single user's keys.
-// The output matches the modal's name pattern ^[a-z0-9_-]+$.
-func suggestedKeyName() string {
-	b := make([]byte, 3)
-	_, _ = rand.Read(b)
-	return "praxis-cli-" + hex.EncodeToString(b)[:5]
 }
 
 // tryFacetsPAT attempts a no-browser login with the control-plane PAT already

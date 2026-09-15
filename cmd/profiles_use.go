@@ -43,7 +43,7 @@ The profile's stored token is verified against its deployment BEFORE
 anything is touched:
 
   • token rejected (expired/revoked) → exits 3, nothing changed; run
-    ` + "`praxis login --profile <name>`" + ` to mint a fresh key
+    ` + "`praxis login --profile <name>`" + ` to log in again
   • deployment unreachable          → exits 5, nothing changed; retry
 
 By default this switches the GLOBAL default (the home store) and installs
@@ -141,7 +141,7 @@ Credentials are never moved: a control-plane PAT stays in
 			if errors.Is(err, errTokenRejected) {
 				render.PrintError(out, asJSON,
 					fmt.Sprintf("stored token for profile %q is no longer valid: %v", name, err),
-					"run `praxis login --profile "+name+"` to mint a fresh key; nothing was changed",
+					"run `praxis login --profile "+name+"` to log in again; nothing was changed",
 					exitcode.Auth)
 				osExit(exitcode.Auth)
 				return nil

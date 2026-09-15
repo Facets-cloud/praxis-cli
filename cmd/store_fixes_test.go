@@ -157,22 +157,24 @@ func TestLogin_LocalWithToken_RefusedBeforeAnyWrite(t *testing.T) {
 	}
 }
 
-// The browser tier mints a Praxis API key, so a --local login that reaches it
-// is refused there — no key minted, nothing saved.
-func TestLogin_LocalFallingToBrowser_Refused(t *testing.T) {
+// With the API-key mint gone, a --local login that exhausts every PAT tier ends
+// at the no-PAT terminal — an Auth exit pointing at the token page, nothing saved.
+func TestLogin_LocalNoPAT_FailsWithoutMinting(t *testing.T) {
 	isolateHome(t)
 	resetLoginFlags(t)
 	clearFacetsEnv(t)
 	code := stubOsExit(t)
-	browsed := stubBrowserLogin(t)
 	loginLocal = true
 	loginURL = "https://x.test"
-	_, err := runLoginRunE(t)
-	if err == nil || *code != exitcode.Usage {
-		t.Fatalf("err=%v code=%d; want a usage refusal", err, *code)
+	out, err := runLoginRunE(t)
+	if err == nil || *code != exitcode.Auth {
+		t.Fatalf("err=%v code=%d; want an auth failure", err, *code)
 	}
-	if *browsed {
-		t.Error("the browser tier ran for a --local login")
+	if !strings.Contains(out, "personal access token") {
+		t.Errorf("failure does not point at the token page: %q", out)
+	}
+	if store, _ := credentials.Load(); len(store) != 0 {
+		t.Errorf("credentials written despite the failure: %v", store)
 	}
 }
 

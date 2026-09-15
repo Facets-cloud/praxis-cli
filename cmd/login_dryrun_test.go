@@ -33,7 +33,7 @@ func TestLoginDryRun_StoredValidToken_ReportsReuse(t *testing.T) {
 	resetLoginFlags(t)
 	t.Cleanup(func() { loginDryRun = false })
 	seedProfile(t, "default", "https://stored.test", "tok")
-	browser := stubBrowserLogin(t)
+	browser := stubNoPAT(t)
 	setup := stubPostAuth(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x"}, nil
@@ -62,7 +62,7 @@ func TestLoginDryRun_HasNoSideEffects(t *testing.T) {
 	resetLoginFlags(t)
 	t.Cleanup(func() { loginDryRun = false })
 	seedProfile(t, "default", "https://stored.test", "tok")
-	stubBrowserLogin(t)
+	stubNoPAT(t)
 	stubPostAuth(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x"}, nil
@@ -104,15 +104,15 @@ func TestLoginDryRun_TokenAndReachabilityMatrix(t *testing.T) {
 	}{
 		{
 			name: "no token, reachable server (401 on empty probe)", authErr: errTokenRejected,
-			wantStatus: "none", wantAction: "control-plane PAT (browser), else browser", wantOK: true, wantExit: -1,
+			wantStatus: "none", wantAction: "control-plane PAT (browser), else login fails", wantOK: true, wantExit: -1,
 		},
 		{
 			name: "stored token rejected falls back to browser", seedToken: "dead", authErr: errTokenRejected,
-			wantStatus: "stored-invalid", wantAction: "control-plane PAT (browser), else browser", wantOK: true, wantExit: -1,
+			wantStatus: "stored-invalid", wantAction: "control-plane PAT (browser), else login fails", wantOK: true, wantExit: -1,
 		},
 		{
-			name: "stored token valid with --force still browsers", seedToken: "tok", force: true,
-			wantStatus: "stored-valid", wantAction: "control-plane PAT (browser), else browser (--force)", wantOK: true, wantExit: -1,
+			name: "stored token valid with --force re-enters the chain", seedToken: "tok", force: true,
+			wantStatus: "stored-valid (--force)", wantAction: "control-plane PAT (browser), else login fails", wantOK: true, wantExit: -1,
 		},
 		{
 			name: "supplied token valid", suppliedTok: "sk_new",
@@ -138,7 +138,7 @@ func TestLoginDryRun_TokenAndReachabilityMatrix(t *testing.T) {
 			} else {
 				seedProfile(t, "default", "https://stored.test", "")
 			}
-			stubBrowserLogin(t)
+			stubNoPAT(t)
 			stubPostAuth(t)
 			exit := stubOsExit(t)
 			stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
@@ -173,7 +173,7 @@ func TestLoginDryRun_ProfileSwitchSkillsEffect(t *testing.T) {
 	t.Cleanup(func() { loginDryRun = false })
 	seedProfile(t, "default", "https://stored.test", "tok")
 	seedProfile(t, "acme", "https://acme.test", "tok2")
-	stubBrowserLogin(t)
+	stubNoPAT(t)
 	stubPostAuth(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x"}, nil
@@ -204,7 +204,7 @@ func TestLoginDryRun_EnvDoesNotHideAPendingProfileSwitch(t *testing.T) {
 	t.Cleanup(func() { loginDryRun = false })
 	seedProfile(t, "default", "https://stored.test", "tok")
 	seedProfile(t, "acme", "https://acme.test", "tok2")
-	stubBrowserLogin(t)
+	stubNoPAT(t)
 	stubPostAuth(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x"}, nil
@@ -241,7 +241,7 @@ func TestLoginDryRun_EnvMatchingThePointerReportsNoSwitch(t *testing.T) {
 	if _, err := credentials.SetDefault("acme"); err != nil {
 		t.Fatal(err)
 	}
-	stubBrowserLogin(t)
+	stubNoPAT(t)
 	stubPostAuth(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
 		return &authMeResponse{Email: "u@x"}, nil
