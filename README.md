@@ -94,12 +94,12 @@ that does everything you need:
      token (and its control plane) — nothing to click.
    - Otherwise it opens the control plane's **personal access token**
      page — the same page `raptor login` opens. Create a token there and
-     the CLI picks it up automatically (press Enter to skip to an API
-     key instead). On a terminal with no `--url`, it asks for the
-     control plane URL first, the way `raptor login` does.
-   - Failing both, it opens your browser to create a **Praxis API key**
-     (you click "Create" once; the CLI polls the deployment for the new
-     key and picks it up).
+     the CLI picks it up automatically. On a terminal with no `--url`, it
+     asks for the control plane URL first, the way `raptor login` does.
+   - Failing both, login stops and points you at the token page — it no
+     longer creates a **Praxis API key**. Existing Praxis API keys still
+     work (reused from a stored profile, or supplied with `--token`), but
+     no new one is minted.
    A control-plane token is saved to `~/.facets/credentials` — **raptor's
    store, read by both CLIs** — as the section named after the praxis
    profile, so `raptor` works with no second login and a `raptor login`
