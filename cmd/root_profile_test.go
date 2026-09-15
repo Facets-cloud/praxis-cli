@@ -2,19 +2,48 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
+	"github.com/Facets-cloud/praxis-cli/internal/harness"
+	"github.com/Facets-cloud/praxis-cli/internal/raptorinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
 
 // $PRAXIS_PROFILE now outranks both on-disk pointers, so a developer with it
 // exported would silently change what this whole suite resolves. Clear it once.
 func TestMain(m *testing.M) {
+	// Command integration must not discover real credentials, skills or live
+	// services when a test omits a narrower fixture or network seam.
+	testHome, err := os.MkdirTemp("", "praxis-cmd-tests-*")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", testHome)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil || (host != "localhost" && !net.ParseIP(host).IsLoopback()) {
+			return nil, fmt.Errorf("test blocked non-loopback service %q", addr)
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}
+	transport.Proxy = nil
+	http.DefaultTransport = transport
+	raptorLocalVersion = func() (string, bool) { return "", false }
+	// Raptor integration tests restore these; unrelated command tests must not
+	// run the developer's binary or bootstrap a dependency.
+	ensureRaptorBinary = func() (raptorinstall.Result, error) { return raptorinstall.Result{}, nil }
+	installRaptorSkills = func([]harness.Harness) ([]skillinstall.Installation, error) { return nil, nil }
+	updateRaptor = func(io.Writer, bool, bool) (raptorUpgradeResult, error) { return raptorUpgradeResult{}, nil }
 	os.Unsetenv(credentials.EnvProfile)
 	// raptor's credentials walk starts at cwd and climbs to /, which passes
 	// through the developer's real home. Start it at the (faked) HOME instead so
@@ -22,6 +51,8 @@ func TestMain(m *testing.M) {
 	restore := credentials.SetGetwdForTest(func() (string, error) { return os.Getenv("HOME"), nil })
 	code := m.Run()
 	restore()
+	transport.CloseIdleConnections()
+	os.RemoveAll(testHome)
 	os.Exit(code)
 }
 

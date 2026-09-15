@@ -50,7 +50,7 @@ func NudgeContext(catalogs []string) string {
 	}
 	return "This repo is a member of " + label + ". For cross-service questions — " +
 		"who calls whom, frontend→backend handler, blast radius, code↔infra — use the " +
-		"`use-ig` skill instead of grepping across repos: reads run server-side via " +
+		"`praxis` skill's `references/catalog-read.md` route: reads run server-side via " +
 		"`praxis mcp ig` (start with `praxis mcp ig ig_list_catalogs`)."
 }
 

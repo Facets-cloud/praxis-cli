@@ -21,8 +21,6 @@ import (
 var (
 	detectHarnesses         = harness.Detected
 	installSkill            = skillinstall.Install
-	installSkillBody        = skillinstall.InstallWithBody
-	installSkillTree        = skillinstall.InstallTreeWithBodies
 	listInstalledSkill      = skillinstall.List
 	refreshSkills           = skillinstall.Refresh
 	fetchCatalog            = skillcatalog.Fetch
@@ -206,18 +204,28 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 		}
 		if asJSON {
 			return render.JSON(out, map[string]any{
-				"profile":          active.Name,
-				"scope":            scope,
-				"meta_skill":       state.metaSkill,
-				"removed_skills":   state.removedSkills,
-				"catalog_skills":   state.catalogSkills,
-				"agents":           state.agents,
-				"removed_agents":   state.removedAgents,
-				"snapshot_path":    state.snapshotPath,
-				"snapshot_warning": state.snapshotWarning,
+				"profile":                  active.Name,
+				"scope":                    scope,
+				"meta_skill":               state.metaSkill,
+				"raptor_binary":            state.raptorBinary,
+				"raptor_skills":            state.raptorSkills,
+				"raptor_warning":           state.raptorWarning,
+				"removed_skills":           state.removedSkills,
+				"catalog_skills":           state.catalogSkills,
+				"agents":                   state.agents,
+				"removed_agents":           state.removedAgents,
+				"snapshot_path":            state.snapshotPath,
+				"snapshot_warning":         state.snapshotWarning,
+				"skill_warning":            state.skillWarning,
+				"skill_sync_complete":      state.skillWarning == "" && state.raptorWarning == "",
+				"skill_recovery_directory": state.skillRecoveryDirectory,
 			})
 		}
-		fmt.Fprintf(out, "\n✓ Refreshed profile %q (%s-level).\n", active.Name, scope)
+		if state.skillWarning != "" || state.raptorWarning != "" {
+			fmt.Fprintf(out, "\nProfile %q (%s-level): skill refresh incomplete; inspect warnings above.\n", active.Name, scope)
+		} else {
+			fmt.Fprintf(out, "\n✓ Refreshed profile %q (%s-level).\n", active.Name, scope)
+		}
 		return nil
 	},
 }

@@ -3,6 +3,7 @@ package skillinstall
 import (
 	_ "embed"
 	"fmt"
+	"io/fs"
 	"sort"
 )
 
@@ -633,6 +634,10 @@ func isSingleFileMetaSkill(name string) bool {
 // Binary-embedded meta-skills only; org catalog skills come from the
 // server's /v1/skills/bundle endpoint.
 func ContentFor(name string) (string, error) {
+	if tree, ok := treeSkillFS(name); ok {
+		body, err := fs.ReadFile(tree, "SKILL.md")
+		return string(body), err
+	}
 	body, ok := metaSkillBody(name)
 	if !ok {
 		return "", fmt.Errorf(
@@ -658,19 +663,7 @@ func IsMetaSkill(name string) bool {
 // install-log output stable across runs and prevents tests from being flaky
 // on map iteration randomness.
 func MetaSkillNames() []string {
-	set := make(map[string]struct{}, len(singleFileMetaSkills))
-	for _, k := range singleFileMetaSkills {
-		set[k] = struct{}{}
-	}
-	for k := range treeSkills() {
-		set[k] = struct{}{}
-	}
-	names := make([]string, 0, len(set))
-	for k := range set {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	return names
+	return []string{praxisSkillName}
 }
 
 // bootstrapSkills is the subset of meta-skills that can be installed WITHOUT a
@@ -678,7 +671,7 @@ func MetaSkillNames() []string {
 // (no network, no credentials) so `praxis init` / the cask hook / first-run can
 // land them the moment praxis is installed. Every entry MUST also be a
 // meta-skill (so login refreshes it and logout preserves it).
-var bootstrapSkills = []string{gettingStartedSkillName}
+var bootstrapSkills = []string{praxisSkillName}
 
 // BootstrapSkillNames returns the no-auth-installable meta-skills, sorted.
 func BootstrapSkillNames() []string {

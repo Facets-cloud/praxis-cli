@@ -7,8 +7,8 @@ import (
 
 func TestBootstrapSkillNames(t *testing.T) {
 	got := BootstrapSkillNames()
-	if len(got) != 1 || got[0] != "praxis-getting-started" {
-		t.Fatalf("BootstrapSkillNames() = %v, want [praxis-getting-started]", got)
+	if len(got) != 1 || got[0] != "praxis" {
+		t.Fatalf("BootstrapSkillNames() = %v, want [praxis]", got)
 	}
 }
 

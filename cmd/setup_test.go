@@ -139,7 +139,7 @@ func TestFirstRunBootstrapNoHostStaysRetryable(t *testing.T) {
 	}
 }
 
-func TestInstallBootstrapSkillsWritesGTMSkill(t *testing.T) {
+func TestInstallBootstrapSkillsWritesCanonicalSkill(t *testing.T) {
 	// Redirect HOME so the install (and its receipt) land in a temp tree.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -156,16 +156,16 @@ func TestInstallBootstrapSkillsWritesGTMSkill(t *testing.T) {
 		if walkErr != nil || info.IsDir() {
 			return nil
 		}
-		if filepath.Base(filepath.Dir(p)) == "praxis-getting-started" && filepath.Base(p) == "SKILL.md" {
+		if filepath.Base(filepath.Dir(p)) == "praxis" && filepath.Base(p) == "SKILL.md" {
 			b, _ := os.ReadFile(p)
-			if bodyHas(string(b), "Praxis by Facets") && bodyHas(string(b), "facets.cloud/signup") {
+			if bodyHas(string(b), "name: praxis") && bodyHas(string(b), "references/context-and-access.md") {
 				found = true
 			}
 		}
 		return nil
 	})
 	if !found {
-		t.Error("getting-started SKILL.md with GTM content was not installed into any host")
+		t.Error("canonical SKILL.md and its route were not installed into any host")
 	}
 }
 

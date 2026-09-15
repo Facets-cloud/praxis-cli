@@ -12,8 +12,8 @@ import (
 // `raptor`, not to a non-existent `raptor_cli` MCP namespace. Regression
 // guard for the bug where the model burned several `praxis mcp` discovery
 // calls hunting for a list-projects tool before finding `raptor get projects`.
-func TestPraxisMetaSkill_RaptorIsLocalNotGateway(t *testing.T) {
-	body, err := ContentFor("praxis")
+func TestLegacyPraxisMetaSkill_RaptorIsLocalNotGateway(t *testing.T) {
+	body, err := legacyPraxisBody()
 	if err != nil {
 		t.Fatalf("ContentFor(praxis): %v", err)
 	}
@@ -50,8 +50,8 @@ func TestPraxisMetaSkill_RaptorIsLocalNotGateway(t *testing.T) {
 	}
 }
 
-func TestPraxisMetaSkill_RaptorProfileCrossCheck(t *testing.T) {
-	body, err := ContentFor("praxis")
+func TestLegacyPraxisMetaSkill_RaptorProfileCrossCheck(t *testing.T) {
+	body, err := legacyPraxisBody()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +70,8 @@ func TestPraxisMetaSkill_RaptorProfileCrossCheck(t *testing.T) {
 	}
 }
 
-func TestPraxisMetaSkill_ExplainsLocalMode(t *testing.T) {
-	body, err := ContentFor("praxis")
+func TestLegacyPraxisMetaSkill_ExplainsLocalMode(t *testing.T) {
+	body, err := legacyPraxisBody()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,8 +88,8 @@ func TestPraxisMetaSkill_ExplainsLocalMode(t *testing.T) {
 	}
 }
 
-func TestPraxisMetaSkill_ProfileManagementSurface(t *testing.T) {
-	body, err := ContentFor("praxis")
+func TestLegacyPraxisMetaSkill_ProfileManagementSurface(t *testing.T) {
+	body, err := legacyPraxisBody()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,8 +112,8 @@ func TestPraxisMetaSkill_ProfileManagementSurface(t *testing.T) {
 //
 // The host now installs and signs raptor in on the user's behalf, matching how
 // it already treats `praxis login`. Credentials stay off-limits either way.
-func TestPraxisMetaSkill_RaptorSetupIsActionable(t *testing.T) {
-	body, err := ContentFor("praxis")
+func TestLegacyPraxisMetaSkill_RaptorSetupIsActionable(t *testing.T) {
+	body, err := legacyPraxisBody()
 	if err != nil {
 		t.Fatalf("ContentFor(praxis): %v", err)
 	}
@@ -150,8 +150,8 @@ func TestPraxisMetaSkill_RaptorSetupIsActionable(t *testing.T) {
 // another deployment had no unattended path and would stall. `profiles use`
 // reuses the stored token, so the meta-skill must name it (and the exit-3
 // fallback) or hosts keep reaching for the browser flow.
-func TestPraxisMetaSkill_TeachesProfileSwitching(t *testing.T) {
-	body, err := ContentFor("praxis")
+func TestLegacyPraxisMetaSkill_TeachesProfileSwitching(t *testing.T) {
+	body, err := legacyPraxisBody()
 	if err != nil {
 		t.Fatalf("ContentFor(praxis): %v", err)
 	}
@@ -190,9 +190,9 @@ func multiProfileMachine(t *testing.T) {
 // for that invocation only. Without this in the meta-skill a host reaches for
 // `profiles use` — wiping and reinstalling ~90 skill files — just to answer
 // one question, and then leaves the user on the wrong profile.
-func TestPraxisMetaSkill_TeachesOneOffProfileFlag(t *testing.T) {
+func TestLegacyPraxisMetaSkill_TeachesOneOffProfileFlag(t *testing.T) {
 	multiProfileMachine(t)
-	body, err := ContentFor("praxis")
+	body, err := legacyPraxisBody()
 	if err != nil {
 		t.Fatalf("ContentFor(praxis): %v", err)
 	}
@@ -220,9 +220,9 @@ func TestPraxisMetaSkill_TeachesOneOffProfileFlag(t *testing.T) {
 // is machine-global: it repoints every session AND rewrites skill files those
 // sessions have already read. A host that doesn't know to scope itself with
 // PRAXIS_PROFILE will silently break its siblings.
-func TestPraxisMetaSkill_TeachesSessionScopingForConcurrency(t *testing.T) {
+func TestLegacyPraxisMetaSkill_TeachesSessionScopingForConcurrency(t *testing.T) {
 	multiProfileMachine(t)
-	body, err := ContentFor("praxis")
+	body, err := legacyPraxisBody()
 	if err != nil {
 		t.Fatalf("ContentFor(praxis): %v", err)
 	}
@@ -250,13 +250,13 @@ func TestPraxisMetaSkill_TeachesSessionScopingForConcurrency(t *testing.T) {
 // customer has exactly one, so none of it describes a choice they can make —
 // and shipping it anyway is what teaches their host to pass `-p` at the single
 // profile it already resolves to. Gate it on the profile count.
-func TestPraxisMetaSkill_MultiProfileDoctrineGatedOnProfileCount(t *testing.T) {
-	single, err := ContentFor("praxis")
+func TestLegacyPraxisMetaSkill_MultiProfileDoctrineGatedOnProfileCount(t *testing.T) {
+	single, err := legacyPraxisBody()
 	if err != nil {
 		t.Fatalf("ContentFor(praxis) single-profile: %v", err)
 	}
 	multiProfileMachine(t)
-	multi, err := ContentFor("praxis")
+	multi, err := legacyPraxisBody()
 	if err != nil {
 		t.Fatalf("ContentFor(praxis) multi-profile: %v", err)
 	}
@@ -326,3 +326,6 @@ func TestSingleFileMetaSkills_EveryNameResolves(t *testing.T) {
 		}
 	}
 }
+
+// Legacy single-file content remains resolvable for compatibility only.
+func legacyPraxisBody() (string, error) { body, _ := metaSkillBody("praxis"); return body, nil }
