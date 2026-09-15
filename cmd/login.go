@@ -66,7 +66,7 @@ func init() {
 	// --profile is the global flag on rootCmd (see root.go): for login it names
 	// the profile to create or update. One flag, one variable, both positions.
 	loginCmd.Flags().StringVar(&loginURL, "url", "", "Praxis deployment URL (a new profile needs one: pass it here, or login asks for it on a terminal; existing profiles reuse their saved URL)")
-	loginCmd.Flags().StringVar(&loginToken, "token", "", "save and verify an existing key directly (a control-plane PAT, or an existing Praxis API key); no browser")
+	loginCmd.Flags().StringVar(&loginToken, "token", "", "save and verify an existing Praxis API key directly (no browser); a control-plane PAT comes from the browser flow, not here")
 	loginCmd.Flags().BoolVar(&loginForce, "force", false, "skip the stored token and re-authenticate from the start of the chain")
 	loginCmd.Flags().BoolVar(&loginLocal, "local", false,
 		"pin this profile to the current directory tree (writes <cwd>/.facets/credentials, which raptor reads too, and <cwd>/.praxis) and install its skills project-scoped, instead of switching the global profile; needs a control-plane PAT")
