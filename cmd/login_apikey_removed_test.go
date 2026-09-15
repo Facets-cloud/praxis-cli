@@ -46,6 +46,7 @@ func TestLoginRunE_ExistingPraxisKeyStillReused(t *testing.T) {
 	seedProfile(t, "default", "https://cp.test", "existing-praxis-key") // no AuthMode = API key
 	stubPostAuth(t)
 	terminal := stubNoPAT(t)
+	pat := stubInteractivePAT(t, false) // must not be reached when reuse succeeds
 	stubAuthMe(t, func(_ string, auth map[string]string) (*authMeResponse, error) {
 		if auth["Authorization"] != "Bearer existing-praxis-key" {
 			t.Errorf("an existing Praxis API key must authenticate as Bearer, got %v", auth)
@@ -59,7 +60,11 @@ func TestLoginRunE_ExistingPraxisKeyStillReused(t *testing.T) {
 	if *terminal {
 		t.Error("login reached the no-PAT terminal despite a valid stored API key")
 	}
-	if p := mustLoadProfile(t, "default"); p.Store != credentials.StorePraxis || p.AuthMode != "" {
-		t.Errorf("the existing API key was not preserved as a praxis-store key: %+v", p)
+	if *pat {
+		t.Error("the browser PAT tier ran even though a valid API key was reused")
+	}
+	if p := mustLoadProfile(t, "default"); p.Store != credentials.StorePraxis ||
+		p.AuthMode != "" || p.Token != "existing-praxis-key" {
+		t.Errorf("the existing API key was not preserved intact: %+v", p)
 	}
 }
