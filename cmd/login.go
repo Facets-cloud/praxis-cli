@@ -180,6 +180,11 @@ installed skills — then exits without changing anything.`,
 			fmt.Fprintf(os.Stderr, "Profile %s → %s%s\n", profileName, baseURL, scope)
 		}
 
+		// A pasted --token often carries stray whitespace; trim it so a value
+		// that is only spaces reads as "no token" (falls through the chain like
+		// an omitted flag) instead of a Bearer of blanks the server would reject.
+		loginToken = strings.TrimSpace(loginToken)
+
 		// --dry-run: report the plan and exit before ANY side effect —
 		// no browser, no key minted, no credential write, no skill churn.
 		if loginDryRun {
@@ -216,7 +221,7 @@ installed skills — then exits without changing anything.`,
 		if handled, perr := interactivePATFn(out, asJSON, profileName, baseURL, loginLocal); handled {
 			return perr
 		}
-		return noPATFn(out, asJSON, baseURL)
+		return noPATFn(out, asJSON, baseURL, loginLocal)
 	},
 }
 
@@ -224,12 +229,16 @@ installed skills — then exits without changing anything.`,
 // raptor's ~/.facets/credentials, and the browser pickup — failed to produce a
 // control-plane PAT. Login used to mint a Praxis API key here; that path is gone,
 // so this points the user at the token page and exits rather than creating a key.
-func noControlPlanePAT(out io.Writer, asJSON bool, baseURL string) error {
+func noControlPlanePAT(out io.Writer, asJSON bool, baseURL string, local bool) error {
 	msg := "could not obtain a control-plane personal access token"
-	render.PrintError(out, asJSON, msg,
-		fmt.Sprintf("create one at %s/v2/home#personal-access-tokens and re-run, or pass --token <existing-key>",
-			strings.TrimRight(baseURL, "/")),
-		exitcode.Auth)
+	hint := fmt.Sprintf("create one at %s/v2/home#personal-access-tokens and re-run",
+		strings.TrimRight(baseURL, "/"))
+	if !local {
+		// --token saves a Praxis API key, which a --local tree can't hold
+		// (refuseLocalAPIKey), so only suggest it for a global login.
+		hint += ", or pass --token <existing-key>"
+	}
+	render.PrintError(out, asJSON, msg, hint, exitcode.Auth)
 	osExit(exitcode.Auth)
 	return fmt.Errorf("%s", msg)
 }
@@ -351,14 +360,15 @@ func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string
 	user, err := fetchAuthMe(baseURL, prof.Auth())
 	if err != nil {
 		if errors.Is(err, errTokenRejected) {
-			// The server gave a verdict: this token is dead. Falling back to
-			// the browser to mint a fresh one is exactly right.
+			// The server gave a verdict: this token is dead. Fall through to
+			// the control-plane PAT tiers (which may open the browser pickup, or
+			// end at the token-page guidance) — no API key is minted anymore.
 			if !asJSON {
 				fmt.Fprintf(os.Stderr,
-					"Stored token for profile %q is no longer valid (%v); opening browser…\n",
+					"Stored token for profile %q is no longer valid (%v); trying a control-plane PAT…\n",
 					profileName, err)
 			}
-			return false, nil // graceful fallback to the browser
+			return false, nil // fall through to the PAT tiers
 		}
 		// Transient: timeout, connection refused, 5xx — the token's validity
 		// is unknown. Do NOT mislabel it "no longer valid" or force a browser

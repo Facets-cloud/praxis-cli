@@ -193,8 +193,8 @@ praxis login [--profile X] [--url Y] [--token Z] [--local]
    a name, or a new name) and exits 2 with the list otherwise.
    --dry-run reports what login would do — resolved profile + URL,
    server reachability, browser vs stored-token reuse, and what
-   happens to installed skills — then exits. No browser, no API key,
-   no credential or skill changes. Exit 0 = report complete; exit 5 =
+   happens to installed skills — then exits. No browser, no credential
+   write, no skill changes. Exit 0 = report complete; exit 5 =
    server unreachable.
 
 praxis profiles [--refresh] [--json]
@@ -213,7 +213,7 @@ praxis profiles use <profile> [--local] [--json]
 praxis profiles rename OLD NEW [--json]
    Rename a credentials section in place (in whichever file holds it),
    keeping URL/username/token. A [default] copy of OLD stays active. No
-   browser, no new API key, no skill changes.
+   browser, no skill changes.
 
 praxis profiles rm NAME [--json]
    Delete a NON-active profile's credentials. Refuses the active
@@ -323,8 +323,9 @@ profile you most recently logged in to.
 Adding a new profile **does not delete previously saved profiles**.
 It only:
 
-1. Saves the new profile's section (a PAT in `~/.facets/credentials`, an
-   API key in `~/.praxis/credentials`)
+1. Saves the new profile's section (a control-plane PAT in
+   `~/.facets/credentials`; or, with `--token`, an existing Praxis API key
+   in `~/.praxis/credentials`)
 2. Copies it over `[default]`, making it the active profile for praxis
    and raptor alike
 3. Wipes the *previous* profile's `praxis-*` org skills from disk
@@ -534,8 +535,8 @@ praxis profiles rename test-x acme-prod
 
 Credentials-only: the section keeps its URL, username, and token; the
 [default] copy of the old profile, if any, stays the active one. No
-browser round-trip, no second API key, no skill
-churn. (A directory tree pinned via `--local` has its own
+browser round-trip, no skill churn. (A directory tree pinned via `--local`
+has its own
 `.facets/credentials` and is not touched; it keeps the section under the
 old name until you re-pin it with `praxis profiles use <new> --local`.)
 

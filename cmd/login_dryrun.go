@@ -11,19 +11,20 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 )
 
+// noPATAction is the dry-run action label for a login that reaches the
+// control-plane-PAT tier: shared with the PAT-eligibility branch so the report
+// and the chain describe the same terminal outcome.
+const noPATAction = "no control-plane PAT available — login fails"
+
 // runLoginDryRun reports what `praxis login` WOULD do with the given flags —
 // without opening a browser, writing credentials, or
 // touching installed skills (issue #66: login is not a safe probe).
 //
-// Network traffic is read-only GETs only: /ai-api/auth/me, plus the public
-// /ai-api/auth/status probe that decides whether login would ask for a
-// control-plane PAT. With
-// a stored (or --token supplied) key it doubles as the token-reuse check;
-// without one, an HTTP 401/403 answer still proves the deployment is
-// reachable. Exit code 0 means the report is complete; exitcode.Network means
-// the server could not be reached, so login's behavior can't be predicted.
-const noPATAction = "no control-plane PAT available — login fails"
-
+// Network traffic is read-only GETs only: /ai-api/auth/me, which doubles as the
+// token-reuse check when a stored (or --token supplied) key is present; without
+// one, an HTTP 401/403 answer still proves the deployment is reachable. Exit
+// code 0 means the report is complete; exitcode.Network means the server could
+// not be reached, so login's behavior can't be predicted.
 func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, local bool) error {
 	// The store login itself consults: home for a global login, so a run
 	// from inside a local tree cannot make the report reuse the tree's token.
@@ -108,15 +109,30 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		facetsFile = "<cwd>/.facets/credentials"
 	}
 	storeEffect := "nothing written (no control-plane PAT available; login fails)"
+	// sharedWithRaptor: does this outcome land a control-plane PAT in raptor's
+	// store? It's the same fact the --local refusal below needs, captured here
+	// where action + AuthMode are in hand — so the two never drift, unlike
+	// re-reading it out of storeEffect's wording.
+	sharedWithRaptor := false
 	switch {
 	case strings.HasPrefix(action, "facets-pat"),
 		strings.HasPrefix(action, "reuse-token") && prof.AuthMode == credentials.AuthModeBasic:
 		storeEffect = fmt.Sprintf("%s [%s] (shared with raptor)", facetsFile, profileName)
+		sharedWithRaptor = true
 	case strings.HasPrefix(action, "reuse-token"):
 		// An existing Praxis API key, reused (not minted).
 		storeEffect = fmt.Sprintf("~/.praxis/credentials [%s] (existing Praxis API key; raptor unchanged)", profileName)
 	case strings.HasPrefix(action, "control-plane PAT"):
 		storeEffect = fmt.Sprintf("%s [%s] (shared with raptor) if a control-plane PAT is created, else login fails", facetsFile, profileName)
+		sharedWithRaptor = true
+	}
+
+	// A --local login can only end in a shared control-plane PAT. Anything else
+	// the real chain refuses — refuseLocalAPIKey for --token, and persistAndSetup
+	// for a reused Praxis API key — so the report must say refused, not predict a
+	// save the command would reject (keeps --dry-run agreeing with the chain).
+	if local && !sharedWithRaptor {
+		storeEffect = "refused: local mode needs a control-plane PAT (drop --local, or create a PAT)"
 	}
 
 	skillsEffect := fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)

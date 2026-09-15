@@ -59,7 +59,7 @@ func stubNoPAT(t *testing.T) *bool {
 	t.Helper()
 	called := false
 	orig := noPATFn
-	noPATFn = func(out io.Writer, asJSON bool, baseURL string) error {
+	noPATFn = func(out io.Writer, asJSON bool, baseURL string, local bool) error {
 		called = true
 		return nil
 	}
