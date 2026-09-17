@@ -42,6 +42,8 @@ jobs:
         run: go test -race ./...
 
       - name: govulncheck
+        env:
+          GOTOOLCHAIN: auto
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   goreleaser-check:
