@@ -345,7 +345,7 @@ func raptorState(local bool) raptorstate.State {
 func tryReuseStoredToken(out io.Writer, asJSON bool, profileName, baseURL string, local bool) (bool, error) {
 	store, err := loginStore(local)
 	if err != nil {
-		return false, nil // can't read the store — just use the browser
+		return false, nil //nolint:nilerr // deliberate: can't read the store — just use the browser
 	}
 	prof, ok := store[profileName]
 	if !ok || prof.Token == "" {
@@ -758,7 +758,7 @@ func activateProfile(profileName string, local bool) (string, func(), error) {
 	if err != nil {
 		// Home is unresolvable, so there's nothing to pin to — ActiveRoot
 		// will fail the same way downstream and postAuthSetup reports it.
-		return "", noop, nil
+		return "", noop, nil //nolint:nilerr // deliberate: home unresolvable, ActiveRoot fails downstream
 	}
 	return "", paths.OverrideActiveRoot(home), nil
 }
@@ -824,7 +824,7 @@ var errTokenRejected = errors.New("token rejected by server")
 // fetchAuthMe is the seam: tests swap it to avoid hitting a real server.
 var fetchAuthMe = func(baseURL string, auth map[string]string) (*authMeResponse, error) {
 	client := httpclient.New(10 * time.Second)
-	req, err := http.NewRequest("GET", baseURL+"/ai-api/auth/me", nil)
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/ai-api/auth/me", nil)
 	if err != nil {
 		return nil, err
 	}

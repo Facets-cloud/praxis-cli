@@ -87,11 +87,11 @@ func Dir() (string, error) {
 func ProjectRoot() (string, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", false, nil
+		return "", false, nil //nolint:nilerr // deliberate: no home dir available, no project root
 	}
 	cwd, err := getwd()
 	if err != nil {
-		return "", false, nil
+		return "", false, nil //nolint:nilerr // deliberate: cannot determine working dir, no project root
 	}
 	home, dir, ok := alignUnder(home, cwd)
 	if !ok {

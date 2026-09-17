@@ -36,7 +36,7 @@ func TestFetchRelease_Success(t *testing.T) {
 		if got := r.Header.Get("User-Agent"); got != "praxis-cli" {
 			t.Errorf("User-Agent = %q, want praxis-cli", got)
 		}
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(fakeReleaseJSON("v1.2.3", "praxis_darwin_arm64", "checksums.txt")))
 	}))
 	defer srv.Close()
@@ -65,7 +65,7 @@ func TestReleaseURL(t *testing.T) {
 
 func TestReleaseTagFrom(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(fakeReleaseJSON("v2.3.4")))
 	}))
 	defer srv.Close()
@@ -79,7 +79,7 @@ func TestReleaseTagFrom(t *testing.T) {
 
 	// Errors propagate (so the freshness engine treats it as "not stale"), and
 	// the 404 "no releases published yet" contract is preserved.
-	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404) }))
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotFound) }))
 	defer bad.Close()
 	_, err = releaseTagFrom(bad.URL)
 	if err == nil {
@@ -92,7 +92,7 @@ func TestReleaseTagFrom(t *testing.T) {
 
 func TestFetchRelease_404(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(404)
+		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
 
@@ -107,7 +107,7 @@ func TestFetchRelease_404(t *testing.T) {
 
 func TestFetchRelease_500(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
@@ -122,7 +122,7 @@ func TestFetchRelease_500(t *testing.T) {
 
 func TestFetchRelease_BadJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("{ this isn't json"))
 	}))
 	defer srv.Close()
@@ -283,7 +283,7 @@ func TestVerifyChecksum_TrimmedHex(t *testing.T) {
 func TestDownload_Success(t *testing.T) {
 	payload := []byte("fake binary content")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)
 	}))
 	defer srv.Close()
@@ -305,7 +305,7 @@ func TestDownload_Success(t *testing.T) {
 
 func TestDownload_404(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(404)
+		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
 
@@ -316,7 +316,7 @@ func TestDownload_404(t *testing.T) {
 
 func TestFetchText(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("hello world"))
 	}))
 	defer srv.Close()
@@ -332,7 +332,7 @@ func TestFetchText(t *testing.T) {
 
 func TestFetchText_Error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 

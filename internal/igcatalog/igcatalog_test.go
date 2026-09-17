@@ -171,7 +171,7 @@ func TestListCatalogs_InfraMemberHasNoRepo(t *testing.T) {
 func TestGetCatalog_404SurfacesError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assertReq(t, r, http.MethodGet, "/ai-api/ig/catalogs/ghost", "tok")
-		w.WriteHeader(404)
+		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte("no such catalog"))
 	}))
 	defer srv.Close()
@@ -322,7 +322,7 @@ func TestPublishMember_UploadsMultipartWithGitAndSha(t *testing.T) {
 		if string(raw) != graph {
 			t.Errorf("decompressed graph = %q; want %q", raw, graph)
 		}
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
@@ -363,7 +363,7 @@ func TestPublishMember_OmitsEmptyGitAndSha(t *testing.T) {
 		if !bytes.Equal(got, gz) {
 			t.Errorf("graph part bytes mismatch")
 		}
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
@@ -544,7 +544,7 @@ func TestManifestPush_SendsOnlyContentAndGitSHA(t *testing.T) {
 				t.Errorf("push body leaked server-stamped field %q\ngot: %s", forbidden, s)
 			}
 		}
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
@@ -564,7 +564,7 @@ func TestManifestPush_OmitsEmptyGitSHA(t *testing.T) {
 		if s := string(raw); strings.Contains(s, "git_sha") {
 			t.Errorf("empty git_sha should be omitted; got: %s", s)
 		}
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 

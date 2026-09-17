@@ -65,7 +65,7 @@ func runIgHook(event, session, tmpDir, canonURL string, claims claimsFunc) (stri
 	}
 	cats, err := claims(canonURL)
 	if err != nil {
-		return "", nil // offline / not logged in / timeout → silent, retry next cwd change
+		return "", nil //nolint:nilerr // deliberate: offline / not logged in / timeout → silent, retry next cwd change
 	}
 	ighook.MarkProcessed(tmpDir, session, canonURL)
 	if len(cats) == 0 {

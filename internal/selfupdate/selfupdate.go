@@ -76,7 +76,7 @@ func releaseTagFrom(url string) (string, error) {
 // to exercise it without hitting api.github.com.
 func fetchRelease(url string) (*Release, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -87,10 +87,10 @@ func fetchRelease(url string) (*Release, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == 404 {
+	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("no releases published yet")
 	}
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("github API returned %s", resp.Status)
 	}
 	var r Release
@@ -126,7 +126,7 @@ func AssetForPlatform(r *Release) (binary *Asset, checksums *Asset, err error) {
 // Download fetches the URL into a temp file and returns its path.
 func Download(url string) (string, error) {
 	client := &http.Client{Timeout: 5 * time.Minute}
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
@@ -136,7 +136,7 @@ func Download(url string) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download returned %s", resp.Status)
 	}
 	tmp, err := os.CreateTemp("", "praxis-update-*")
@@ -157,7 +157,7 @@ func Download(url string) (string, error) {
 // FetchText downloads a small text body (capped at 1 MB) and returns it.
 func FetchText(url string) (string, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
@@ -167,7 +167,7 @@ func FetchText(url string) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("fetch %s returned %s", url, resp.Status)
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

@@ -9,7 +9,9 @@ LDFLAGS := -s -w \
   -X $(PKG)/cmd.commit=$(COMMIT) \
   -X $(PKG)/cmd.date=$(DATE)
 
-.PHONY: build install test clean fmt vet lint
+GOLANGCI_LINT_VERSION ?= v2.13.2
+
+.PHONY: build install test clean fmt vet lint check
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
@@ -18,7 +20,7 @@ install:
 	go install -ldflags "$(LDFLAGS)" .
 
 test:
-	go test ./...
+	go test -race ./...
 
 fmt:
 	gofmt -w .
@@ -26,7 +28,10 @@ fmt:
 vet:
 	go vet ./...
 
-lint: fmt vet test
+lint:
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
+
+check: fmt vet lint test
 
 clean:
 	rm -f $(BINARY)

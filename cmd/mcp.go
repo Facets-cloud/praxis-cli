@@ -259,7 +259,7 @@ func printManifestPretty(out io.Writer, raw []byte) error {
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		// Server returned something we can't parse — fall back to raw.
 		fmt.Fprintln(out, prettyJSON(raw))
-		return nil
+		return nil //nolint:nilerr // deliberate: server returned unparseable JSON, raw output printed
 	}
 	if len(manifest.Mcps) == 0 {
 		fmt.Fprintln(out, "(no MCPs registered on this gateway)")
@@ -322,7 +322,7 @@ var callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body 
 	// if the redirect leaves the domain.
 	client := httpclient.New(timeout)
 	url := strings.TrimRight(baseURL, "/") + "/ai-api/v1/mcp/" + mcp + "/" + fn
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, err
 	}
