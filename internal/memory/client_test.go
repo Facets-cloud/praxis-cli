@@ -101,7 +101,7 @@ func TestList_BuildsQueryStringFromParams(t *testing.T) {
 	var capturedQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedQuery = r.URL.RawQuery
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
 	}))
 	defer srv.Close()
@@ -138,7 +138,7 @@ func TestList_OmitsEmptyParams(t *testing.T) {
 	var capturedQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedQuery = r.URL.RawQuery
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
 	}))
 	defer srv.Close()
@@ -160,7 +160,7 @@ func TestCreate_PostsBodyWithoutAgentID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedQuery = r.URL.RawQuery
 		capturedBody, _ = io.ReadAll(r.Body)
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
 	}))
 	defer srv.Close()

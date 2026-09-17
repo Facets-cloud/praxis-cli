@@ -184,7 +184,7 @@ var Fetch = func(baseURL string, auth map[string]string) ([]Skill, error) {
 	}
 
 	url := strings.TrimRight(baseURL, "/") + bundlePath
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}

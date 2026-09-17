@@ -40,7 +40,7 @@ func TestNew_DropsAuthHeadersOnForeignRedirect(t *testing.T) {
 	}))
 	defer from.Close()
 
-	req, err := http.NewRequest("POST", from.URL, strings.NewReader(`{"a":1}`))
+	req, err := http.NewRequest(http.MethodPost, from.URL, strings.NewReader(`{"a":1}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestNew_KeepsAuthHeadersOnSameHostRedirect(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	req, err := http.NewRequest("POST", srv.URL+"/start", strings.NewReader("payload"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/start", strings.NewReader("payload"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,13 +144,13 @@ func TestCheckRedirect_StripsSensitiveHeaders(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			orig, err := http.NewRequest("GET", tt.from, nil)
+			orig, err := http.NewRequest(http.MethodGet, tt.from, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			// Mirror what net/http hands CheckRedirect: the header set it
 			// already prepared for the NEW request.
-			req, err := http.NewRequest("GET", tt.to, nil)
+			req, err := http.NewRequest(http.MethodGet, tt.to, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -185,7 +185,7 @@ func TestNew_DropsCookieOnForeignRedirect(t *testing.T) {
 	}))
 	defer from.Close()
 
-	req, err := http.NewRequest("GET", from.URL, nil)
+	req, err := http.NewRequest(http.MethodGet, from.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

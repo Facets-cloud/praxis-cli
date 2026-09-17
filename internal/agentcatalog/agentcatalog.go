@@ -123,7 +123,7 @@ func fetchActiveSorted(baseURL string, auth map[string]string, path string) ([]A
 
 func fetchOne(baseURL string, auth map[string]string, path, kind string) ([]Agent, error) {
 	url := strings.TrimRight(baseURL, "/") + path
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}

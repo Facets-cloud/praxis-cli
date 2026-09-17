@@ -218,9 +218,7 @@ func credentialsPut(name, url, username, token string) error {
 	return credentialsPutImpl(name, url, username, token)
 }
 
-var credentialsPutImpl = func(name, url, username, token string) error {
-	return _credentialsPut(name, url, username, token)
-}
+var credentialsPutImpl = _credentialsPut
 
 // TestListSkills_Populated exercises the pretty formatter directly,
 // bypassing the cobra RunE + UseJSON TTY-detection path (which would

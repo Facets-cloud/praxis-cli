@@ -30,11 +30,21 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+
       - name: go build
         run: make build
 
       - name: go test
         run: go test -race ./...
+
+      - name: govulncheck
+        env:
+          GOTOOLCHAIN: auto
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   goreleaser-check:
     runs-on: ubuntu-latest

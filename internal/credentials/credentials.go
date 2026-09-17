@@ -372,7 +372,7 @@ func SetDefault(name string) (kept string, err error) {
 func setDefaultFrom(home map[string]Profile, p Profile) (kept string, err error) {
 	def, has := home[DefaultProfileName]
 	if has && len(SameAs(home, DefaultProfileName)) == 0 && !def.sameCreds(p) &&
-		!(def.URL == p.URL && def.Username == p.Username) {
+		(def.URL != p.URL || def.Username != p.Username) {
 		kept = keepName(home, def.URL)
 		if err := Put(kept, def); err != nil {
 			return "", err

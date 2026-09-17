@@ -54,11 +54,7 @@ func splitArgs(s string) []string {
 	if s == "" {
 		return nil
 	}
-	var out []string
-	for _, f := range splitFields(s) {
-		out = append(out, f)
-	}
-	return out
+	return splitFields(s)
 }
 
 func splitFields(s string) []string {
@@ -154,7 +150,7 @@ func TestInstallBootstrapSkillsWritesGTMSkill(t *testing.T) {
 	found := false
 	_ = filepath.Walk(home, func(p string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil || info.IsDir() {
-			return nil
+			return nil //nolint:nilerr // deliberate: ignore walk error, skip directory
 		}
 		if filepath.Base(filepath.Dir(p)) == "praxis-getting-started" && filepath.Base(p) == "SKILL.md" {
 			b, _ := os.ReadFile(p)

@@ -46,7 +46,7 @@ var Fetch = func(baseURL string, auth map[string]string, timeout time.Duration) 
 		timeout = DefaultTimeout
 	}
 	url := strings.TrimRight(baseURL, "/") + "/ai-api/v1/mcp/manifest"
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}

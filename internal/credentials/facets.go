@@ -328,7 +328,7 @@ func MigrateLegacyPATs() ([]string, error) {
 			continue
 		}
 		target := name
-		if cur, ok := facets[name]; ok && !(cur.URL == base && cur.Username == p.Username && cur.Token == p.Token) {
+		if cur, ok := facets[name]; ok && (cur.URL != base || cur.Username != p.Username || cur.Token != p.Token) {
 			taken := map[string]Profile{}
 			for n, q := range facets {
 				taken[n] = q

@@ -136,7 +136,7 @@ Use ` + "`run_k8s_cli`" + ` to investigate.
 	preambleIdx := strings.Index(rendered, "Execution context")
 	closingFence := strings.Index(rendered, "\n---\n")
 	bodyHeading := strings.Index(rendered, "# K8s Operations")
-	if !(closingFence < preambleIdx && preambleIdx < bodyHeading) {
+	if closingFence >= preambleIdx || preambleIdx >= bodyHeading {
 		t.Errorf(
 			"order should be: closing-fence(%d) < preamble(%d) < body(%d)",
 			closingFence, preambleIdx, bodyHeading)
@@ -159,7 +159,7 @@ func TestRenderedContent_NoFrontmatter_PrependsPreamble(t *testing.T) {
 	}
 	preambleIdx := strings.Index(rendered, "Execution context")
 	bodyHeading := strings.Index(rendered, "# Just a heading")
-	if !(0 < preambleIdx && preambleIdx < bodyHeading) {
+	if preambleIdx <= 0 || preambleIdx >= bodyHeading {
 		t.Errorf("order should be frontmatter, preamble, body; got preamble=%d body=%d", preambleIdx, bodyHeading)
 	}
 	if !strings.Contains(rendered, "# Just a heading") {
@@ -255,6 +255,9 @@ End.
 	// The original body content (everything after the closing ---)
 	// must appear verbatim in the rendered output.
 	bodyStart := strings.Index(originalBody, "\n# Body")
+	if bodyStart < 0 {
+		t.Fatalf("marker \\n# Body not found in originalBody")
+	}
 	expectedBodyTail := originalBody[bodyStart:]
 	if !strings.Contains(rendered, strings.TrimLeft(expectedBodyTail, "\n")) {
 		t.Errorf("body not preserved verbatim")

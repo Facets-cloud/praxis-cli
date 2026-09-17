@@ -218,7 +218,7 @@ func pickProfile(out io.Writer, asJSON, local bool, flagURL string) (string, err
 	// the tree's, which a run from inside a local tree would otherwise see.
 	store, err := credentials.LoadHome()
 	if err != nil {
-		return "", nil
+		return "", nil //nolint:nilerr // deliberate: cannot load home store, skip profile picking
 	}
 	// Identical credentials under two names — [acme] and its [default] copy —
 	// are one deployment, not a choice to make.
