@@ -1,4 +1,4 @@
-# CLAUDE.md — praxis-cli
+# AGENTS.md — praxis-cli
 
 Guidance for Claude Code (and other AI assistants) working in this repo.
 Project-specific overrides for the global `~/.claude/CLAUDE.md`.
@@ -48,13 +48,11 @@ Measure, don't guess: `grep -cE '^\s*//' <file>`, and prefer files whose
 `git log` has no `Co-Authored-By: Claude` — that is a real baseline, not prior
 AI output.
 
-## Testing — non-negotiable
+## Testing
 
-**Unit test coverage is required, not optional.**
+Unit test coverage is required.
 
-- Every new package must have a `*_test.go` alongside it from the first
-  commit that introduces it. No "I'll add tests later" — `later` doesn't
-  come.
+- Every new package has a `*_test.go` in the commit that introduces it.
 - Bug fixes land with a regression test that fails before the fix and
   passes after.
 - `make test` (= `go test -race ./...`) must stay green on every commit
@@ -79,9 +77,8 @@ AI output.
 
 ```
 main.go               entrypoint — calls cmd.Execute()
-cmd/                  cobra command tree (only commands that DO something
-                       — no stubs; later phases add commands when their
-                       implementation lands)
+cmd/                  cobra command tree (implemented commands only, no
+                       stubs)
   root.go             root cmd, version vars (ldflags-injected)
   version.go          `praxis version`
   update.go           `praxis update` (self-update via GitHub Releases)
@@ -106,13 +103,10 @@ internal/             pure logic, unit-tested
                        (FACETS_PROFILE → [default] → sole), so `status` can
                        tell the host when to prefix FACETS_PROFILE
   selfupdate/         GitHub Releases fetch, checksum, atomic replace
-  hosthooks/          merges praxis's hooks into each AI host's hook config.
-                       ONE JSON merge engine, per-host differences in a Host
-                       spec — file path, event key, and timeout UNIT all
-                       differ (see the invariants below)
-  skillnudge/         keyword index built from installed skills' frontmatter
-                       `triggers:` + a small static Facets vocabulary; decides
-                       which skill a prompt should invoke
+  claudehooks/        merges praxis's hooks into each AI host's hook config.
+                       ONE JSON merge engine; the `Hosts()` table holds the
+                       per-host differences (file path, event key, timeout
+                       UNIT). The prompt-hook nudge logic is in cmd/hook.go.
 Makefile              build (with ldflags), install, test, lint, clean
 .goreleaser.yml       release config — raw binaries × 4 arches + brew tap
 .github/workflows/    ci.yml (every push), release.yml (on tag)
@@ -120,10 +114,8 @@ Makefile              build (with ldflags), install, test, lint, clean
 
 **Don't add stub commands.** A cobra command that prints "not yet
 implemented" is worse than no command — it lies to users and to
-`--help`. Skill sourcing and the server gateway are now live:
-`login`, `logout`, `status`, `profiles`, `profiles use`, `mcp`,
-`list-skills`, and `refresh-skills` are all implemented (skills install
-automatically as part of `login`/`profiles use`/`refresh-skills`). Skills are
+`--help`. Skills install automatically as part of
+`login`/`profiles use`/`refresh-skills`. Skills are
 fetched from the server, name-prefixed (`praxis-*`), and have the
 `render.ExecutionPreamble` inserted after their frontmatter so any
 in-process MCP reference (`run_cloud_cli(...)`) is rewritten to a
@@ -335,21 +327,21 @@ Override at build time: `make build VERSION=v0.5.0-dev`.
 ## Adding a new command
 
 1. Create `cmd/<verb>.go` with a cobra command and `init()` that adds it.
-2. If it touches a server endpoint, route through `internal/httpclient`
-   (Phase 3 will add this); never call `net/http` directly from `cmd/*`.
+2. If it touches a server endpoint, route through `internal/httpclient`.
+   Do not call `net/http` directly from `cmd/*`.
 3. If it has parseable JSON output, support `--json` and auto-emit JSON
    when `os.Stdout` is not a TTY (so AI hosts spawning praxis as a
    subprocess always get parseable output).
-4. Write a unit test for any non-trivial logic in a corresponding
-   `internal/` package; the cobra binding itself doesn't need a unit
-   test, but the logic it calls does.
+4. Write a unit test for the logic in its `internal/` package. Also test
+   the cobra command: use `cmd.SetOut(&buf)` and call `RunE` directly
+   (see Testing above).
 
 ## Adding a new internal package
 
 1. Create `internal/<name>/<name>.go`.
 2. Create `internal/<name>/<name>_test.go` in the same commit.
 3. Tests must cover the package's exported API and the main failure
-   paths. No exceptions.
+   paths.
 
 ## Distribution
 
