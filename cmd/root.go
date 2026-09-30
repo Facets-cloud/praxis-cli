@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
@@ -149,6 +151,7 @@ func refuseSelection(out io.Writer, asJSON bool, what, hintFmt, name, how, acts 
 
 // Execute runs the root command. Called from main.
 func Execute() {
+	httpclient.Version, httpclient.Command = version, commandPath(os.Args[1:])
 	// First-run: land the pre-login GTM skill into the AI host so a freshly
 	// installed praxis is discoverable before any login. Marker-gated (one
 	// stat() after the first time) and skipped for machine-invoked commands;
@@ -214,4 +217,13 @@ func Execute() {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
+}
+
+// commandPath is the command that args resolve to, without "praxis".
+func commandPath(args []string) string {
+	c, _, err := rootCmd.Find(args)
+	if err != nil || c == rootCmd {
+		return ""
+	}
+	return strings.TrimPrefix(c.CommandPath(), rootCmd.Name()+" ")
 }
