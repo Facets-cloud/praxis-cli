@@ -774,6 +774,8 @@ func setupPayload(profileName, username, baseURL, projectRoot string, local bool
 		"url":              baseURL,
 		"scope":            scopeLabel(local),
 		"meta_skill":       state.metaSkill,
+		"raptor_binary":    state.raptorBinary,
+		"raptor_warning":   state.raptorWarning,
 		"catalog_skills":   state.catalogSkills,
 		"removed_skills":   state.removedSkills,
 		"agents":           state.agents,

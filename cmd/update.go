@@ -43,10 +43,13 @@ func init() {
 
 var updateCmd = &cobra.Command{
 	Use:   "update",
-	Short: "Self-update to the latest published release",
+	Short: "Update Praxis and Raptor to their latest releases",
 	Long: `Check GitHub Releases for a newer version of praxis. If found,
 download the asset for this OS/arch, verify its checksum against the release's
 checksums.txt, and atomically replace the running binary.
+
+Then run 'raptor upgrade', also when praxis is already current. A missing raptor
+is installed to ~/.local/bin first. --yes and --json also pass --yes to raptor.
 
 Homebrew installs are left to Homebrew: this command refuses them and names
 'brew upgrade --cask praxis', so brew's recorded version stays true.`,
@@ -73,15 +76,14 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 		// downgrade). Uses the same comparator as the background update nag
 		// (cmd/update_check.go) so the two can't disagree.
 		if compareSemver(rel.TagName, version) <= 0 {
-			if asJSON {
-				return render.JSON(out, map[string]any{
-					"updated": false,
-					"reason":  "already_latest",
-					"version": current,
-				})
+			if !asJSON {
+				fmt.Fprintf(out, "Already on the latest Praxis version (%s).\n", current)
 			}
-			fmt.Fprintf(out, "Already on the latest version (%s).\n", current)
-			return nil
+			return finishToolUpdate(out, asJSON, autoYes, map[string]any{
+				"updated": false,
+				"reason":  "already_latest",
+				"version": current,
+			})
 		}
 
 		binAsset, sumAsset, err := selfupdate.AssetForPlatform(rel)
@@ -102,7 +104,7 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 		// version from the file on disk. Refuse and name the right command.
 		if _, ok := selfupdate.HomebrewCask(myPath); ok {
 			if asJSON {
-				return render.JSON(out, map[string]any{
+				return finishToolUpdate(out, asJSON, autoYes, map[string]any{
 					"updated":  false,
 					"reason":   "homebrew_managed",
 					"version":  current,
@@ -115,7 +117,7 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 			fmt.Fprintf(out, "\nHomebrew installed this praxis (%s).\n", myPath)
 			fmt.Fprintln(out, "Run this instead, so brew keeps track of the version:")
 			fmt.Fprintln(out, "\n  brew update && brew upgrade --cask praxis")
-			return nil
+			return finishToolUpdate(out, asJSON, autoYes, nil)
 		}
 
 		if !asJSON {
@@ -126,7 +128,7 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 		}
 
 		if !autoYes {
-			fmt.Fprint(out, "\nProceed? [y/N] ")
+			fmt.Fprint(out, "\nProceed with Praxis and Raptor updates? [y/N] ")
 			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
 				fmt.Fprintln(out, "Aborted.")
@@ -197,7 +199,7 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 			if refreshErr != nil {
 				payload["refresh_error"] = refreshErr.Error()
 			}
-			return render.JSON(out, payload)
+			return finishToolUpdate(out, asJSON, true, payload)
 		}
 
 		fmt.Fprintf(out, "✓ Updated to %s.\n", latest)
@@ -208,6 +210,6 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 			fmt.Fprintf(out, "  ✓ refreshed %d installed skill(s)\n", len(refreshed))
 			fmt.Fprintln(out, "\nFor catalog changes, run `praxis login` to re-fetch.")
 		}
-		return nil
+		return finishToolUpdate(out, asJSON, true, nil)
 	},
 }

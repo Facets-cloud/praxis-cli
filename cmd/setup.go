@@ -16,7 +16,8 @@ import (
 )
 
 // `praxis setup` also re-points hooks an older praxis wired from a path that an
-// upgrade has since deleted — see repairPraxisHooks.
+// upgrade has since deleted — see repairPraxisHooks — and installs a missing
+// raptor. First-run stays offline and does not.
 //
 // `praxis setup` and the first-run auto-install land the pre-login GTM skill
 // (praxis-getting-started) into the user's AI host the moment praxis is
@@ -50,9 +51,9 @@ var setupCmd = &cobra.Command{
 Facets does, where to sign up, and how to log in — before you authenticate.
 
 It also re-points any hook an older praxis wired from a path that an upgrade
-has since deleted. No hook is added, and no credentials or network are
-required. This runs automatically on first use and via the Homebrew
-post-install hook.
+has since deleted, and installs the Raptor CLI to ~/.local/bin when it is
+missing. No hook is added and no credentials are required. This runs via the
+Homebrew post-install hook; first use installs only the skill, offline.
 
   Next: praxis login --url https://<your-account-id>.console.facets.cloud`,
 	Args: cobra.NoArgs,
@@ -61,6 +62,7 @@ post-install hook.
 		asJSON := render.UseJSON(setupJSON, false, out)
 		repaired, repairWarn := repairPraxisHooks()
 		printHookRepair(out, asJSON, repaired, repairWarn)
+		raptor, raptorErr := prepareRaptor(out, asJSON)
 		n, err := installBootstrapSkills(out, asJSON)
 		if err != nil {
 			return err
@@ -70,7 +72,11 @@ post-install hook.
 			// stays retryable so first-run installs once a host appears.
 		}
 		if asJSON {
-			return render.JSON(out, map[string]any{"installed": n})
+			payload := map[string]any{"installed": n, "raptor_binary": raptor}
+			if raptorErr != nil {
+				payload["raptor_warning"] = raptorErr.Error()
+			}
+			return render.JSON(out, payload)
 		}
 		if n > 0 {
 			fmt.Fprintf(out, "Installed the getting-started skill into %d host target(s).\n", n)

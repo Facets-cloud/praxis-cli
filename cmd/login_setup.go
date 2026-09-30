@@ -12,6 +12,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
+	"github.com/Facets-cloud/praxis-cli/internal/raptorinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
@@ -21,6 +22,8 @@ import (
 // exactly what changed on disk so they can decide whether to re-read
 // any cached skill files.
 type postAuthState struct {
+	raptorBinary    raptorinstall.Result
+	raptorWarning   string
 	metaSkill       []skillInstallationLite
 	removedSkills   []skillInstallationLite
 	catalogSkills   []skillInstallationLite
@@ -99,6 +102,11 @@ type agentInstallationLite struct {
 // global skills, and vice versa).
 func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[string]string) postAuthState {
 	state := postAuthState{}
+	// Step 0: install raptor if missing, so both CLIs arrive together.
+	var raptorErr error
+	if state.raptorBinary, raptorErr = prepareRaptor(out, asJSON); raptorErr != nil {
+		state.raptorWarning = raptorErr.Error()
+	}
 	hosts := detectHarnesses()
 
 	projectDir, inProject := resolveProjectScope()
