@@ -3,12 +3,14 @@ package cmd
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
+	"github.com/Facets-cloud/praxis-cli/internal/raptorinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
 
@@ -20,6 +22,10 @@ func TestMain(m *testing.M) {
 	// through the developer's real home. Start it at the (faked) HOME instead so
 	// no test reads a live ~/.facets/credentials.
 	restore := credentials.SetGetwdForTest(func() (string, error) { return os.Getenv("HOME"), nil })
+	// Login, setup and update install and upgrade raptor over the network.
+	// Tests that exercise that path swap the real functions back in.
+	ensureRaptorBinary = func() (raptorinstall.Result, error) { return raptorinstall.Result{}, nil }
+	updateRaptor = func(io.Writer, bool, bool) (raptorUpgradeResult, error) { return raptorUpgradeResult{}, nil }
 	code := m.Run()
 	restore()
 	os.Exit(code)
