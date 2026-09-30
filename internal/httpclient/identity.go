@@ -29,6 +29,13 @@ func (identityTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
+// CloseIdleConnections keeps http.Client.CloseIdleConnections working.
+func (identityTransport) CloseIdleConnections() {
+	if t, ok := http.DefaultTransport.(interface{ CloseIdleConnections() }); ok {
+		t.CloseIdleConnections()
+	}
+}
+
 // setIdentity names this build on a Praxis request:
 //
 //	User-Agent:       praxis/1.14.0 (darwin/arm64)
@@ -39,7 +46,7 @@ func (identityTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // is GOOS/GOARCH; every other item is key=value, and a reader ignores keys it
 // does not know. raptor sends the same grammar.
 func setIdentity(h http.Header) {
-	v := token(Version)
+	v := versionToken(Version)
 	platform := runtime.GOOS + "/" + runtime.GOARCH
 	h.Set("User-Agent", "praxis/"+v+" ("+platform+")")
 	items := []string{platform}
@@ -120,6 +127,15 @@ func sessionID(getenv func(string) string) string {
 		return "run-unknown"
 	}
 	return "run-" + hex.EncodeToString(b[:])
+}
+
+// versionToken is the version as an HTTP product-version token: no "/" or ":",
+// and "dev" when nothing is left.
+func versionToken(s string) string {
+	if v := strings.NewReplacer("/", "", ":", "").Replace(token(s)); v != "" {
+		return v
+	}
+	return "dev"
 }
 
 // token keeps only characters that cannot break the header grammar.

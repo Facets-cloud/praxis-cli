@@ -83,7 +83,9 @@ func TestToken(t *testing.T) {
 func TestNew_SendsIdentity(t *testing.T) {
 	t.Setenv("CLAUDECODE", "1")
 	t.Setenv("CI", "")
-	t.Setenv("GITHUB_ACTIONS", "")
+	for _, m := range ciMarkers {
+		t.Setenv(m.env, "")
+	}
 	oldV, oldC := Version, Command
 	Version, Command = "1.14.0", "mcp"
 	t.Cleanup(func() { Version, Command = oldV, oldC })
@@ -130,4 +132,24 @@ func TestNew_SendsIdentity(t *testing.T) {
 			t.Errorf("request %d lost the caller's header", i)
 		}
 	}
+}
+
+func TestVersionToken(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"1.14.0", "1.14.0"},
+		{"v1.14.0-3-gabc123-dirty", "v1.14.0-3-gabc123-dirty"},
+		{"feature/x:1", "featurex1"},
+		{"", "dev"},
+		{" / ", "dev"},
+	}
+	for _, tc := range tests {
+		if got := versionToken(tc.in); got != tc.want {
+			t.Errorf("versionToken(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestIdentityTransportForwardsCloseIdleConnections(t *testing.T) {
+	var _ interface{ CloseIdleConnections() } = identityTransport{}
+	New(time.Second).CloseIdleConnections() // must not panic
 }
