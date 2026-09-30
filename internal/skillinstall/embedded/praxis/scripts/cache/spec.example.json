@@ -1,0 +1,29 @@
+{
+  "name": "example-cache-migrate",
+  "source": {
+    "kind": "aws-elasticache-redis",
+    "host": "my-cache.example.cache.amazonaws.com",
+    "port": 6379,
+    "cluster_mode": "disabled",
+    "tls": true,
+    "auth_env": "SRC_REDIS_AUTH",
+    "integration": "my-aws-account"
+  },
+  "target": {
+    "kind": "gcp-memorystore-valkey",
+    "host": "10.0.0.10",
+    "port": 6379,
+    "cluster_mode": "disabled",
+    "tls": true,
+    "auth_env": "DST_REDIS_AUTH"
+  },
+  "scope": {
+    "key_patterns": ["session:*"],
+    "databases": [0],
+    "exclude_patterns": [],
+    "include_ttl": true
+  },
+  "mode": "snapshot",
+  "run_from": "a host/pod that reaches BOTH the source (its VPC/SG) and the target (over the cross-cloud link)",
+  "expected_keys": 100000
+}

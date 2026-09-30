@@ -38,7 +38,7 @@ func TestRunIgHookMemberNudgesWithCatalogs(t *testing.T) {
 		t.Fatal("a catalog member must produce a nudge")
 	}
 	ctx := nudgeContext(t, out)
-	for _, sub := range []string{"capillary-cloud", "saas-cp", "use-ig"} {
+	for _, sub := range []string{"capillary-cloud", "saas-cp", "references/catalog-read.md"} {
 		if !strings.Contains(ctx, sub) {
 			t.Errorf("nudge missing %q: %s", sub, ctx)
 		}

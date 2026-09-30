@@ -17,26 +17,6 @@ const onboardingSkill = "praxis-onboarding"
 // ever present — ig ships its native copy only when praxis is absent).
 const useIGSkill = "use-ig"
 
-func TestMetaSkillNames_IncludesUseIG(t *testing.T) {
-	names := MetaSkillNames()
-	var found bool
-	for _, n := range names {
-		if n == useIGSkill {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("MetaSkillNames() = %v, want it to include %q", names, useIGSkill)
-	}
-	// Still sorted (login relies on deterministic order).
-	for i := 1; i < len(names); i++ {
-		if names[i-1] > names[i] {
-			t.Errorf("MetaSkillNames() not sorted: %v", names)
-			break
-		}
-	}
-}
-
 func TestIsMetaSkill_UseIGPreserved(t *testing.T) {
 	if !IsMetaSkill(useIGSkill) {
 		t.Errorf("IsMetaSkill(%q) = false, want true (tree meta-skills must survive profile switch)", useIGSkill)
@@ -78,26 +58,6 @@ func TestUseIGTreeSkill_IsMCPVariant(t *testing.T) {
 	}
 }
 
-func TestMetaSkillNames_IncludesTreeSkill(t *testing.T) {
-	names := MetaSkillNames()
-	var found bool
-	for _, n := range names {
-		if n == onboardingSkill {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("MetaSkillNames() = %v, want it to include %q", names, onboardingSkill)
-	}
-	// Still sorted (login relies on deterministic order).
-	for i := 1; i < len(names); i++ {
-		if names[i-1] > names[i] {
-			t.Errorf("MetaSkillNames() not sorted: %v", names)
-			break
-		}
-	}
-}
-
 func TestIsMetaSkill_TreeSkillPreserved(t *testing.T) {
 	if !IsMetaSkill(onboardingSkill) {
 		t.Errorf("IsMetaSkill(%q) = false, want true (tree skills must be preserved on profile switch)", onboardingSkill)
@@ -108,8 +68,8 @@ func TestIsTreeSkill(t *testing.T) {
 	if !isTreeSkill(onboardingSkill) {
 		t.Errorf("isTreeSkill(%q) = false, want true", onboardingSkill)
 	}
-	if isTreeSkill("praxis") {
-		t.Errorf("isTreeSkill(\"praxis\") = true, want false (single-file meta-skill)")
+	if !isTreeSkill("praxis") {
+		t.Errorf("isTreeSkill(\"praxis\") = false, want true (canonical tree)")
 	}
 }
 
@@ -192,25 +152,26 @@ func TestInstallTree_PrunesStaleFiles(t *testing.T) {
 
 func TestRefresh_PrunesStaleTreeFiles(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	fixtureCanonical(t)
 	hosts := fakeHosts(t)
-	results, err := Install(onboardingSkill, hosts)
+	results, err := Install("praxis", hosts)
 	if err != nil {
 		t.Fatalf("Install err = %v", err)
 	}
 
-	stale := filepath.Join(filepath.Dir(results[0].Path), "flows", "retired-flow.md")
+	stale := filepath.Join(filepath.Dir(results[0].Path), "scripts", "retired-flow.md")
 	if err := os.WriteFile(stale, []byte("stale"), 0600); err != nil {
 		t.Fatalf("seed stale file: %v", err)
 	}
 
-	if _, err := Refresh(); err != nil {
+	if _, err := RefreshForHosts(hosts); err != nil {
 		t.Fatalf("Refresh err = %v", err)
 	}
 	if _, statErr := os.Stat(stale); !os.IsNotExist(statErr) {
 		t.Errorf("stale file %s survived Refresh (stat err = %v); tree refresh must prune orphans", stale, statErr)
 	}
 	// The real flow file must still be present after refresh.
-	if _, statErr := os.Stat(filepath.Join(filepath.Dir(results[0].Path), "flows", "first-deployment.md")); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(results[0].Path), "scripts", "helper.sh")); statErr != nil {
 		t.Errorf("flow file missing after refresh: %v", statErr)
 	}
 }
@@ -271,8 +232,9 @@ func TestUninstallByPrefix_PreservesTreeSkill(t *testing.T) {
 
 func TestRefresh_RewritesTreeSkill(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	fixtureCanonical(t)
 	hosts := fakeHosts(t)
-	results, err := Install(onboardingSkill, hosts)
+	results, err := Install("praxis", hosts)
 	if err != nil {
 		t.Fatalf("Install err = %v", err)
 	}
@@ -283,7 +245,7 @@ func TestRefresh_RewritesTreeSkill(t *testing.T) {
 		t.Fatalf("corrupt write: %v", err)
 	}
 
-	if _, err := Refresh(); err != nil {
+	if _, err := RefreshForHosts(hosts); err != nil {
 		t.Fatalf("Refresh err = %v", err)
 	}
 
@@ -291,11 +253,11 @@ func TestRefresh_RewritesTreeSkill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read after refresh: %v", err)
 	}
-	if !strings.Contains(string(restored), `name: "praxis-onboarding"`) {
+	if !strings.Contains(string(restored), `name: praxis`) {
 		t.Errorf("Refresh did not restore tree skill SKILL.md content")
 	}
 	// And the sibling flow file should still be present.
-	flow := filepath.Join(filepath.Dir(target), "flows", "first-deployment.md")
+	flow := filepath.Join(filepath.Dir(target), "scripts", "helper.sh")
 	if _, err := os.Stat(flow); err != nil {
 		t.Errorf("flow file missing after refresh: %v", err)
 	}

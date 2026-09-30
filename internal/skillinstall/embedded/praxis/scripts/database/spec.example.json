@@ -1,0 +1,34 @@
+{
+  "name": "example-db-migrate",
+  "source": {
+    "engine": "postgres",
+    "version": "15",
+    "host": "my-db.example.rds.amazonaws.com",
+    "port": 5432,
+    "databases": ["appdb"],
+    "user": "migrator",
+    "auth_env": "SRC_DB_PASS",
+    "tls": true,
+    "rds_id": "my-db",
+    "integration": "my-aws-account"
+  },
+  "target": {
+    "kind": "alloydb-postgres",
+    "instance": "my-db",
+    "version": "15",
+    "host": "10.0.0.5",
+    "port": 5432,
+    "user": "postgres",
+    "auth_env": "DST_DB_PASS",
+    "connection": "private-ip"
+  },
+  "scope": {
+    "schemas": ["public"],
+    "tables_include": [],
+    "tables_exclude": [],
+    "include_sequences": true
+  },
+  "strategy": "gcp-dms",
+  "downtime_tolerance": "near-zero (full-load + CDC, then promote)",
+  "reachability": { "run_from": "bastion/pod that reaches the RDS SG AND the target private IP" }
+}

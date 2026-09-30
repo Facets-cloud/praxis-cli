@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,12 +19,8 @@ import (
 // `praxis setup` also re-points hooks an older praxis wired from a path that an
 // upgrade has since deleted — see repairPraxisHooks.
 //
-// `praxis setup` and the first-run auto-install land the pre-login GTM skill
-// (praxis-getting-started) into the user's AI host the moment praxis is
-// installed — WITHOUT a login. This solves the bootstrap chicken-and-egg: skills
-// otherwise only appear after `praxis login`, so a freshly-installed praxis is
-// invisible to the host and nothing tells it to log in. The skill is embedded
-// (no network, no credentials), so this works offline and pre-auth.
+// Silent first-run installs embedded Praxis offline. Explicit setup also
+// bootstraps Raptor and installs its independently sourced skill, without login.
 //
 // `setup` is hidden: it is the primitive the Homebrew post-install hook and
 // first-run call. The user-facing GTM surface is the installed skill itself; the
@@ -32,7 +29,7 @@ import (
 
 // bootstrapMarker is bumped when the bootstrap skill content changes enough to
 // warrant a one-time re-install on machines that already ran first-run.
-const bootstrapMarker = ".bootstrap-v1"
+const bootstrapMarker = ".bootstrap-praxis-v1"
 
 var setupJSON bool
 
@@ -43,16 +40,17 @@ func init() {
 
 var setupCmd = &cobra.Command{
 	Use:    "setup",
-	Short:  "Install the Praxis getting-started skill into your AI host (no login needed)",
+	Short:  "Install Praxis and Raptor skills into your AI host (no login needed)",
 	Hidden: true, // invoked by the brew post-install hook + first-run, not by hand
-	Long: `Install the pre-login "getting started" skill into every detected AI host
-(Claude Code, Codex, Gemini CLI) so your assistant knows what Praxis by
-Facets does, where to sign up, and how to log in — before you authenticate.
+	Long: `Install the complete Praxis and Raptor skills into every detected AI host.
+Praxis is embedded in this binary. Raptor is exported from its own CLI, installing
+that CLI to ~/.local/bin first if missing. A missing binary needs network access;
+an existing binary can export offline. Existing valid Raptor skills are preserved.
 
 It also re-points any hook an older praxis wired from a path that an upgrade
-has since deleted. No hook is added, and no credentials or network are
-required. This runs automatically on first use and via the Homebrew
-post-install hook.
+has since deleted. No hook is added and no credentials are required.
+The Homebrew post-install hook runs setup; silent first use installs only the
+embedded Praxis package, without downloading or invoking Raptor.
 
   Next: praxis login --url https://<your-account-id>.console.facets.cloud`,
 	Args: cobra.NoArgs,
@@ -61,51 +59,66 @@ post-install hook.
 		asJSON := render.UseJSON(setupJSON, false, out)
 		repaired, repairWarn := repairPraxisHooks()
 		printHookRepair(out, asJSON, repaired, repairWarn)
+		raptor, raptorErr := prepareRaptor(out, asJSON)
 		n, err := installBootstrapSkills(out, asJSON)
-		if err != nil {
-			return err
-		}
-		if n > 0 {
+		err = errors.Join(raptorErr, err)
+		if n > 0 && err == nil {
 			markBootstrapDone() // mark ONLY after a real install; a no-host run
 			// stays retryable so first-run installs once a host appears.
 		}
 		if asJSON {
-			return render.JSON(out, map[string]any{"installed": n})
+			warning := ""
+			if err != nil {
+				warning = err.Error()
+			}
+			return errors.Join(err, render.JSON(out, map[string]any{"installed": n, "raptor_binary": raptor, "skill_warning": warning, "skill_sync_complete": err == nil, "skill_recovery_directory": skillinstall.RecoveryDirectory(), "hook_warning": repairWarn}))
 		}
 		if n > 0 {
-			fmt.Fprintf(out, "Installed the getting-started skill into %d host target(s).\n", n)
+			if recovery := skillinstall.RecoveryDirectory(); recovery != "" {
+				fmt.Fprintf(out, "Preserved skill content/provenance (if migrated): %s\n", recovery)
+			}
+			fmt.Fprintf(out, "Installed %d skill/host target(s).\n", n)
 			fmt.Fprintln(out, "Next: praxis login --url https://<your-account-id>.console.facets.cloud")
 		}
-		return nil
+		return err
 	},
 }
 
-// installBootstrapSkills installs every no-auth bootstrap meta-skill into every
-// detected AI host. Returns the number of (skill × host) installs. No hosts is a
-// clean no-op (exit 0), so the cask hook and first-run never fail on a machine
-// with no AI host yet.
+// installBootstrapSkills installs both canonical packages without authentication.
+// Returns the number of (skill × host) writes, including partial success.
 func installBootstrapSkills(out io.Writer, asJSON bool) (int, error) {
+	return installBootstrap(out, asJSON, true)
+}
+
+func installBootstrap(out io.Writer, asJSON, includeRaptor bool) (int, error) {
 	hosts := harness.Detected()
+	if project, inProject := resolveProjectScope(); inProject {
+		for i := range hosts {
+			hosts[i] = hosts[i].ProjectScoped(project)
+		}
+	}
 	if len(hosts) == 0 {
 		if !asJSON {
 			fmt.Fprintln(out, "No supported AI hosts detected — nothing to install.")
 		}
 		return 0, nil
 	}
-	n := 0
-	for _, name := range skillinstall.BootstrapSkillNames() {
-		res, err := skillinstall.Install(name, hosts)
-		if err != nil {
-			return n, err
-		}
-		n += len(res)
-		if !asJSON {
-			for _, r := range res {
-				fmt.Fprintf(out, "  ✓ %-12s @ %s\n", r.Harness, r.Path)
-			}
+	res, err := skillinstall.RefreshForHosts(hosts)
+	if err != nil {
+		return 0, err
+	}
+	var raptorErr error
+	if includeRaptor {
+		var raptor []skillinstall.Installation
+		raptor, raptorErr = installRaptorSkills(hosts)
+		res = append(res, raptor...)
+	}
+	if !asJSON {
+		for _, r := range res {
+			fmt.Fprintf(out, "  ✓ %-12s @ %s\n", r.Harness, r.Path)
 		}
 	}
-	return n, nil
+	return len(res), raptorErr
 }
 
 // repairPraxisHooks re-points already-wired hooks at the stable binary path. An
@@ -155,7 +168,7 @@ func printHookRepair(out io.Writer, asJSON bool, repaired []string, warning stri
 // bootstrapMarkerPath is ~/.praxis/.bootstrap-v1, the sentinel that makes
 // first-run auto-install a single stat() after the first time.
 func bootstrapMarkerPath() (string, error) {
-	dir, err := paths.Dir()
+	dir, err := paths.ActiveRoot()
 	if err != nil {
 		return "", err
 	}
@@ -242,6 +255,6 @@ func maybeFirstRunBootstrap(args []string) {
 		return
 	}
 	firstRunBootstrap(args, mp, func() (int, error) {
-		return installBootstrapSkills(io.Discard, true)
+		return installBootstrap(io.Discard, true, false)
 	})
 }

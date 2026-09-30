@@ -373,7 +373,7 @@ func TestMetaSkillNames_ReturnsAllEmbedded(t *testing.T) {
 	for _, n := range names {
 		have[n] = true
 	}
-	for _, want := range []string{"praxis", "praxis-memory"} {
+	for _, want := range []string{"praxis"} {
 		if !have[want] {
 			t.Errorf("MetaSkillNames() missing %q; got %v", want, names)
 		}
@@ -440,7 +440,7 @@ func TestRefresh_RewritesEachInstalledFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	refreshed, err := Refresh()
+	refreshed, err := RefreshForHosts(hosts)
 	if err != nil {
 		t.Fatalf("Refresh err = %v", err)
 	}
@@ -461,6 +461,7 @@ func TestRefresh_RewritesEachInstalledFile(t *testing.T) {
 }
 
 func TestRefresh_EmptyReceipt_NoOp(t *testing.T) {
+	t.Setenv("PATH", "")
 	t.Setenv("HOME", t.TempDir())
 	got, err := Refresh()
 	if err != nil {
@@ -490,7 +491,7 @@ func TestRefresh_SkipsUnknownSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	refreshed, err := Refresh()
+	refreshed, err := RefreshForHosts(hosts)
 	if err != nil {
 		t.Fatalf("Refresh err = %v", err)
 	}
