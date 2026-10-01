@@ -30,6 +30,15 @@ import (
 //   - (agent, harness) pairs where Render returns an error (e.g. Codex
 //   - system_prompt containing triple-quotes). Batch continues.
 func Install(agents []agentcatalog.Agent, hosts []harness.Harness) ([]skillinstall.AgentInstallation, error) {
+	return withReceiptLock(func() ([]skillinstall.AgentInstallation, error) { return installLocked(agents, hosts) })
+}
+
+func withReceiptLock(fn func() ([]skillinstall.AgentInstallation, error)) (out []skillinstall.AgentInstallation, err error) {
+	err = skillinstall.WithReceiptLock(func() error { var e error; out, e = fn(); return e })
+	return
+}
+
+func installLocked(agents []agentcatalog.Agent, hosts []harness.Harness) ([]skillinstall.AgentInstallation, error) {
 	receipt, err := loadReceipt()
 	if err != nil {
 		return nil, err
@@ -80,6 +89,10 @@ func Install(agents []agentcatalog.Agent, hosts []harness.Harness) ([]skillinsta
 // with `prefix`. Used by login (wipe previous profile's `praxis-*`
 // agents before installing the new profile's set) and logout.
 func UninstallByPrefix(prefix string) ([]skillinstall.AgentInstallation, error) {
+	return withReceiptLock(func() ([]skillinstall.AgentInstallation, error) { return uninstallByPrefixLocked(prefix) })
+}
+
+func uninstallByPrefixLocked(prefix string) ([]skillinstall.AgentInstallation, error) {
 	if prefix == "" {
 		return nil, fmt.Errorf("UninstallByPrefix: prefix must be non-empty")
 	}
@@ -134,6 +147,12 @@ func UninstallByPrefix(prefix string) ([]skillinstall.AgentInstallation, error) 
 // any praxis-* file not in that list (and not in the receipt) is an
 // orphan from a previous install or a gated host.
 func RemoveOrphanedByPrefix(prefix string, hosts []harness.Harness, keep map[string]bool) ([]skillinstall.AgentInstallation, error) {
+	return withReceiptLock(func() ([]skillinstall.AgentInstallation, error) {
+		return removeOrphanedByPrefixLocked(prefix, hosts, keep)
+	})
+}
+
+func removeOrphanedByPrefixLocked(prefix string, hosts []harness.Harness, keep map[string]bool) ([]skillinstall.AgentInstallation, error) {
 	if prefix == "" {
 		return nil, fmt.Errorf("RemoveOrphanedByPrefix: prefix must be non-empty")
 	}
