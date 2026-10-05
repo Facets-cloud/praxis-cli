@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -48,9 +47,6 @@ func WithReceiptLock(fn func() error) error { return withSkillLock(fn) }
 func withSkillLock(fn func() error) error {
 	root, err := paths.ActiveRoot()
 	if err != nil {
-		return err
-	}
-	if err := noSymlinkPath(root); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(root, 0700); err != nil {
@@ -103,27 +99,20 @@ func validSkillName(name string) error {
 	return nil
 }
 
-// Reject links in all mutable path components. macOS's system /var and /tmp
-// aliases are allowed; skill directories and their parents are never resolved
-// through links on the strength of a receipt or server response.
+// noSymlinkPath refuses a path that is itself a link: a linked skill folder is
+// usually the user's own checkout, so it is never replaced or written through.
+// Links above it are allowed — a ~/.claude or ~/.claude/skills linked into a
+// dotfiles repo is a normal setup, and writes there stay in the user's tree.
 func noSymlinkPath(p string) error {
 	if !filepath.IsAbs(p) || filepath.Clean(p) != p {
 		return fmt.Errorf("unsafe destination path %q", p)
 	}
-	for at := p; at != filepath.Dir(at); at = filepath.Dir(at) {
-		fi, err := os.Lstat(at)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("inspect path %s: %w", at, err)
-		}
-		if fi.Mode()&os.ModeSymlink != 0 {
-			if runtime.GOOS == "darwin" && (at == "/var" || at == "/tmp") {
-				continue
-			}
-			return fmt.Errorf("symlink path %s is not owned by skill installer", at)
-		}
+	fi, err := os.Lstat(p)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("inspect path %s: %w", p, err)
+	}
+	if err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("symlink path %s is not owned by skill installer", p)
 	}
 	return nil
 }
@@ -305,11 +294,8 @@ func applyPackages(writes []packageWrite, retire []Installation, hosts []harness
 		}
 	}
 	for _, h := range hosts {
-		if h.SkillDir == string(filepath.Separator) {
+		if h.SkillDir == string(filepath.Separator) || !filepath.IsAbs(h.SkillDir) || filepath.Clean(h.SkillDir) != h.SkillDir {
 			return nil, fmt.Errorf("unsafe skill root path %q", h.SkillDir)
-		}
-		if err := noSymlinkPath(h.SkillDir); err != nil {
-			return nil, err
 		}
 		if rel, e := filepath.Rel(h.SkillDir, receiptPath); e == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("skill path contains receipt: %s", h.SkillDir)
@@ -364,11 +350,16 @@ func applyPackages(writes []packageWrite, retire []Installation, hosts []harness
 		if err := noSymlinkPath(dest); err != nil {
 			return nil, err
 		}
-		parent := filepath.Dir(filepath.Dir(dest)) // beside, never inside, the discovery root
-		if err := os.MkdirAll(parent, 0700); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dest), 0700); err != nil {
 			return nil, err
 		}
-		workspace, err := os.MkdirTemp(parent, ".praxis-stage-*")
+		// Stage beside the real discovery root, never inside it. A linked root
+		// can sit on another filesystem, and the activating rename cannot cross.
+		root, err := filepath.EvalSymlinks(filepath.Dir(dest))
+		if err != nil {
+			return nil, err
+		}
+		workspace, err := os.MkdirTemp(filepath.Dir(root), ".praxis-stage-*")
 		if err != nil {
 			return nil, err
 		}

@@ -138,35 +138,115 @@ func TestLifecycle_StageAllHostsBeforeReplacement(t *testing.T) {
 	}
 }
 
-func TestLifecycle_SymlinksNeverFollowed(t *testing.T) {
-	for _, linkRoot := range []bool{false, true} {
-		t.Run(fmt.Sprint(linkRoot), func(t *testing.T) {
+// A linked skill folder is usually the user's own checkout: never replace it
+// or write through it.
+func TestLifecycle_LinkedSkillFolderNeverFollowed(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)[:1]
+	external := t.TempDir()
+	if err := os.WriteFile(filepath.Join(external, "SKILL.md"), []byte("external"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(hosts[0].SkillDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, filepath.Join(hosts[0].SkillDir, "praxis-test")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallWithBody("praxis-test", "replacement", hosts); err == nil {
+		t.Error("install over a linked skill folder must fail closed")
+	}
+	if got := string(readBytes(t, filepath.Join(external, "SKILL.md"))); got != "external" {
+		t.Errorf("link target changed: %q", got)
+	}
+}
+
+// A skill root, or a folder above it, linked into a dotfiles repo is a normal
+// setup: installs land in the link target and the receipt keeps the path the
+// host reads.
+func TestLifecycle_LinkedRootsAreUsed(t *testing.T) {
+	for _, tc := range []struct{ name, link string }{
+		{"linked skill root", "claude/skills"},
+		{"linked parent", "claude"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
-			hosts := fakeHosts(t)[:1]
-			external := t.TempDir()
-			if err := os.WriteFile(filepath.Join(external, "SKILL.md"), []byte("external"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			link := filepath.Join(hosts[0].SkillDir, "praxis-test")
-			if linkRoot {
-				link = hosts[0].SkillDir
-			}
+			base := t.TempDir()
+			dotfiles := t.TempDir()
+			link := filepath.Join(base, tc.link)
 			if err := os.MkdirAll(filepath.Dir(link), 0700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.Symlink(external, link); err != nil {
+			if err := os.Symlink(dotfiles, link); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := InstallWithBody("praxis-test", "replacement", hosts); err == nil {
-				t.Error("symlink install must fail closed")
+			hosts := []harness.Harness{{Name: "claude-code", SkillDir: filepath.Join(base, "claude", "skills")}}
+			// The activating rename must start beside the real root: a linked
+			// root can be on another filesystem, where a rename cannot cross.
+			var staged []string
+			original := renameTree
+			renameTree = func(a, b string) error {
+				if strings.HasSuffix(a, string(filepath.Separator)+"new") {
+					staged = append(staged, a)
+				}
+				return original(a, b)
 			}
-			if got := string(readBytes(t, filepath.Join(external, "SKILL.md"))); got != "external" {
-				t.Errorf("symlink target changed: %q", got)
+			t.Cleanup(func() { renameTree = original })
+
+			for _, body := range []string{"v1", "v2"} {
+				got, err := InstallWithBody("praxis-test", body, hosts)
+				if err != nil {
+					t.Fatalf("install %s: %v", body, err)
+				}
+				if want := filepath.Join(hosts[0].SkillDir, "praxis-test", "SKILL.md"); got[0].Path != want {
+					t.Errorf("receipt path = %q, want the host's path %q", got[0].Path, want)
+				}
+			}
+			real, err := filepath.EvalSymlinks(filepath.Join(hosts[0].SkillDir, "praxis-test", "SKILL.md"))
+			if err != nil || !strings.HasPrefix(real, mustEval(t, dotfiles)) {
+				t.Fatalf("skill not in the link target: %q, %v", real, err)
+			}
+			realRoot := filepath.Dir(filepath.Dir(real))
+			for _, a := range staged {
+				if filepath.Dir(filepath.Dir(a)) != filepath.Dir(realRoot) {
+					t.Errorf("staged at %s, want beside the real root %s", a, realRoot)
+				}
+			}
+			if len(staged) != 2 {
+				t.Errorf("activations = %v, want 2", staged)
+			}
+			if s := string(readBytes(t, real)); s != "v2" {
+				t.Errorf("SKILL.md = %q", s)
+			}
+			if b := backups(t); len(b) != 0 {
+				t.Errorf("owned, unmodified content was backed up: %v", b)
+			}
+			for _, dir := range []string{base, filepath.Dir(dotfiles), dotfiles} {
+				if left, _ := filepath.Glob(filepath.Join(dir, "*", ".praxis-stage-*")); len(left) > 0 {
+					t.Errorf("staging left behind: %v", left)
+				}
+				if left, _ := filepath.Glob(filepath.Join(dir, ".praxis-stage-*")); len(left) > 0 {
+					t.Errorf("staging left behind: %v", left)
+				}
+			}
+			if _, err := Uninstall("praxis-test"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(real); !os.IsNotExist(err) {
+				t.Errorf("uninstall left %s: %v", real, err)
 			}
 		})
 	}
 }
 
+func mustEval(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
 func TestLifecycle_ModifiedContentBackedUpOutsideDiscovery(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	hosts := fakeHosts(t)[:1]
