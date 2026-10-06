@@ -6,6 +6,7 @@ package skillinstall
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -24,6 +25,9 @@ type Installation struct {
 	Harness     string    `json:"harness"`
 	Path        string    `json:"path"`
 	InstalledAt time.Time `json:"installed_at"`
+	Source      string    `json:"source,omitempty"`
+	Scope       string    `json:"scope,omitempty"`
+	Digest      string    `json:"digest,omitempty"`
 }
 
 // AgentInstallation is one (agent, harness, file) tuple — the unit
@@ -52,14 +56,13 @@ type Receipt struct {
 // dispatched to InstallTree. For server-fetched org skills, use
 // InstallWithBody instead.
 func Install(skillName string, hosts []harness.Harness) ([]Installation, error) {
-	if fsys, ok := treeSkillFS(skillName); ok {
-		return InstallTree(skillName, fsys, hosts)
-	}
-	body, err := ContentFor(skillName)
+	w, err := embeddedWrite(skillName)
 	if err != nil {
 		return nil, err
 	}
-	return InstallWithBody(skillName, body, hosts)
+	var out []Installation
+	err = withSkillLock(func() error { var err error; out, err = applyPackages([]packageWrite{w}, nil, hosts); return err })
+	return out, err
 }
 
 // installToHosts writes a skill once per unique SkillDir (via write, called
@@ -71,36 +74,13 @@ func Install(skillName string, hosts []harness.Harness) ([]Installation, error) 
 // a sibling harness just populated, since the tree writers clear it first.
 // The recorded path is always <dir>/SKILL.md.
 func installToHosts(skillName string, hosts []harness.Harness, write func(dir string) error) ([]Installation, error) {
-	receipt, err := loadReceipt()
-	if err != nil {
-		return nil, err
-	}
-
-	now := time.Now().UTC()
-	results := make([]Installation, 0, len(hosts))
-	written := make(map[string]bool, len(hosts))
-	for _, h := range hosts {
-		dir := filepath.Join(h.SkillDir, skillName)
-		if !written[dir] {
-			if err := write(dir); err != nil {
-				return results, err
-			}
-			written[dir] = true
-		}
-		install := Installation{
-			SkillName:   skillName,
-			Harness:     h.Name,
-			Path:        filepath.Join(dir, "SKILL.md"),
-			InstalledAt: now,
-		}
-		results = append(results, install)
-		receipt = upsert(receipt, install)
-	}
-
-	if err := saveReceipt(receipt); err != nil {
-		return results, fmt.Errorf("save receipt: %w", err)
-	}
-	return results, nil
+	var results []Installation
+	err := withSkillLock(func() error {
+		var err error
+		results, err = applyPackages([]packageWrite{{name: skillName, source: "cli", write: write}}, nil, hosts)
+		return err
+	})
+	return results, err
 }
 
 // InstallTree writes a multi-file (tree) skill into every host's skill
@@ -119,12 +99,14 @@ func InstallTree(skillName string, fsys fs.FS, hosts []harness.Harness) ([]Insta
 // binary whose embedded tree dropped or renamed a file does not leave the
 // stale file behind — the on-disk tree always matches the embedded source.
 func writeTree(fsys fs.FS, dstDir string) error {
-	if err := os.RemoveAll(dstDir); err != nil {
-		return fmt.Errorf("clear %s: %w", dstDir, err)
-	}
 	return fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if p != "." {
+			if err := portablePath(p); err != nil {
+				return err
+			}
 		}
 		dst := filepath.Join(dstDir, filepath.FromSlash(p))
 		if d.IsDir() {
@@ -133,6 +115,13 @@ func writeTree(fsys fs.FS, dstDir string) error {
 			}
 			return nil
 		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsafe skill file path %q: not regular", p)
+		}
 		data, err := fs.ReadFile(fsys, p)
 		if err != nil {
 			return fmt.Errorf("read embedded %s: %w", p, err)
@@ -140,7 +129,11 @@ func writeTree(fsys fs.FS, dstDir string) error {
 		if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(dst), err)
 		}
-		if err := os.WriteFile(dst, data, 0600); err != nil {
+		mode := fs.FileMode(0600)
+		if info.Mode().Perm()&0111 != 0 || strings.HasPrefix(p, "scripts/") {
+			mode = 0700
+		}
+		if err := os.WriteFile(dst, data, mode); err != nil {
 			return fmt.Errorf("write %s: %w", dst, err)
 		}
 		return nil
@@ -193,8 +186,16 @@ func InstallTreeWithBodies(skillName, primary string, files []FileBody, hosts []
 // is rejected: the server validates this too, but the CLI must never write
 // outside the skill folder on the strength of a server response.
 func writeBodies(dstDir, primary string, files []FileBody) error {
-	if err := os.RemoveAll(dstDir); err != nil {
-		return fmt.Errorf("clear %s: %w", dstDir, err)
+	seen := map[string]bool{"skill.md": true}
+	for _, f := range files {
+		if err := portablePath(f.Path); err != nil {
+			return err
+		}
+		key := strings.ToLower(f.Path)
+		if seen[key] {
+			return fmt.Errorf("duplicate skill file path %q", f.Path)
+		}
+		seen[key] = true
 	}
 	if err := os.MkdirAll(dstDir, 0700); err != nil {
 		return fmt.Errorf("create %s: %w", dstDir, err)
@@ -203,15 +204,15 @@ func writeBodies(dstDir, primary string, files []FileBody) error {
 		return fmt.Errorf("write %s: %w", filepath.Join(dstDir, "SKILL.md"), err)
 	}
 	for _, f := range files {
-		clean := filepath.Clean(filepath.FromSlash(f.Path))
-		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("unsafe skill file path %q", f.Path)
-		}
-		dst := filepath.Join(dstDir, clean)
+		dst := filepath.Join(dstDir, filepath.FromSlash(f.Path))
 		if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(dst), err)
 		}
-		if err := os.WriteFile(dst, []byte(f.Content), 0600); err != nil {
+		mode := fs.FileMode(0600)
+		if strings.HasPrefix(f.Path, "scripts/") {
+			mode = 0700
+		}
+		if err := os.WriteFile(dst, []byte(f.Content), mode); err != nil {
 			return fmt.Errorf("write %s: %w", dst, err)
 		}
 	}
@@ -223,6 +224,15 @@ func writeBodies(dstDir, primary string, files []FileBody) error {
 // empty), and updates the receipt. Returns the entries that were
 // actually removed.
 func Uninstall(skillName string) ([]Installation, error) {
+	return lockedInstallations(func() ([]Installation, error) { return uninstallLocked(skillName) })
+}
+
+func lockedInstallations(fn func() ([]Installation, error)) (out []Installation, err error) {
+	err = withSkillLock(func() error { var e error; out, e = fn(); return e })
+	return
+}
+
+func uninstallLocked(skillName string) ([]Installation, error) {
 	receipt, err := loadReceipt()
 	if err != nil {
 		return nil, err
@@ -270,6 +280,10 @@ func Uninstall(skillName string) ([]Installation, error) {
 // `"praxis-"` prefix naturally; this exclusion handles new
 // prefix-shaped meta-skills as they're added.
 func UninstallByPrefix(prefix string) ([]Installation, error) {
+	return lockedInstallations(func() ([]Installation, error) { return uninstallByPrefixLocked(prefix) })
+}
+
+func uninstallByPrefixLocked(prefix string) ([]Installation, error) {
 	if prefix == "" {
 		return nil, fmt.Errorf("UninstallByPrefix: prefix must be non-empty")
 	}
@@ -319,6 +333,10 @@ func UninstallByPrefix(prefix string) ([]Installation, error) {
 // Meta-skills (anything in ContentFor) are PRESERVED — see UninstallByPrefix
 // for the same exclusion logic.
 func RemoveOrphanedByPrefix(prefix string, hosts []harness.Harness, keep map[string]bool) ([]Installation, error) {
+	return lockedInstallations(func() ([]Installation, error) { return removeOrphanedByPrefixLocked(prefix, hosts, keep) })
+}
+
+func removeOrphanedByPrefixLocked(prefix string, hosts []harness.Harness, keep map[string]bool) ([]Installation, error) {
 	if prefix == "" {
 		return nil, fmt.Errorf("RemoveOrphanedByPrefix: prefix must be non-empty")
 	}
@@ -377,47 +395,54 @@ func List() ([]Installation, error) {
 	return receipt.Skills, nil
 }
 
-// Refresh re-writes the SKILL.md for every installation in the receipt
-// using the current ContentFor(). Used after `praxis update` to pick up
-// new skill content, and exposed as `praxis refresh-skills` for manual
-// invocation. Entries whose skill no longer exists in ContentFor are
-// skipped (not removed) so a future update reintroducing the skill can
-// repopulate them. Returns the entries actually refreshed.
-func Refresh() ([]Installation, error) {
-	receipt, err := loadReceipt()
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now().UTC()
-	refreshed := make([]Installation, 0, len(receipt.Skills))
-	for i, entry := range receipt.Skills {
-		// Multi-file tree meta-skills: rewrite the whole tree from embed.
-		if fsys, ok := treeSkillFS(entry.SkillName); ok {
-			if err := writeTree(fsys, filepath.Dir(entry.Path)); err != nil {
-				return refreshed, fmt.Errorf("refresh tree %s: %w", entry.SkillName, err)
-			}
-			receipt.Skills[i].InstalledAt = now
-			refreshed = append(refreshed, receipt.Skills[i])
-			continue
-		}
-		body, err := ContentFor(entry.SkillName)
+// Refresh rewrites every embedded skill in the receipt from this binary, one
+// transaction per skill. Catalog skills are skipped: login and refresh-skills
+// fetch those. Used after `praxis update`.
+func Refresh() (refreshed []Installation, err error) {
+	err = withSkillLock(func() error {
+		receipt, err := loadReceipt()
 		if err != nil {
-			// Skill no longer in catalog — leave the file alone, skip.
-			continue
+			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(entry.Path), 0700); err != nil {
-			return refreshed, fmt.Errorf("ensure dir for %s: %w", entry.Path, err)
+		var names []string
+		hosts := map[string][]harness.Harness{}
+		for _, e := range receipt.Skills {
+			if !IsMetaSkill(e.SkillName) {
+				continue
+			}
+			if _, ok := hosts[e.SkillName]; !ok {
+				names = append(names, e.SkillName)
+			}
+			hosts[e.SkillName] = append(hosts[e.SkillName], harness.Harness{Name: e.Harness, SkillDir: filepath.Dir(filepath.Dir(e.Path))})
 		}
-		if err := os.WriteFile(entry.Path, []byte(body), 0600); err != nil {
-			return refreshed, fmt.Errorf("refresh %s: %w", entry.Path, err)
+		// One broken skill must not stop the others from refreshing.
+		var errs []error
+		for _, name := range names {
+			w, err := embeddedWrite(name)
+			if err == nil {
+				var out []Installation
+				out, err = applyPackages([]packageWrite{w}, nil, hosts[name])
+				refreshed = append(refreshed, out...)
+			}
+			if err != nil {
+				errs = append(errs, fmt.Errorf("refresh %s: %w", name, err))
+			}
 		}
-		receipt.Skills[i].InstalledAt = now
-		refreshed = append(refreshed, receipt.Skills[i])
+		return errors.Join(errs...)
+	})
+	return
+}
+
+// embeddedWrite is the package write for a skill embedded in this binary.
+func embeddedWrite(name string) (packageWrite, error) {
+	if tree, ok := treeSkillFS(name); ok {
+		return packageWrite{name: name, source: "embedded", scope: "builtin", write: func(dir string) error { return writeTree(tree, dir) }}, nil
 	}
-	if err := saveReceipt(receipt); err != nil {
-		return refreshed, fmt.Errorf("save receipt: %w", err)
+	body, err := ContentFor(name)
+	if err != nil {
+		return packageWrite{}, err
 	}
-	return refreshed, nil
+	return packageWrite{name: name, source: "embedded", scope: "builtin", write: func(dir string) error { return writeBodies(dir, body, nil) }}, nil
 }
 
 // upsert replaces an existing (skill, harness) entry or appends a new one.
