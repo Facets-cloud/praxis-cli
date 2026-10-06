@@ -71,7 +71,7 @@ Homebrew post-install hook; first use installs only the skill, offline.
 		var raptorSkills []skillInstallationLite
 		if raptor.Path != "" {
 			var skillErr error
-			raptorSkills, skillErr = installRaptorSkills(raptor.Path, detectHarnesses(), "")
+			raptorSkills, skillErr = installRaptorSkills(raptor.Path, detectHarnesses())
 			raptorErr = errors.Join(raptorErr, skillErr)
 			if !asJSON {
 				reportRaptorSkills(out, raptorSkills, skillErr)

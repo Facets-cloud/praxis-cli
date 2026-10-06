@@ -262,7 +262,7 @@ func skillRaptor(t *testing.T, version, failAgent string) (bin, log string) {
 	dir := t.TempDir()
 	bin, log = filepath.Join(dir, "raptor"), filepath.Join(dir, "calls")
 	script := `#!/bin/sh
-if [ "$1" = --version ]; then echo "raptor version ` + version + `"; exit 0; fi
+if [ "$1" = --version ]; then [ '` + version + `' = FAIL ] && exit 1; echo "raptor version ` + version + `"; exit 0; fi
 echo "$*" >> '` + log + `'
 agent=$4; base=$HOME
 [ "$5" = --path ] && base=$6
@@ -299,7 +299,6 @@ func TestInstallRaptorSkills(t *testing.T) {
 	tests := []struct {
 		name, version, fail string
 		sharedRaptor        bool
-		project             bool
 		wantCalls           []string
 		wantPaths           []string
 		wantErr             string
@@ -314,28 +313,17 @@ func TestInstallRaptorSkills(t *testing.T) {
 			wantCalls: []string{"install skill --agent claude", "install skill --agent codex", "install skill --agent gemini"},
 			wantPaths: []string{".claude/skills/raptor/SKILL.md", ".codex/skills/raptor/SKILL.md", ".gemini/skills/raptor/SKILL.md"}},
 		{name: "raptor too old", version: "0.1.100", wantErr: "raptor 0.1.100 is too old"},
+		{name: "raptor does not answer --version", version: "FAIL", wantErr: "did not answer --version"},
 		{name: "one agent fails, the others install", version: "0.1.121", fail: "codex",
 			wantCalls: []string{"install skill --agent claude", "install skill --agent codex", "install skill --agent gemini"},
 			wantPaths: []string{".claude/skills/raptor/SKILL.md", ".gemini/skills/raptor/SKILL.md"},
 			wantErr:   "raptor skill for codex"},
-		{name: "project scope", version: "0.1.121", project: true,
-			wantCalls: []string{"install skill --agent claude --path PROJECT", "install skill --agent codex --path PROJECT", "install skill --agent gemini --path PROJECT"},
-			wantPaths: []string{".claude/skills/raptor/SKILL.md", ".codex/skills/raptor/SKILL.md", ".gemini/skills/raptor/SKILL.md"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 			bin, log := skillRaptor(t, tc.version, tc.fail)
-			base, scope := home, ""
-			hosts := user(home)
-			if tc.project {
-				base = t.TempDir()
-				scope = base
-				for i := range hosts {
-					hosts[i] = hosts[i].ProjectScoped(base)
-				}
-			}
 			if tc.sharedRaptor {
 				mustMkdir(t, filepath.Join(home, ".agents", "skills", "raptor"))
 				if err := os.WriteFile(filepath.Join(home, ".agents", "skills", "raptor", "SKILL.md"), []byte("x"), 0600); err != nil {
@@ -343,23 +331,19 @@ func TestInstallRaptorSkills(t *testing.T) {
 				}
 			}
 
-			got, err := runInstallRaptorSkills(bin, hosts, scope)
+			got, err := runInstallRaptorSkills(bin, user(home))
 			if tc.wantErr == "" && err != nil {
 				t.Fatalf("err = %v", err)
 			}
 			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
 				t.Fatalf("err = %v, want %q", err, tc.wantErr)
 			}
-			var want []string
-			for _, c := range tc.wantCalls {
-				want = append(want, strings.ReplaceAll(c, "PROJECT", base))
-			}
-			if c := calls(t, log); strings.Join(c, "|") != strings.Join(want, "|") {
-				t.Errorf("raptor calls = %q, want %q", c, want)
+			if c := calls(t, log); strings.Join(c, "|") != strings.Join(tc.wantCalls, "|") {
+				t.Errorf("raptor calls = %q, want %q", c, tc.wantCalls)
 			}
 			var paths []string
 			for _, in := range got {
-				rel, _ := filepath.Rel(base, in.Path)
+				rel, _ := filepath.Rel(home, in.Path)
 				paths = append(paths, rel)
 				if _, err := os.Stat(in.Path); err != nil {
 					t.Errorf("reported %s but it is not on disk", in.Path)
@@ -370,24 +354,42 @@ func TestInstallRaptorSkills(t *testing.T) {
 			}
 		})
 	}
-	if _, err := runInstallRaptorSkills("", nil, ""); err == nil || !strings.Contains(err.Error(), "missing") {
+	if _, err := runInstallRaptorSkills("", nil); err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Errorf("no raptor: err = %v", err)
 	}
 }
 
 // Login asks raptor to install its skill for the detected hosts and reports
-// it; a failure is a warning and the rest of login still runs.
+// it; a failure is a warning and the rest of login still runs. A
+// project-scoped login still installs the raptor skill at user level.
 func TestLoginInstallsRaptorSkill(t *testing.T) {
-	for _, fail := range []string{"", "claude"} {
-		t.Run("fail="+fail, func(t *testing.T) {
+	for _, tc := range []struct {
+		fail    string
+		project bool
+	}{{"", false}, {"claude", false}, {"", true}} {
+		fail := tc.fail
+		t.Run(fmt.Sprintf("fail=%s,project=%t", tc.fail, tc.project), func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
+			setRootProfile(t, "")
 			stubMCPManifestFetch(t)
+			if tc.project {
+				pinProjectRoot(t, home)
+			}
 			bin, log := skillRaptor(t, "0.1.121", fail)
 			origEnsure, origDetect, origFetch, origAgents := ensureRaptorBinary, detectHarnesses, fetchCatalog, fetchAgents
 			ensureRaptorBinary = func() (raptorinstall.Result, error) { return raptorinstall.Result{Path: bin}, nil }
+			// Codex already reads a raptor skill from the user-level shared root,
+			// so only Claude may get one, also in project scope.
 			detectHarnesses = func() []harness.Harness {
-				return []harness.Harness{{Name: "claude-code", SkillDir: filepath.Join(home, ".claude", "skills")}}
+				return []harness.Harness{
+					{Name: "claude-code", SkillDir: filepath.Join(home, ".claude", "skills")},
+					{Name: "codex", SkillDir: filepath.Join(home, ".agents", "skills")},
+				}
+			}
+			mustMkdir(t, filepath.Join(home, ".agents", "skills", "raptor"))
+			if err := os.WriteFile(filepath.Join(home, ".agents", "skills", "raptor", "SKILL.md"), []byte("x"), 0600); err != nil {
+				t.Fatal(err)
 			}
 			fetchCatalog = func(string, map[string]string) ([]skillcatalog.Skill, error) { return nil, nil }
 			fetchAgents = func(string, map[string]string) ([]agentcatalog.Agent, error) { return nil, nil }
@@ -396,6 +398,9 @@ func TestLoginInstallsRaptorSkill(t *testing.T) {
 			})
 
 			state := runPostAuthSetup(io.Discard, true, "https://cp.invalid", bearer("tok"))
+			if state.projectScoped != tc.project {
+				t.Fatalf("projectScoped = %t, want %t", state.projectScoped, tc.project)
+			}
 			if c := calls(t, log); len(c) != 1 || c[0] != "install skill --agent claude" {
 				t.Errorf("raptor calls = %q", c)
 			}
@@ -418,6 +423,7 @@ func TestLoginInstallsRaptorSkill(t *testing.T) {
 func TestSetupInstallsRaptorSkill(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	setRootProfile(t, "")
 	mustMkdir(t, filepath.Join(home, ".claude"))
 	bin, log := skillRaptor(t, "0.1.121", "")
 	orig, origDetect := ensureRaptorBinary, detectHarnesses

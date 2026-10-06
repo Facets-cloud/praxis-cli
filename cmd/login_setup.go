@@ -128,15 +128,11 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 		fmt.Fprintln(out, "(Continuing — credentials and MCP manifest snapshot will still be written.)")
 	}
 
-	// Step 0.5: raptor installs and registers its own skill, so its own
-	// upgrades keep the skill current. Needs the binary from step 0.
+	// Step 0.5: raptor installs and registers its own skill, at user level, so
+	// its own upgrades keep it current. Needs the binary from step 0.
 	if !noHosts && state.raptorBinary.Path != "" {
-		scope := ""
-		if inProject {
-			scope = projectDir
-		}
 		var err error
-		state.raptorSkills, err = installRaptorSkills(state.raptorBinary.Path, hosts, scope)
+		state.raptorSkills, err = installRaptorSkills(state.raptorBinary.Path, detectHarnesses())
 		if err != nil {
 			state.raptorWarning = errors.Join(raptorErr, err).Error()
 		}
