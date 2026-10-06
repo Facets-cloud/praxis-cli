@@ -38,6 +38,8 @@ type Asset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
+	// Digest is "sha256:<hex>" when GitHub or the central feed knows it.
+	Digest string `json:"digest,omitempty"`
 }
 
 // LatestRelease returns full metadata (incl. assets) for the most recent

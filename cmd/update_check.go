@@ -16,7 +16,8 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
-// updateCheckInterval throttles how often the background check hits GitHub.
+// updateCheckInterval throttles how often the background check calls the
+// central feed (or GitHub, its fallback).
 const updateCheckInterval = 24 * time.Hour
 
 // updateCheckMaxWait caps how long Execute waits for the background check before
@@ -154,6 +155,16 @@ func latestTagFor(spec toolSpec, now time.Time, mode freshMode) string {
 	}
 	if mode == freshCached {
 		return "" // status default: local-only, never fetch
+	}
+	if mode == freshCachedOrFetch {
+		// Take today's slot before the fetch. A quiet run stops waiting after
+		// updateCheckMaxWait, so an interrupted or failed fetch then costs one
+		// attempt a day, not one for every command.
+		prev := ""
+		if c, err := readFreshnessCache(); err == nil {
+			prev = c[spec.Name].LatestVersion
+		}
+		putCacheEntry(spec.Name, toolCacheEntry{CheckedAt: now, LatestVersion: prev})
 	}
 	tag := fetchTagWithRetry(spec.fetchTag)
 	putCacheEntry(spec.Name, toolCacheEntry{CheckedAt: now, LatestVersion: tag})
