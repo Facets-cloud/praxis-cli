@@ -52,9 +52,11 @@ var setupCmd = &cobra.Command{
 Facets does, where to sign up, and how to log in — before you authenticate.
 
 It also re-points any hook an older praxis wired from a path that an upgrade
-has since deleted, and installs the Raptor CLI to ~/.local/bin when it is
-missing. No hook is added and no credentials are required. This runs via the
-Homebrew post-install hook; first use installs only the skill, offline.
+has since deleted. It installs the Raptor CLI to ~/.local/bin when it is
+missing and upgrades it otherwise, then has raptor refresh its own skill. No
+hook is added and no credentials are required. This runs via the Homebrew
+post-install hook, also on every upgrade; first use installs only the skill,
+offline.
 
   Next: praxis login --url https://<your-account-id>.console.facets.cloud`,
 	Args: cobra.NoArgs,
@@ -64,6 +66,14 @@ Homebrew post-install hook; first use installs only the skill, offline.
 		repaired, repairWarn := repairPraxisHooks()
 		printHookRepair(out, asJSON, repaired, repairWarn)
 		raptor, raptorErr := prepareRaptor(out, asJSON)
+		// The brew hook runs setup on every `brew upgrade`, so an existing
+		// raptor is upgraded here too. A raptor installed just now is current.
+		var upgrade *raptorUpgradeResult
+		if raptor.Path != "" && !raptor.Installed {
+			up, upErr := updateRaptor(out, asJSON, true)
+			upgrade = &up
+			raptorErr = errors.Join(raptorErr, upErr)
+		}
 		n, err := installBootstrapSkills(out, asJSON)
 		if err != nil {
 			return err
@@ -71,11 +81,8 @@ Homebrew post-install hook; first use installs only the skill, offline.
 		var raptorSkills []skillInstallationLite
 		if raptor.Path != "" {
 			var skillErr error
-			raptorSkills, skillErr = installRaptorSkills(raptor.Path, detectHarnesses())
+			raptorSkills, skillErr = refreshRaptorSkills(out, asJSON)
 			raptorErr = errors.Join(raptorErr, skillErr)
-			if !asJSON {
-				reportRaptorSkills(out, raptorSkills, skillErr)
-			}
 		}
 		if n > 0 {
 			markBootstrapDone() // mark ONLY after a real install; a no-host run
@@ -83,6 +90,9 @@ Homebrew post-install hook; first use installs only the skill, offline.
 		}
 		if asJSON {
 			payload := map[string]any{"installed": n, "raptor_binary": raptor, "raptor_skills": raptorSkills}
+			if upgrade != nil {
+				payload["raptor_upgrade"] = upgrade
+			}
 			if raptorErr != nil {
 				payload["raptor_warning"] = raptorErr.Error()
 			}

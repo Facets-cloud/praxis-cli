@@ -48,8 +48,9 @@ var updateCmd = &cobra.Command{
 download the asset for this OS/arch, verify its checksum against the release's
 checksums.txt, and atomically replace the running binary.
 
-Then run 'raptor upgrade', also when praxis is already current. A missing raptor
-is installed to ~/.local/bin first. --yes and --json also pass --yes to raptor.
+Then run 'raptor upgrade', also when praxis is already current, and have the
+new raptor refresh its skill. A missing raptor is installed to ~/.local/bin
+first. --yes and --json also pass --yes to raptor.
 
 Homebrew installs are left to Homebrew: this command refuses them and names
 'brew upgrade --cask praxis', so brew's recorded version stays true.`,
