@@ -6,6 +6,7 @@ package skillinstall
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -414,18 +415,20 @@ func Refresh() (refreshed []Installation, err error) {
 			}
 			hosts[e.SkillName] = append(hosts[e.SkillName], harness.Harness{Name: e.Harness, SkillDir: filepath.Dir(filepath.Dir(e.Path))})
 		}
+		// One broken skill must not stop the others from refreshing.
+		var errs []error
 		for _, name := range names {
 			w, err := embeddedWrite(name)
-			if err != nil {
-				return err
+			if err == nil {
+				var out []Installation
+				out, err = applyPackages([]packageWrite{w}, nil, hosts[name])
+				refreshed = append(refreshed, out...)
 			}
-			out, err := applyPackages([]packageWrite{w}, nil, hosts[name])
-			refreshed = append(refreshed, out...)
 			if err != nil {
-				return fmt.Errorf("refresh %s: %w", name, err)
+				errs = append(errs, fmt.Errorf("refresh %s: %w", name, err))
 			}
 		}
-		return nil
+		return errors.Join(errs...)
 	})
 	return
 }
