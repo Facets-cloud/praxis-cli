@@ -91,7 +91,8 @@ def pg_pk(node, db, schema, table):
         "ORDER BY array_position(i.indkey, a.attnum)"
     )
     out = q(node, db, sql, "postgres")
-    return [] if out.startswith("ERR") else [c for c in out.splitlines() if c]
+    # None, not [], on a failed lookup: [] means "no primary key" and skips.
+    return None if out.startswith("ERR") else [c for c in out.splitlines() if c]
 
 
 def row_count(node, db, schema, table, engine):
@@ -105,14 +106,21 @@ def row_count(node, db, schema, table, engine):
 
 def checksum(node, db, schema, table, engine, order_cols):
     if is_pg(engine):
+        if order_cols is None:
+            return "ERR:primary-key lookup failed"
         if not order_cols:
             return "no-pk(skip)"
         order = ",".join(order_cols)
         sql = f"SELECT md5(string_agg(t::text, '' ORDER BY {order})) FROM {schema}.{table} t"
         out = q(node, db, sql, engine)
-        return out.split()[-1] if not out.startswith("ERR") else out
+        if out.startswith("ERR"):
+            return out
+        # string_agg over zero rows is NULL, which psql prints as nothing.
+        return out.split()[-1] if out.split() else "empty"
     out = q(node, db, f"CHECKSUM TABLE `{table}`", engine)  # mysql built-in
-    return out.split()[-1] if not out.startswith("ERR") else out
+    if out.startswith("ERR"):
+        return out
+    return out.split()[-1] if out.split() else "empty"
 
 
 def main():

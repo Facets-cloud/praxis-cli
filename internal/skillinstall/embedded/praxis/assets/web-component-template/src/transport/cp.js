@@ -22,8 +22,13 @@ export function resolveTunnelClusterId(clusterId, origin = window.location.origi
   const cached = tunnelClusterIds.get(clusterId);
   if (cached) return cached;
 
-  const promise = fetch(`${origin}/cc-ui/v1/clusters/${clusterId}`, { credentials: 'include' })
-    .then((r) => (r.ok ? r.json() : null))
+  // Bounded like every tunnel call, and a non-2xx is a failure: caching a
+  // guess would pin a dependent environment to the wrong tunnel for the session.
+  const promise = fetchWithTimeout(`${origin}/cc-ui/v1/clusters/${clusterId}`)
+    .then((r) => {
+      if (!r.ok) throw new Error(`cluster ${clusterId}: HTTP ${r.status}`);
+      return r.json();
+    })
     .then((c) => c?.baseClusterId || clusterId)
     .catch(() => {
       // Don't poison the cache: fall back for this call, allow a later retry.

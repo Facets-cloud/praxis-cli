@@ -55,10 +55,10 @@ Configure/verify TLS for the engine client separately—the spec's `tls` field d
 not itself establish an enforced encrypted connection in this helper.
 
 Postgres ordered aggregate checksums require a stable PK and can be expensive
-on large tables; keyless tables emit `no-pk(skip)`. Counts alone are not content
-parity. On an empty Postgres table, `--checksum` crashes the helper
-(`IndexError`); exclude empty tables or check them separately. NULL and engine
-checksum compatibility need explicit handling and independent evidence. A `CLEAN` exit does not prove all schemas, tables,
+on large tables; keyless tables emit `no-pk(skip)`, and a failed primary-key
+lookup counts as a mismatch. Counts alone are not content parity. An empty table
+checksums as `empty` on both sides. NULL and engine checksum compatibility need
+explicit handling and independent evidence. A `CLEAN` exit does not prove all schemas, tables,
 sequences, permissions or runtime behaviors match. Prefer engine-supported,
 bounded checks where this helper cannot establish the needed invariant.
 

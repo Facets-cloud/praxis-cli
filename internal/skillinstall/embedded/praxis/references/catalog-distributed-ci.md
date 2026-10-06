@@ -37,11 +37,15 @@ extractors as code, not harmless configuration.
 
 For several catalogs, `ig member build MEMBER -manifest A -manifest B -src .
 -out BUILD_ROOT` can label code once, then embed each catalog's distinct overlay.
-Use current help to choose output/seed/label flags. Single catalog output is
-`BUILD_ROOT/member/MEMBER/...`; multiple catalogs use a per-catalog build root.
-Publish each using **that root**, not `.../member/MEMBER`:
+Use current help to choose output/seed/label flags. One catalog builds to
+`BUILD_ROOT/member/MEMBER/`; several catalogs build to
+`BUILD_ROOT/CATALOG/member/MEMBER/`. `praxis ig publish` takes the directory
+that contains `member/`, never `.../member/MEMBER`:
 
 ```bash
+# one catalog
+praxis ig publish BUILD_ROOT --catalog CATALOG --member MEMBER
+# several catalogs: once per catalog
 praxis ig publish BUILD_ROOT/CATALOG --catalog CATALOG --member MEMBER
 ```
 
