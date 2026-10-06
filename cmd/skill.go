@@ -24,7 +24,7 @@ var (
 	installSkillBody        = skillinstall.InstallWithBody
 	installSkillTree        = skillinstall.InstallTreeWithBodies
 	listInstalledSkill      = skillinstall.List
-	refreshSkills           = skillinstall.Refresh
+	refreshIfStale          = skillinstall.RefreshIfStale
 	retireLegacySkills      = skillinstall.RetireLegacyBuiltins
 	fetchCatalog            = skillcatalog.Fetch
 	fetchAgents             = agentcatalog.Fetch

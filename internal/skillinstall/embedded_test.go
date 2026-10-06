@@ -253,3 +253,136 @@ func TestRefresh_RetiresLegacyBuiltins(t *testing.T) {
 		t.Errorf("praxis-memory survived Refresh: %v", err)
 	}
 }
+
+// The digest RefreshIfStale expects is the digest a real install records.
+func TestEmbeddedDigestMatchesInstall(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	results, err := Install("praxis", fakeHosts(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := embeddedDigest("praxis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range results {
+		if r.Digest != want {
+			t.Errorf("%s: installed digest %s, embeddedDigest %s", r.Harness, r.Digest, want)
+		}
+	}
+}
+
+func setReceiptDigests(t *testing.T, digest string) {
+	t.Helper()
+	r, err := loadReceipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range r.Skills {
+		if r.Skills[i].SkillName == "praxis" {
+			r.Skills[i].Digest = digest
+		}
+	}
+	if err := saveReceipt(r); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRefreshIfStale(t *testing.T) {
+	t.Run("nothing installed: first run's job", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		if got, err := RefreshIfStale(); err != nil || got != nil {
+			t.Fatalf("got %v, %v", got, err)
+		}
+	})
+	t.Run("current install: no rewrite, an edit is kept", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		hosts := fakeHosts(t)[:1]
+		results, err := Install("praxis", hosts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(results[0].Path, []byte("my edit"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := RefreshIfStale(); err != nil || got != nil {
+			t.Fatalf("refreshed a current install: %v, %v", got, err)
+		}
+		if b, _ := os.ReadFile(results[0].Path); string(b) != "my edit" {
+			t.Error("the user's edit was overwritten")
+		}
+	})
+	t.Run("installed by another binary: rewritten once", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		hosts := fakeHosts(t)[:1]
+		results, err := Install("praxis", hosts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(results[0].Path, []byte("old text"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		d, _ := digestTree(filepath.Dir(results[0].Path))
+		setReceiptDigests(t, d) // what the older binary recorded
+		got, err := RefreshIfStale()
+		if err != nil || len(got) != 1 {
+			t.Fatalf("got %v, %v", got, err)
+		}
+		want, _ := ContentFor("praxis")
+		if b, _ := os.ReadFile(results[0].Path); string(b) != want {
+			t.Error("SKILL.md not rewritten to this binary's text")
+		}
+		if again, err := RefreshIfStale(); err != nil || again != nil {
+			t.Errorf("second call refreshed again: %v, %v", again, err)
+		}
+	})
+	t.Run("receipt from a praxis without digests: refresh and retire", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		hosts := fakeHosts(t)[:1]
+		if _, err := Install("praxis", hosts); err != nil {
+			t.Fatal(err)
+		}
+		setReceiptDigests(t, "")
+		legacyInstall(t, hosts[0], "praxis-memory", "")
+		if _, err := RefreshIfStale(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(hosts[0].SkillDir, "praxis-memory")); !os.IsNotExist(err) {
+			t.Errorf("praxis-memory survived: %v", err)
+		}
+	})
+}
+
+// Only stale installs are rewritten: a current install on another host keeps
+// the user's edit active.
+func TestRefreshIfStale_OnlyStaleEntries(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)[:2]
+	results, err := Install("praxis", hosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, current := results[0], results[1]
+	r, err := loadReceipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range r.Skills {
+		if r.Skills[i].Path == stale.Path {
+			r.Skills[i].Digest = "written-by-an-older-binary"
+		}
+	}
+	if err := saveReceipt(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(current.Path, []byte("my edit"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := RefreshIfStale()
+	if err != nil || len(got) != 1 || got[0].Path != stale.Path {
+		t.Fatalf("refreshed %+v, %v; want only %s", got, err, stale.Path)
+	}
+	if b, _ := os.ReadFile(current.Path); string(b) != "my edit" {
+		t.Error("a current install was rewritten")
+	}
+}

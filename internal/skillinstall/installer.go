@@ -5,6 +5,8 @@
 package skillinstall
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -130,11 +132,7 @@ func writeTree(fsys fs.FS, dstDir string) error {
 		if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(dst), err)
 		}
-		mode := fs.FileMode(0600)
-		if info.Mode().Perm()&0111 != 0 || strings.HasPrefix(p, "scripts/") {
-			mode = 0700
-		}
-		if err := os.WriteFile(dst, data, mode); err != nil {
+		if err := os.WriteFile(dst, data, installedMode(p, info.Mode())); err != nil {
 			return fmt.Errorf("write %s: %w", dst, err)
 		}
 		return nil
@@ -399,7 +397,13 @@ func List() ([]Installation, error) {
 // Refresh rewrites every embedded skill in the receipt from this binary, one
 // transaction per skill. Catalog skills are skipped: login and refresh-skills
 // fetch those. Used after `praxis update`.
-func Refresh() (refreshed []Installation, err error) {
+func Refresh() ([]Installation, error) {
+	return refreshWhere(func(Installation) (bool, error) { return true, nil })
+}
+
+// refreshWhere rewrites the embedded skills at the receipt entries that match,
+// then retires the replaced skills on those hosts.
+func refreshWhere(match func(Installation) (bool, error)) (refreshed []Installation, err error) {
 	err = withSkillLock(func() error {
 		receipt, err := loadReceipt()
 		if err != nil {
@@ -409,6 +413,13 @@ func Refresh() (refreshed []Installation, err error) {
 		hosts := map[string][]harness.Harness{}
 		for _, e := range receipt.Skills {
 			if !IsMetaSkill(e.SkillName) {
+				continue
+			}
+			ok, err := match(e)
+			if err != nil {
+				return err
+			}
+			if !ok {
 				continue
 			}
 			if _, ok := hosts[e.SkillName]; !ok {
@@ -429,8 +440,10 @@ func Refresh() (refreshed []Installation, err error) {
 				errs = append(errs, fmt.Errorf("refresh %s: %w", name, err))
 			}
 		}
-		if _, err := retireLegacyLocked(hosts[praxisSkillName]); err != nil {
-			errs = append(errs, fmt.Errorf("retire replaced skills: %w", err))
+		if len(hosts[praxisSkillName]) > 0 {
+			if _, err := retireLegacyLocked(hosts[praxisSkillName]); err != nil {
+				errs = append(errs, fmt.Errorf("retire replaced skills: %w", err))
+			}
 		}
 		return errors.Join(errs...)
 	})
@@ -552,4 +565,68 @@ func saveReceipt(r Receipt) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// installedMode is the mode writeTree gives an embedded file: scripts and
+// executable files are 0700, everything else 0600.
+func installedMode(p string, mode fs.FileMode) fs.FileMode {
+	if mode.Perm()&0111 != 0 || strings.HasPrefix(p, "scripts/") {
+		return 0700
+	}
+	return 0600
+}
+
+// embeddedDigest is the digest an install of embedded skill name records:
+// hashTree's format over what writeTree would write, computed without writing.
+func embeddedDigest(name string) (string, error) {
+	tree, ok := treeSkillFS(name)
+	if !ok {
+		return "", fmt.Errorf("unknown skill %q (only embedded skills install from the binary)", name)
+	}
+	h := sha256.New()
+	err := fs.WalkDir(tree, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			fmt.Fprintf(h, "dir:%s\x00", p)
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		b, err := fs.ReadFile(tree, p)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "file:%s:%o:%d\x00", p, installedMode(p, info.Mode())&0111, len(b))
+		_, _ = h.Write(b)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// RefreshIfStale rewrites the embedded skills when the receipt records one
+// that this binary would write differently — after a brew upgrade, a
+// `praxis update` or a manual install. The receipt's digest is what was
+// installed, so a skill the user edited does not trigger it. A receipt with no
+// embedded skill is left alone: the first run installs it.
+func RefreshIfStale() ([]Installation, error) {
+	// Only stale entries: a current install elsewhere keeps the user's edits.
+	want := map[string]string{}
+	return refreshWhere(func(e Installation) (bool, error) {
+		d, ok := want[e.SkillName]
+		if !ok {
+			var err error
+			if d, err = embeddedDigest(e.SkillName); err != nil {
+				return false, err
+			}
+			want[e.SkillName] = d
+		}
+		return e.Digest != d, nil
+	})
 }
