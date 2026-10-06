@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -67,12 +68,21 @@ Homebrew post-install hook; first use installs only the skill, offline.
 		if err != nil {
 			return err
 		}
+		var raptorSkills []skillInstallationLite
+		if raptor.Path != "" {
+			var skillErr error
+			raptorSkills, skillErr = installRaptorSkills(raptor.Path, detectHarnesses(), "")
+			raptorErr = errors.Join(raptorErr, skillErr)
+			if !asJSON {
+				reportRaptorSkills(out, raptorSkills, skillErr)
+			}
+		}
 		if n > 0 {
 			markBootstrapDone() // mark ONLY after a real install; a no-host run
 			// stays retryable so first-run installs once a host appears.
 		}
 		if asJSON {
-			payload := map[string]any{"installed": n, "raptor_binary": raptor}
+			payload := map[string]any{"installed": n, "raptor_binary": raptor, "raptor_skills": raptorSkills}
 			if raptorErr != nil {
 				payload["raptor_warning"] = raptorErr.Error()
 			}

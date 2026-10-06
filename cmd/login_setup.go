@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +24,7 @@ import (
 // any cached skill files.
 type postAuthState struct {
 	raptorBinary    raptorinstall.Result
+	raptorSkills    []skillInstallationLite
 	raptorWarning   string
 	metaSkill       []skillInstallationLite
 	removedSkills   []skillInstallationLite
@@ -124,6 +126,23 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 		fmt.Fprintln(out, "No supported AI hosts detected on this machine.")
 		fmt.Fprintln(out, "Install Claude Code, Codex, or Gemini CLI to install skills.")
 		fmt.Fprintln(out, "(Continuing — credentials and MCP manifest snapshot will still be written.)")
+	}
+
+	// Step 0.5: raptor installs and registers its own skill, so its own
+	// upgrades keep the skill current. Needs the binary from step 0.
+	if !noHosts && state.raptorBinary.Path != "" {
+		scope := ""
+		if inProject {
+			scope = projectDir
+		}
+		var err error
+		state.raptorSkills, err = installRaptorSkills(state.raptorBinary.Path, hosts, scope)
+		if err != nil {
+			state.raptorWarning = errors.Join(raptorErr, err).Error()
+		}
+		if !asJSON {
+			reportRaptorSkills(out, state.raptorSkills, err)
+		}
 	}
 
 	// Step 1: every binary-embedded meta-skill (idempotent — Install
