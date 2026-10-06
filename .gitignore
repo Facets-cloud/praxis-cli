@@ -39,3 +39,7 @@ coverage.txt
 /.praxis/
 /.agents/
 /.gemini/
+
+# Python bytecode must never ship inside an embedded skill.
+__pycache__/
+*.pyc
