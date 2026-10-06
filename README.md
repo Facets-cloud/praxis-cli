@@ -85,10 +85,12 @@ praxis login
 That's literally it. `praxis login` is a single, idempotent command
 that does everything you need:
 
-1. Installs the **praxis meta-skill** into every detected AI host
-   (`~/.claude/skills/praxis/`, `~/.agents/skills/praxis/`,
-   `~/.gemini/skills/praxis/`). The meta-skill teaches your AI how to
-   drive the rest of the CLI.
+1. Installs the **praxis skill** into every detected AI host
+   (`~/.claude/skills/praxis/`, and `~/.agents/skills/praxis/`, the folder
+   Codex and Gemini CLI share). The skill teaches your AI how to drive the
+   rest of the CLI. It replaces the older `praxis-getting-started`,
+   `praxis-memory`, `praxis-onboarding` and `use-ig` skills, which login
+   removes.
 2. **Authenticates** with a control-plane token wherever it can get one:
    - If `raptor` is already logged in, login reuses that control-plane
      token (and its control plane) — nothing to click.
@@ -221,7 +223,7 @@ praxis profiles rm NAME [--json]
 
 praxis logout [--all]
    Active profile: removes credentials, all org skills (praxis-*),
-   and the MCP manifest snapshot. The praxis meta-skill stays so the
+   and the MCP manifest snapshot. The praxis skill stays so the
    AI host can still call praxis.
    --all wipes every profile's credentials and every host's org
    skills.
@@ -332,8 +334,8 @@ It only:
 4. Installs the *new* profile's catalog skills in their place
 5. Refreshes `~/.praxis/mcp-tools.json` to match
 
-The meta-skill (`~/.claude/skills/praxis/SKILL.md`) is profile-
-agnostic and never moves. Only the org skills cycle.
+The praxis skill (`~/.claude/skills/praxis/`) is profile-agnostic and
+never moves. Only the org skills cycle.
 
 ```text
 Before login --profile bigcorp:
@@ -613,10 +615,13 @@ tells you the `profiles use <name> --local` that repins it.
 ~/.praxis/mcp-tools.json   manifest snapshot of gateway tools
 ~/.praxis/installed.json   receipt of skill files written across hosts
 
-~/.claude/skills/praxis/SKILL.md      meta-skill (always present)
+~/.praxis/backups/                    copies of skills praxis replaced or removed
+                                      after they were changed
+
+~/.claude/skills/praxis/              the praxis skill (always present)
 ~/.claude/skills/praxis-<name>/...    org skills (cycle on profile switch)
-~/.agents/skills/...                  same shape for Codex
-~/.gemini/skills/...                  same shape for Gemini CLI
+~/.agents/skills/...                  same shape for Codex and Gemini CLI
+~/.gemini/config/skills/...           same shape for Antigravity
 ```
 
 In **local mode** (`praxis login --local`), everything moves into the

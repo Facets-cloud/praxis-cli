@@ -13,7 +13,6 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
-	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"github.com/spf13/cobra"
 )
 
@@ -53,17 +52,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&rootProfile, "profile", "p", "",
 		"credentials profile to use for this invocation (overrides $"+credentials.EnvProfile+"; default: the active profile)")
 
-	// cmd is the composition root: skillinstall must not import credentials (its
-	// tests would then read the developer's real ~/.praxis), so the meta-skill's
-	// multi-profile gate is wired here. A closure, not a value — the store is
-	// read only when a meta-skill body is actually rendered, so `praxis version`
-	// pays nothing.
-	skillinstall.MultiProfileMachine = func() bool {
-		// Identical credentials under two names ([acme] and its [default]
-		// copy) are one deployment.
-		store, err := credentials.Load()
-		return err == nil && len(credentials.Distinct(store)) > 1
-	}
 }
 
 // explicitProfile returns the profile this invocation explicitly selected and

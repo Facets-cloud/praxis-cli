@@ -11,12 +11,20 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/raptorinstall"
-	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
 
 // $PRAXIS_PROFILE now outranks both on-disk pointers, so a developer with it
 // exported would silently change what this whole suite resolves. Clear it once.
 func TestMain(m *testing.M) {
+	// No test may touch the developer's real home: a test that forgets
+	// t.Setenv("HOME") would otherwise rewrite their installed skills.
+	home, err := os.MkdirTemp("", "praxis-cmd-test-home-*")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("HOME", home); err != nil {
+		panic(err)
+	}
 	os.Unsetenv(credentials.EnvProfile)
 	// raptor's credentials walk starts at cwd and climbs to /, which passes
 	// through the developer's real home. Start it at the (faked) HOME instead so
@@ -28,6 +36,7 @@ func TestMain(m *testing.M) {
 	updateRaptor = func(io.Writer, bool, bool) (raptorUpgradeResult, error) { return raptorUpgradeResult{}, nil }
 	code := m.Run()
 	restore()
+	_ = os.RemoveAll(home)
 	os.Exit(code)
 }
 
@@ -260,32 +269,6 @@ func TestRootProfileFlag_RefusedWhereItCannotBeHonored(t *testing.T) {
 	}
 }
 
-// The meta-skill's multi-profile gate is a seam skillinstall cannot fill
-// itself (it must not read the credentials store, or its own tests would
-// depend on the developer's ~/.praxis). cmd wires it — and if that wiring is
-// ever dropped, the doctrine silently stops shipping to the users who need it
-// while every skillinstall test keeps passing, because those set the seam
-// directly.
-func TestMultiProfileMachine_WiredToCredentialsStore(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	if skillinstall.MultiProfileMachine() {
-		t.Error("empty store reports multi-profile")
-	}
-	seedProfile(t, "default", "https://d.test", "td")
-	if skillinstall.MultiProfileMachine() {
-		t.Error("one profile reports multi-profile — the typical customer would get doctrine they can't act on")
-	}
-	seedProfile(t, "acme", "https://acme.test", "ta")
-	if !skillinstall.MultiProfileMachine() {
-		t.Error("two profiles report single-profile — the meta-skill would omit the doctrine that matters")
-	}
-}
-
-// The refusal exists to stop DIVERGENCE, not to police the flag's presence.
-// `praxis -p default logout` on the single-profile machine that every customer
-// has asks for precisely what a bare `logout` does, so refusing it — with
-// "default is not another profile" and a hint to switch to the profile you are
-// already on — was an error message about nothing.
 func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
 	tests := []struct {
 		name string

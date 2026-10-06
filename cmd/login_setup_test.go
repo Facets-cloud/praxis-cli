@@ -460,8 +460,8 @@ func TestRunPostAuthSetup_EndToEnd_NoGeminiConflict(t *testing.T) {
 	var buf bytes.Buffer
 	runPostAuthSetup(&buf, false, "https://x.test", bearer("tok"))
 
-	// 1. The catalog skill and both metas installed at the shared alias.
-	for _, name := range []string{"praxis-cloudops", "praxis", "praxis-memory"} {
+	// 1. The catalog skill and the embedded praxis skill installed at the shared alias.
+	for _, name := range []string{"praxis-cloudops", "praxis"} {
 		if _, err := os.Stat(filepath.Join(agentsSkills, name, "SKILL.md")); err != nil {
 			t.Errorf("%s not installed at the alias %s: %v", name, agentsSkills, err)
 		}

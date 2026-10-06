@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>local test — my-web-component</title>
+    <style>
+      /* Two hosts, so you can see the component follow the page it sits in.
+         The component reads the INHERITED TEXT COLOUR to choose light or dark. */
+      body { margin: 0; font-family: system-ui, sans-serif; }
+      .host { padding: 20px; }
+      .light { background: #ffffff; color: #1f1f1f; }
+      .dark  { background: #141414; color: #e6e6e6; }
+      h2 { font: 600 12px/1 ui-monospace, monospace; letter-spacing: .08em;
+           text-transform: uppercase; opacity: .55; margin: 0 0 12px; }
+    </style>
+  </head>
+  <body>
+    <!--
+      Serve this over HTTP, never open it with file:// — the component builds
+      URLs from window.location.origin, and a file:// origin makes every request
+      fail before it starts:
+
+          npm run build && npx serve .        (or: python3 -m http.server)
+
+      Requests to /cc-ui/v1/... will 404 here, which is correct: the session
+      cookie only exists inside the platform. Use this page to check that the
+      component mounts, that the theme applies, and that the loading and error
+      states render. Check real data inside the platform.
+    -->
+
+    <section class="host light">
+      <h2>light host · scoped to an environment</h2>
+      <my-web-component project-name="acme" environment-id="env-123"></my-web-component>
+    </section>
+
+    <section class="host dark">
+      <h2>dark host · no environment context</h2>
+      <my-web-component project-name="acme"></my-web-component>
+    </section>
+
+    <script src="./dist/my-web-component.js"></script>
+  </body>
+</html>

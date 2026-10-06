@@ -418,6 +418,7 @@ func applyPackages(writes []packageWrite, retire []Installation, hosts []harness
 			next = upsert(next, entry)
 		}
 	}
+	retiredDirs := map[string]bool{}
 	for _, e := range retire {
 		dest := filepath.Dir(e.Path)
 		if _, ok := seen[dest]; ok {
@@ -442,14 +443,17 @@ func applyPackages(writes []packageWrite, retire []Installation, hosts []harness
 			return nil, e2
 		}
 		seen[dest] = c
-		kept := next.Skills[:0]
-		for _, in := range next.Skills {
-			if in.Path != e.Path {
-				kept = append(kept, in)
-			}
-		}
-		next.Skills = kept
+		retiredDirs[dest] = true
 	}
+	// Hosts can share a root (Codex and Gemini both read ~/.agents/skills), so
+	// one retired folder can back several receipt entries: drop them all.
+	kept := next.Skills[:0]
+	for _, in := range next.Skills {
+		if !retiredDirs[filepath.Dir(in.Path)] {
+			kept = append(kept, in)
+		}
+	}
+	next.Skills = kept
 	for _, c := range changes {
 		if err := noSymlinkPath(c.dest); err != nil {
 			return nil, err

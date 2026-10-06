@@ -257,10 +257,8 @@ Invariants to preserve when touching this area:
   admits — the bug arrives with the fix, not before it.
 - **Multi-profile guidance is gated on the profile count.** The single-profile
   customer gets no precedence chain, no machine-global warnings and no
-  refusal table — in the meta-skill (`skillinstall.MultiProfileMachine`, a
-  seam wired in `cmd.init` because skillinstall must not read the credentials
-  store) or in `profiles use` output (`switchSummary.MultiProfile`, from the
-  store the command already loaded). It describes a choice they don't have,
+  refusal table in `profiles use` output (`switchSummary.MultiProfile`, from
+  the store the command already loaded). It describes a choice they don't have,
   and it's what teaches a host to pass `-p` at the only profile there is.
 - Discovery is **home-subtree only** — matches the intended use case and
   keeps tests deterministic under a faked `$HOME`. Tests drive discovery

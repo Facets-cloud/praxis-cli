@@ -10,7 +10,6 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
-	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
 
 // Inside a tree whose file holds only [default], logout removes that file —
@@ -231,15 +230,6 @@ func TestPickProfile_ListsCopiesOnceAndTakesANumber(t *testing.T) {
 	got, err := pickProfile(&buf, false, true, "")
 	if err != nil || got != "zed" {
 		t.Errorf("pickProfile = %q, %v; want zed (row 2: default, zed)", got, err)
-	}
-	if !skillinstall.MultiProfileMachine() {
-		t.Error("two deployments are a multi-profile machine")
-	}
-	if _, err := credentials.Delete("zed"); err != nil {
-		t.Fatal(err)
-	}
-	if skillinstall.MultiProfileMachine() {
-		t.Error("[acme] and its [default] copy are one deployment, not a multi-profile machine")
 	}
 }
 

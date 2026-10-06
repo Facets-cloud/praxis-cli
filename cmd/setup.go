@@ -20,12 +20,14 @@ import (
 // upgrade has since deleted — see repairPraxisHooks — and installs a missing
 // raptor. First-run stays offline and does not.
 //
-// `praxis setup` and the first-run auto-install land the pre-login GTM skill
-// (praxis-getting-started) into the user's AI host the moment praxis is
-// installed — WITHOUT a login. This solves the bootstrap chicken-and-egg: skills
-// otherwise only appear after `praxis login`, so a freshly-installed praxis is
-// invisible to the host and nothing tells it to log in. The skill is embedded
-// (no network, no credentials), so this works offline and pre-auth.
+// `praxis setup` and the first-run auto-install land the embedded praxis skill
+// into the user's AI host the moment praxis is installed — WITHOUT a login, and
+// retire the embedded skills it replaced. This solves the bootstrap
+// chicken-and-egg: skills otherwise only appear after `praxis login`, so a
+// freshly-installed praxis is invisible to the host and nothing tells it to log
+// in. The skill is embedded (no network, no credentials), so this works offline
+// and pre-auth. The brew hook runs setup on every upgrade, so this is also how
+// a brew upgrade refreshes the skill.
 //
 // `setup` is hidden: it is the primitive the Homebrew post-install hook and
 // first-run call. The user-facing GTM surface is the installed skill itself; the
@@ -34,7 +36,7 @@ import (
 
 // bootstrapMarker is bumped when the bootstrap skill content changes enough to
 // warrant a one-time re-install on machines that already ran first-run.
-const bootstrapMarker = ".bootstrap-v1"
+const bootstrapMarker = ".bootstrap-v2"
 
 var setupJSON bool
 
@@ -45,11 +47,13 @@ func init() {
 
 var setupCmd = &cobra.Command{
 	Use:    "setup",
-	Short:  "Install the Praxis getting-started skill into your AI host (no login needed)",
+	Short:  "Install the Praxis skill into your AI host (no login needed)",
 	Hidden: true, // invoked by the brew post-install hook + first-run, not by hand
-	Long: `Install the pre-login "getting started" skill into every detected AI host
-(Claude Code, Codex, Gemini CLI) so your assistant knows what Praxis by
-Facets does, where to sign up, and how to log in — before you authenticate.
+	Long: `Install the praxis skill into every detected AI host (Claude Code, Codex,
+Gemini CLI) so your assistant knows what Praxis by Facets does, where to sign
+up, and how to log in — before you authenticate. The embedded skills it
+replaced (praxis-getting-started, praxis-memory, praxis-onboarding, use-ig) are
+removed; changed copies are backed up under ~/.praxis/backups.
 
 It also re-points any hook an older praxis wired from a path that an upgrade
 has since deleted. It installs the Raptor CLI to ~/.local/bin when it is
@@ -99,7 +103,7 @@ offline.
 			return render.JSON(out, payload)
 		}
 		if n > 0 {
-			fmt.Fprintf(out, "Installed the getting-started skill into %d host target(s).\n", n)
+			fmt.Fprintf(out, "Installed the praxis skill into %d host target(s).\n", n)
 			fmt.Fprintln(out, "Next: praxis login --url https://<your-account-id>.console.facets.cloud")
 		}
 		return nil
@@ -131,7 +135,11 @@ func installBootstrapSkills(out io.Writer, asJSON bool) (int, error) {
 			}
 		}
 	}
-	return n, nil
+	retired, err := retireLegacySkills(hosts)
+	if !asJSON && len(retired) > 0 {
+		fmt.Fprintf(out, "Removed %d replaced skill install(s).\n", len(retired))
+	}
+	return n, err
 }
 
 // repairPraxisHooks re-points already-wired hooks at the stable binary path. An
