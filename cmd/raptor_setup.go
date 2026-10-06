@@ -8,15 +8,18 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/raptorinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 )
 
 var ensureRaptorBinary = raptorinstall.Ensure
 var updateRaptor = runRaptorUpgrade
+var installRaptorSkills = runInstallRaptorSkills
 
 type raptorUpgradeResult struct {
 	Attempted bool                 `json:"attempted"`
@@ -108,4 +111,85 @@ func prepareRaptor(out io.Writer, asJSON bool) (raptorinstall.Result, error) {
 		}
 	}
 	return result, err
+}
+
+// raptorAgents maps a praxis host to raptor's --agent name. Antigravity has
+// no raptor agent yet, so it gets no raptor skill.
+var raptorAgents = map[string]string{"claude-code": "claude", "codex": "codex", "gemini-cli": "gemini"}
+
+// minRaptorSkillVersion is the first raptor that ships the one raptor skill.
+const minRaptorSkillVersion = "0.1.107"
+
+// runInstallRaptorSkills asks raptor to install its own skill, at user level,
+// for each host. raptor then registers the path and rewrites the skill after
+// every upgrade, so praxis never owns a copy that can go stale. The skill does
+// not depend on the praxis profile, so a project-scoped login installs it at
+// user level too: a project copy would only give the host a second one. A host
+// that already reads a raptor skill from the shared ~/.agents/skills root is
+// left alone for the same reason. hosts must be the user-level hosts.
+func runInstallRaptorSkills(raptor string, hosts []harness.Harness) ([]skillInstallationLite, error) {
+	if raptor == "" {
+		return nil, errors.New("raptor CLI is missing, so its skill was not installed")
+	}
+	base, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	v, err := raptorVersionAt(raptor)
+	if err != nil {
+		return nil, fmt.Errorf("raptor at %s did not answer --version, so its skill was not installed: %w", raptor, err)
+	}
+	if v != "" && compareSemver(v, minRaptorSkillVersion) < 0 {
+		return nil, fmt.Errorf("raptor %s is too old to install its skill; run `praxis update`", v)
+	}
+	var installed []skillInstallationLite
+	var errs []error
+	done := map[string]bool{}
+	for _, h := range hosts {
+		agent, ok := raptorAgents[h.Name]
+		if !ok || done[agent] {
+			continue
+		}
+		done[agent] = true
+		native := filepath.Join(base, "."+agent, "skills")
+		if h.SkillDir != native {
+			if _, err := os.Stat(filepath.Join(h.SkillDir, "raptor", "SKILL.md")); err == nil {
+				continue
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cmd := exec.CommandContext(ctx, raptor, "install", "skill", "--agent", agent)
+		cmd.Dir = base
+		cmd.Env = append(os.Environ(), "RAPTOR_NO_UPDATE_CHECK=1")
+		out, err := cmd.CombinedOutput()
+		cancel()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("raptor skill for %s: %w: %s", h.Name, err, strings.TrimSpace(string(out))))
+			continue
+		}
+		installed = append(installed, skillInstallationLite{Harness: h.Name, Path: filepath.Join(native, "raptor", "SKILL.md")})
+	}
+	return installed, errors.Join(errs...)
+}
+
+// raptorVersionAt is the release version of the raptor at path, or "" for a
+// development build. An error means raptor did not answer.
+func raptorVersionAt(path string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	if err != nil {
+		return "", err
+	}
+	return raptorSemver.FindString(string(out)), nil
+}
+
+// reportRaptorSkills prints where raptor installed its skill, then any failure.
+func reportRaptorSkills(out io.Writer, installed []skillInstallationLite, err error) {
+	for _, in := range installed {
+		fmt.Fprintf(out, "  ✓ raptor skill  %-12s @ %s\n", in.Harness, in.Path)
+	}
+	if err != nil {
+		fmt.Fprintf(out, "Warning: %v\n", err)
+	}
 }
