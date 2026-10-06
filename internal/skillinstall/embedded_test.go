@@ -352,3 +352,37 @@ func TestRefreshIfStale(t *testing.T) {
 		}
 	})
 }
+
+// Only stale installs are rewritten: a current install on another host keeps
+// the user's edit active.
+func TestRefreshIfStale_OnlyStaleEntries(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)[:2]
+	results, err := Install("praxis", hosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, current := results[0], results[1]
+	r, err := loadReceipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range r.Skills {
+		if r.Skills[i].Path == stale.Path {
+			r.Skills[i].Digest = "written-by-an-older-binary"
+		}
+	}
+	if err := saveReceipt(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(current.Path, []byte("my edit"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := RefreshIfStale()
+	if err != nil || len(got) != 1 || got[0].Path != stale.Path {
+		t.Fatalf("refreshed %+v, %v; want only %s", got, err, stale.Path)
+	}
+	if b, _ := os.ReadFile(current.Path); string(b) != "my edit" {
+		t.Error("a current install was rewritten")
+	}
+}

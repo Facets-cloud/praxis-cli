@@ -397,7 +397,13 @@ func List() ([]Installation, error) {
 // Refresh rewrites every embedded skill in the receipt from this binary, one
 // transaction per skill. Catalog skills are skipped: login and refresh-skills
 // fetch those. Used after `praxis update`.
-func Refresh() (refreshed []Installation, err error) {
+func Refresh() ([]Installation, error) {
+	return refreshWhere(func(Installation) (bool, error) { return true, nil })
+}
+
+// refreshWhere rewrites the embedded skills at the receipt entries that match,
+// then retires the replaced skills on those hosts.
+func refreshWhere(match func(Installation) (bool, error)) (refreshed []Installation, err error) {
 	err = withSkillLock(func() error {
 		receipt, err := loadReceipt()
 		if err != nil {
@@ -407,6 +413,13 @@ func Refresh() (refreshed []Installation, err error) {
 		hosts := map[string][]harness.Harness{}
 		for _, e := range receipt.Skills {
 			if !IsMetaSkill(e.SkillName) {
+				continue
+			}
+			ok, err := match(e)
+			if err != nil {
+				return err
+			}
+			if !ok {
 				continue
 			}
 			if _, ok := hosts[e.SkillName]; !ok {
@@ -427,8 +440,10 @@ func Refresh() (refreshed []Installation, err error) {
 				errs = append(errs, fmt.Errorf("refresh %s: %w", name, err))
 			}
 		}
-		if _, err := retireLegacyLocked(hosts[praxisSkillName]); err != nil {
-			errs = append(errs, fmt.Errorf("retire replaced skills: %w", err))
+		if len(hosts[praxisSkillName]) > 0 {
+			if _, err := retireLegacyLocked(hosts[praxisSkillName]); err != nil {
+				errs = append(errs, fmt.Errorf("retire replaced skills: %w", err))
+			}
 		}
 		return errors.Join(errs...)
 	})
@@ -601,30 +616,17 @@ func embeddedDigest(name string) (string, error) {
 // installed, so a skill the user edited does not trigger it. A receipt with no
 // embedded skill is left alone: the first run installs it.
 func RefreshIfStale() ([]Installation, error) {
-	receipt, err := loadReceipt()
-	if err != nil {
-		return nil, err
-	}
+	// Only stale entries: a current install elsewhere keeps the user's edits.
 	want := map[string]string{}
-	stale := false
-	for _, e := range receipt.Skills {
-		if !IsMetaSkill(e.SkillName) {
-			continue
-		}
+	return refreshWhere(func(e Installation) (bool, error) {
 		d, ok := want[e.SkillName]
 		if !ok {
+			var err error
 			if d, err = embeddedDigest(e.SkillName); err != nil {
-				return nil, err
+				return false, err
 			}
 			want[e.SkillName] = d
 		}
-		if e.Digest != d {
-			stale = true
-			break
-		}
-	}
-	if !stale {
-		return nil, nil
-	}
-	return Refresh()
+		return e.Digest != d, nil
+	})
 }

@@ -290,7 +290,7 @@ func maybeRefreshEmbeddedSkills(args []string) {
 		return
 	}
 	switch firstPositional(args) {
-	case "completion", "__complete", "git-credential", "hook", "setup", "update",
+	case "completion", "__complete", "git-credential", "hook", "setup", "update", "upgrade",
 		"login", "logout", "refresh-skills", "profiles", "version":
 		return
 	}

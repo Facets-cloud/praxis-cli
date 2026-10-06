@@ -266,6 +266,7 @@ func TestMaybeRefreshEmbeddedSkills(t *testing.T) {
 		{"dev", []string{"status"}, false},
 		{"1.16.0-3-gabc1234", []string{"status"}, false},
 		{"1.16.0", []string{"update"}, false},
+		{"1.16.0", []string{"upgrade", "--yes"}, false},
 		{"1.16.0", []string{"setup"}, false},
 		{"1.16.0", []string{"login"}, false},
 		{"1.16.0", []string{"refresh-skills"}, false},
