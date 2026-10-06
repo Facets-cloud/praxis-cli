@@ -82,8 +82,17 @@ func raptorIsDevBuild(path string) bool {
 // so `praxis update` updates both CLIs and reports each result separately.
 func finishToolUpdate(out io.Writer, asJSON, yes bool, payload map[string]any) error {
 	raptor, err := updateRaptor(out, asJSON, yes)
+	var skills []skillInstallationLite
+	var skillErr error
+	if raptor.Completed {
+		skills, skillErr = refreshRaptorSkills(out, asJSON)
+	}
 	if asJSON {
 		payload["raptor"] = raptor
+		payload["raptor_skills"] = skills
+		if skillErr != nil {
+			payload["raptor_skill_warning"] = skillErr.Error()
+		}
 		return errors.Join(err, render.JSON(out, payload))
 	}
 	if raptor.Binary.Installed {
@@ -192,4 +201,24 @@ func reportRaptorSkills(out io.Writer, installed []skillInstallationLite, err er
 	if err != nil {
 		fmt.Fprintf(out, "Warning: %v\n", err)
 	}
+}
+
+// refreshRaptorSkills reinstalls the raptor skill with the raptor now on PATH,
+// so an upgrade reaches the skill at once rather than at raptor's next run.
+// It resolves raptor again: an upgrade can land in ~/.local/bin when the old
+// directory is not writable.
+func refreshRaptorSkills(out io.Writer, asJSON bool) ([]skillInstallationLite, error) {
+	bin, err := ensureRaptorBinary()
+	if err == nil {
+		var skills []skillInstallationLite
+		skills, err = installRaptorSkills(bin.Path, detectHarnesses())
+		if !asJSON {
+			reportRaptorSkills(out, skills, err)
+		}
+		return skills, err
+	}
+	if !asJSON {
+		reportRaptorSkills(out, nil, err)
+	}
+	return nil, err
 }

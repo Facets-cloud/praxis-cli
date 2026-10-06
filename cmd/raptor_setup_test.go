@@ -456,3 +456,131 @@ func TestSetupInstallsRaptorSkill(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// stubRaptorLifecycle replaces the raptor seams. ensure returns paths in
+// order, then repeats the last; it records upgrade calls and the raptor path
+// each skill install used.
+func stubRaptorLifecycle(t *testing.T, ensure []raptorinstall.Result, upgradeOK bool, skillErr error) (upgrades *int, skillPaths *[]string) {
+	t.Helper()
+	upgrades, skillPaths = new(int), &[]string{}
+	origEnsure, origUpdate, origSkills, origDetect := ensureRaptorBinary, updateRaptor, installRaptorSkills, detectHarnesses
+	i := 0
+	ensureRaptorBinary = func() (raptorinstall.Result, error) {
+		r := ensure[min(i, len(ensure)-1)]
+		i++
+		if r.Path == "" {
+			return r, errors.New("raptor unavailable")
+		}
+		return r, nil
+	}
+	updateRaptor = func(io.Writer, bool, bool) (raptorUpgradeResult, error) {
+		*upgrades++
+		if !upgradeOK {
+			return raptorUpgradeResult{Attempted: true}, errors.New("upgrade failed")
+		}
+		return raptorUpgradeResult{Attempted: true, Completed: true}, nil
+	}
+	installRaptorSkills = func(path string, _ []harness.Harness) ([]skillInstallationLite, error) {
+		*skillPaths = append(*skillPaths, path)
+		if skillErr != nil {
+			return nil, skillErr
+		}
+		return []skillInstallationLite{{Harness: "claude-code", Path: "/h/.claude/skills/raptor/SKILL.md"}}, nil
+	}
+	detectHarnesses = func() []harness.Harness { return nil }
+	t.Cleanup(func() {
+		ensureRaptorBinary, updateRaptor, installRaptorSkills, detectHarnesses = origEnsure, origUpdate, origSkills, origDetect
+	})
+	return upgrades, skillPaths
+}
+
+// setup runs on every `brew upgrade`: it upgrades an existing raptor, then has
+// the raptor now on PATH refresh its skill.
+func TestSetupUpgradesRaptorThenRefreshesItsSkill(t *testing.T) {
+	old := raptorinstall.Result{Path: "/usr/local/bin/raptor"}
+	moved := raptorinstall.Result{Path: "/home/.local/bin/raptor"}
+	fresh := raptorinstall.Result{Path: "/home/.local/bin/raptor", Installed: true}
+	tests := []struct {
+		name         string
+		ensure       []raptorinstall.Result
+		upgradeOK    bool
+		wantUpgrades int
+		wantSkillAt  []string
+		wantWarning  string
+	}{
+		{"existing raptor is upgraded; skill uses the raptor now on PATH", []raptorinstall.Result{old, moved}, true, 1, []string{moved.Path}, ""},
+		{"raptor installed just now is not upgraded", []raptorinstall.Result{fresh}, true, 0, []string{fresh.Path}, ""},
+		{"failed upgrade is a warning; the skill is still refreshed", []raptorinstall.Result{old}, false, 1, []string{old.Path}, "upgrade failed"},
+		{"no raptor: no upgrade, no skill", []raptorinstall.Result{{}}, true, 0, nil, "raptor unavailable"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			setRootProfile(t, "")
+			upgrades, skillPaths := stubRaptorLifecycle(t, tc.ensure, tc.upgradeOK, nil)
+			var out bytes.Buffer
+			setupCmd.SetOut(&out)
+			t.Cleanup(func() { setupCmd.SetOut(nil) })
+			if err := setupCmd.RunE(setupCmd, nil); err != nil {
+				t.Fatalf("a raptor problem must not fail setup: %v", err)
+			}
+			if *upgrades != tc.wantUpgrades {
+				t.Errorf("upgrades = %d, want %d", *upgrades, tc.wantUpgrades)
+			}
+			if strings.Join(*skillPaths, "|") != strings.Join(tc.wantSkillAt, "|") {
+				t.Errorf("skill installed with %q, want %q", *skillPaths, tc.wantSkillAt)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+				t.Fatalf("setup JSON: %v\n%s", err, out.String())
+			}
+			if _, ok := payload["raptor_upgrade"]; ok != (tc.wantUpgrades > 0) {
+				t.Errorf("raptor_upgrade present = %t", ok)
+			}
+			if w, _ := payload["raptor_warning"].(string); !strings.Contains(w, tc.wantWarning) || (tc.wantWarning == "" && w != "") {
+				t.Errorf("raptor_warning = %q, want %q", w, tc.wantWarning)
+			}
+		})
+	}
+}
+
+// praxis update refreshes the raptor skill right after raptor upgrades; a
+// skill failure is a warning and does not fail the update.
+func TestUpdateRefreshesRaptorSkillAfterUpgrade(t *testing.T) {
+	tests := []struct {
+		name        string
+		upgradeOK   bool
+		skillErr    error
+		wantSkills  int
+		wantWarning string
+		wantErr     bool
+	}{
+		{"upgrade then skill refresh", true, nil, 1, "", false},
+		{"skill refresh fails", true, errors.New("no skill"), 1, "no skill", false},
+		{"upgrade fails: no skill refresh", false, nil, 0, "", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			_, skillPaths := stubRaptorLifecycle(t, []raptorinstall.Result{{Path: "/bin/raptor"}}, tc.upgradeOK, tc.skillErr)
+			withFakeRelease(t, &selfupdate.Release{TagName: "v" + version}, nil)
+			var out bytes.Buffer
+			updateCmd.SetOut(&out)
+			t.Cleanup(func() { updateCmd.SetOut(nil) })
+			err := updateCmd.RunE(updateCmd, nil)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v", err)
+			}
+			if len(*skillPaths) != tc.wantSkills {
+				t.Errorf("skill refreshes = %d, want %d", len(*skillPaths), tc.wantSkills)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+				t.Fatalf("update JSON: %v\n%s", err, out.String())
+			}
+			if w, _ := payload["raptor_skill_warning"].(string); w != tc.wantWarning {
+				t.Errorf("raptor_skill_warning = %q, want %q", w, tc.wantWarning)
+			}
+		})
+	}
+}
