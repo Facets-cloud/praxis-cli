@@ -141,12 +141,8 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 		}
 	}
 
-	// Step 1: every binary-embedded meta-skill (idempotent — Install
-	// upserts). Host-dependent. As of v0.x there are two:
-	//   - "praxis"        the CLI driver
-	//   - "praxis-memory" the memory-recall guide
-	// Names come from MetaSkillNames() so adding another meta-skill
-	// only requires a dummySkills entry.
+	// Step 1: every binary-embedded skill (idempotent — Install upserts), then
+	// retire the embedded skills the praxis package replaced. Host-dependent.
 	if !noHosts {
 		for _, name := range skillinstall.MetaSkillNames() {
 			metaResults, err := installSkill(name, hosts)
@@ -164,6 +160,11 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 			}
 			state.metaSkill = append(state.metaSkill, liteResults(metaResults)...)
 		}
+		retired, err := retireLegacySkills(hosts)
+		if err != nil && !asJSON {
+			fmt.Fprintf(out, "Warning: removing replaced skills failed: %v\n", err)
+		}
+		state.removedSkills = append(state.removedSkills, liteResults(retired)...)
 	}
 
 	// Step 2 + 3: fetch FIRST, then swap. If the fetch fails, leave the
@@ -183,7 +184,7 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 			// The wipe targets the active root's receipt only (see func doc),
 			// so it's safe in both user and project scope.
 			removed := wipePrevProfileSkills(out, asJSON)
-			state.removedSkills = liteResults(removed)
+			state.removedSkills = append(state.removedSkills, liteResults(removed)...)
 			orphaned := removeOrphanedProfileSkills(out, asJSON, nil, hosts)
 			state.removedSkills = append(state.removedSkills, liteResults(orphaned)...)
 			if !asJSON {
@@ -194,7 +195,7 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 			// active root's receipt only (see func doc), so it's safe in
 			// both user and project scope.
 			removed := wipePrevProfileSkills(out, asJSON)
-			state.removedSkills = liteResults(removed)
+			state.removedSkills = append(state.removedSkills, liteResults(removed)...)
 			orphaned := removeOrphanedProfileSkills(out, asJSON, skills, hosts)
 			state.removedSkills = append(state.removedSkills, liteResults(orphaned)...)
 			state.catalogSkills = installFetchedCatalog(out, asJSON, skills, hosts)

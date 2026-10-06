@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"io"
 	"os"
 	"path/filepath"
@@ -135,43 +136,35 @@ func TestFirstRunBootstrapNoHostStaysRetryable(t *testing.T) {
 	}
 }
 
-func TestInstallBootstrapSkillsWritesGTMSkill(t *testing.T) {
-	// Redirect HOME so the install (and its receipt) land in a temp tree.
+// The bootstrap installs the praxis skill with no login, and retires an
+// embedded skill it replaced that an older praxis left behind.
+func TestInstallBootstrapSkillsInstallsPraxisAndRetiresReplaced(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	n, err := installBootstrapSkills(io.Discard, true)
-	if err != nil {
-		t.Fatalf("install must not error: %v", err)
+	mustMkdir(t, filepath.Join(home, ".claude"))
+	old := filepath.Join(home, ".claude", "skills", "praxis-getting-started")
+	mustMkdir(t, old)
+	if err := os.WriteFile(filepath.Join(old, "SKILL.md"), []byte("old"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	if n == 0 {
-		t.Skip("no AI hosts detected on this machine — nothing to assert")
+	receipt := `{"skills":[{"skill_name":"praxis-getting-started","harness":"claude-code","path":"` +
+		filepath.Join(old, "SKILL.md") + `","installed_at":"2026-09-01T00:00:00Z"}]}`
+	mustMkdir(t, filepath.Join(home, ".praxis"))
+	if err := os.WriteFile(filepath.Join(home, ".praxis", "installed.json"), []byte(receipt), 0600); err != nil {
+		t.Fatal(err)
 	}
-	// The getting-started SKILL.md must be written with GTM content, no login.
-	found := false
-	_ = filepath.Walk(home, func(p string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil || info.IsDir() {
-			return nil //nolint:nilerr // deliberate: ignore walk error, skip directory
-		}
-		if filepath.Base(filepath.Dir(p)) == "praxis-getting-started" && filepath.Base(p) == "SKILL.md" {
-			b, _ := os.ReadFile(p)
-			if bodyHas(string(b), "Praxis by Facets") && bodyHas(string(b), "facets.cloud/signup") {
-				found = true
-			}
-		}
-		return nil
-	})
-	if !found {
-		t.Error("getting-started SKILL.md with GTM content was not installed into any host")
-	}
-}
 
-func bodyHas(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
+	n, err := installBootstrapSkills(io.Discard, true)
+	if err != nil || n == 0 {
+		t.Fatalf("installBootstrapSkills = %d, %v", n, err)
 	}
-	return false
+	want, _ := skillinstall.ContentFor("praxis")
+	if got, err := os.ReadFile(filepath.Join(home, ".claude", "skills", "praxis", "SKILL.md")); err != nil || string(got) != want {
+		t.Errorf("praxis skill not installed: %v", err)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("replaced skill still discoverable: %v", err)
+	}
 }
 
 // repairPraxisHooks heals a hook wired from a version-stamped path, and must

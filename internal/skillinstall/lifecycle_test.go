@@ -580,14 +580,12 @@ func TestLifecycle_BackupKeepsLinksAsLinks(t *testing.T) {
 	}
 }
 
-// One skill that cannot be refreshed does not stop the others.
-func TestLifecycle_RefreshContinuesPastAFailure(t *testing.T) {
+// A skill that cannot be refreshed is reported, not swallowed.
+func TestLifecycle_RefreshReportsAFailure(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	hosts := fakeHosts(t)[:1]
-	for _, name := range []string{"praxis", "praxis-memory"} {
-		if _, err := Install(name, hosts); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := Install("praxis", hosts); err != nil {
+		t.Fatal(err)
 	}
 	// A linked skill folder is refused, so refreshing praxis fails.
 	praxisDir := filepath.Join(hosts[0].SkillDir, "praxis")
@@ -597,18 +595,7 @@ func TestLifecycle_RefreshContinuesPastAFailure(t *testing.T) {
 	if err := os.Symlink(t.TempDir(), praxisDir); err != nil {
 		t.Fatal(err)
 	}
-	memory := filepath.Join(hosts[0].SkillDir, "praxis-memory", "SKILL.md")
-	if err := os.WriteFile(memory, []byte("stale"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	got, err := Refresh()
-	if err == nil || !strings.Contains(err.Error(), "refresh praxis:") {
+	if _, err := Refresh(); err == nil || !strings.Contains(err.Error(), "refresh praxis:") {
 		t.Fatalf("err = %v, want the praxis failure", err)
-	}
-	if len(got) != 1 || got[0].SkillName != "praxis-memory" {
-		t.Errorf("refreshed = %+v, want praxis-memory", got)
-	}
-	if string(readBytes(t, memory)) == "stale" {
-		t.Error("praxis-memory was not refreshed after the praxis failure")
 	}
 }

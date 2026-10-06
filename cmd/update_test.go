@@ -156,6 +156,7 @@ func TestUpdateCmd_RefusesAHomebrewInstall(t *testing.T) {
 // A non-Homebrew install still updates, and targets the real file behind any
 // symlink rather than the link.
 func TestUpdateCmd_ResolvesTheLinkForANonBrewInstall(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // the update refreshes installed skills
 	withFakeRelease(t, newerRelease(), nil)
 
 	dir := t.TempDir()

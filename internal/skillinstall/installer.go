@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -428,6 +429,9 @@ func Refresh() (refreshed []Installation, err error) {
 				errs = append(errs, fmt.Errorf("refresh %s: %w", name, err))
 			}
 		}
+		if _, err := retireLegacyLocked(hosts[praxisSkillName]); err != nil {
+			errs = append(errs, fmt.Errorf("retire replaced skills: %w", err))
+		}
 		return errors.Join(errs...)
 	})
 	return
@@ -435,14 +439,55 @@ func Refresh() (refreshed []Installation, err error) {
 
 // embeddedWrite is the package write for a skill embedded in this binary.
 func embeddedWrite(name string) (packageWrite, error) {
-	if tree, ok := treeSkillFS(name); ok {
-		return packageWrite{name: name, source: "embedded", scope: "builtin", write: func(dir string) error { return writeTree(tree, dir) }}, nil
+	tree, ok := treeSkillFS(name)
+	if !ok {
+		return packageWrite{}, fmt.Errorf("unknown skill %q (only embedded skills install from the binary)", name)
 	}
-	body, err := ContentFor(name)
+	return packageWrite{name: name, source: "embedded", scope: "builtin", write: func(dir string) error { return writeTree(tree, dir) }}, nil
+}
+
+// RetireLegacyBuiltins removes the embedded skills that the praxis package
+// replaced, on each host that now has praxis. Only receipt entries written by
+// an embedded install (or by a praxis too old to record a source) qualify, so
+// an org skill that reuses a legacy name is left alone. The engine backs up
+// any tree it cannot prove unchanged.
+func RetireLegacyBuiltins(hosts []harness.Harness) (retired []Installation, err error) {
+	err = withSkillLock(func() error {
+		var e error
+		retired, e = retireLegacyLocked(hosts)
+		return e
+	})
+	return
+}
+
+func retireLegacyLocked(hosts []harness.Harness) ([]Installation, error) {
+	receipt, err := loadReceipt()
 	if err != nil {
-		return packageWrite{}, err
+		return nil, err
 	}
-	return packageWrite{name: name, source: "embedded", scope: "builtin", write: func(dir string) error { return writeBodies(dir, body, nil) }}, nil
+	var retire []Installation
+	var where []harness.Harness
+	seen := map[Installation]bool{}
+	for _, h := range hosts {
+		if _, err := os.Stat(filepath.Join(h.SkillDir, praxisSkillName, "SKILL.md")); err != nil {
+			continue
+		}
+		where = append(where, h)
+		for _, e := range receipt.Skills {
+			if slices.Contains(legacyBuiltinSkills, e.SkillName) && (e.Source == "" || e.Source == "embedded") &&
+				e.Path == filepath.Join(h.SkillDir, e.SkillName, "SKILL.md") && !seen[e] {
+				seen[e] = true
+				retire = append(retire, e)
+			}
+		}
+	}
+	if len(retire) == 0 {
+		return nil, nil
+	}
+	if _, err := applyPackages(nil, retire, where); err != nil {
+		return nil, err
+	}
+	return retire, nil
 }
 
 // upsert replaces an existing (skill, harness) entry or appends a new one.
