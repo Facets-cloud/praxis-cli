@@ -5,6 +5,8 @@
 package skillinstall
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -130,11 +132,7 @@ func writeTree(fsys fs.FS, dstDir string) error {
 		if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(dst), err)
 		}
-		mode := fs.FileMode(0600)
-		if info.Mode().Perm()&0111 != 0 || strings.HasPrefix(p, "scripts/") {
-			mode = 0700
-		}
-		if err := os.WriteFile(dst, data, mode); err != nil {
+		if err := os.WriteFile(dst, data, installedMode(p, info.Mode())); err != nil {
 			return fmt.Errorf("write %s: %w", dst, err)
 		}
 		return nil
@@ -552,4 +550,81 @@ func saveReceipt(r Receipt) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// installedMode is the mode writeTree gives an embedded file: scripts and
+// executable files are 0700, everything else 0600.
+func installedMode(p string, mode fs.FileMode) fs.FileMode {
+	if mode.Perm()&0111 != 0 || strings.HasPrefix(p, "scripts/") {
+		return 0700
+	}
+	return 0600
+}
+
+// embeddedDigest is the digest an install of embedded skill name records:
+// hashTree's format over what writeTree would write, computed without writing.
+func embeddedDigest(name string) (string, error) {
+	tree, ok := treeSkillFS(name)
+	if !ok {
+		return "", fmt.Errorf("unknown skill %q (only embedded skills install from the binary)", name)
+	}
+	h := sha256.New()
+	err := fs.WalkDir(tree, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			fmt.Fprintf(h, "dir:%s\x00", p)
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		b, err := fs.ReadFile(tree, p)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "file:%s:%o:%d\x00", p, installedMode(p, info.Mode())&0111, len(b))
+		_, _ = h.Write(b)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// RefreshIfStale rewrites the embedded skills when the receipt records one
+// that this binary would write differently — after a brew upgrade, a
+// `praxis update` or a manual install. The receipt's digest is what was
+// installed, so a skill the user edited does not trigger it. A receipt with no
+// embedded skill is left alone: the first run installs it.
+func RefreshIfStale() ([]Installation, error) {
+	receipt, err := loadReceipt()
+	if err != nil {
+		return nil, err
+	}
+	want := map[string]string{}
+	stale := false
+	for _, e := range receipt.Skills {
+		if !IsMetaSkill(e.SkillName) {
+			continue
+		}
+		d, ok := want[e.SkillName]
+		if !ok {
+			if d, err = embeddedDigest(e.SkillName); err != nil {
+				return nil, err
+			}
+			want[e.SkillName] = d
+		}
+		if e.Digest != d {
+			stale = true
+			break
+		}
+	}
+	if !stale {
+		return nil, nil
+	}
+	return Refresh()
 }

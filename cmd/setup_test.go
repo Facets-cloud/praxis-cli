@@ -252,3 +252,37 @@ func TestRepairPraxisHooksReportsUnparseableSettings(t *testing.T) {
 		t.Fatalf("printHookRepair printed under --json")
 	}
 }
+
+// The per-command refresh runs for ordinary commands of a release build only.
+func TestMaybeRefreshEmbeddedSkills(t *testing.T) {
+	tests := []struct {
+		version string
+		args    []string
+		want    bool
+	}{
+		{"1.16.0", []string{"mcp", "k8s_cli", "kubectl_get"}, true},
+		{"1.16.0", []string{"-p", "acme", "status"}, true},
+		{"1.16.0", nil, true},
+		{"dev", []string{"status"}, false},
+		{"1.16.0-3-gabc1234", []string{"status"}, false},
+		{"1.16.0", []string{"update"}, false},
+		{"1.16.0", []string{"setup"}, false},
+		{"1.16.0", []string{"login"}, false},
+		{"1.16.0", []string{"refresh-skills"}, false},
+		{"1.16.0", []string{"git-credential", "get"}, false},
+		{"1.16.0", []string{"hook", "user-prompt-submit"}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.version+" "+strings.Join(tc.args, " "), func(t *testing.T) {
+			origV, origR := version, refreshIfStale
+			calls := 0
+			version = tc.version
+			refreshIfStale = func() ([]skillinstall.Installation, error) { calls++; return nil, nil }
+			t.Cleanup(func() { version, refreshIfStale = origV, origR })
+			maybeRefreshEmbeddedSkills(tc.args)
+			if (calls == 1) != tc.want {
+				t.Errorf("refresh calls = %d, want %t", calls, tc.want)
+			}
+		})
+	}
+}

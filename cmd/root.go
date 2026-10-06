@@ -145,6 +145,9 @@ func Execute() {
 	// stat() after the first time) and skipped for machine-invoked commands;
 	// never blocks the command it precedes.
 	maybeFirstRunBootstrap(os.Args[1:])
+	// After a brew upgrade, `praxis update` or a manual install, bring the
+	// installed praxis skill to this binary's text. Silent; see the func doc.
+	maybeRefreshEmbeddedSkills(os.Args[1:])
 	// Control-plane PATs an older praxis kept in ~/.praxis/credentials move to
 	// raptor's file, the shared store; its active-profile pointer becomes the
 	// [default] section. Silent and best-effort.

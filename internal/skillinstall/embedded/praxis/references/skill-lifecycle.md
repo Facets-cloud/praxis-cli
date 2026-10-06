@@ -31,8 +31,13 @@ always goes to the user level.
   `mcp`, `ig`, `git-credential`, `setup`, `version`, `update` and `completion`.
 - `praxis setup`. Homebrew runs it on install and on every upgrade.
 - `praxis login`, `praxis refresh-skills` and `praxis profiles use`.
-- `praxis update`, after a self-update. It writes the text of the binary that
-  was running, so run `praxis setup` once afterwards to get the new text.
+- Any other praxis command, when the installed praxis skill was written by a
+  different praxis binary (after a brew upgrade, `praxis update` or a manual
+  install). The command first rewrites the skill, silently. A skill you edited
+  does not trigger this, because the check uses the digest the receipt recorded
+  at install. It is skipped for development builds and for `login`, `logout`,
+  `refresh-skills`, `profiles`, `setup`, `update`, `hook`, `git-credential`,
+  `version` and `completion`.
 
 Each install also removes the embedded skills this package replaced:
 `praxis-getting-started`, `praxis-memory`, `praxis-onboarding` and `use-ig`.

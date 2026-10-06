@@ -279,3 +279,20 @@ func maybeFirstRunBootstrap(args []string) {
 		return installBootstrapSkills(io.Discard, true)
 	})
 }
+
+// maybeRefreshEmbeddedSkills rewrites the installed praxis skill when this
+// binary's copy differs from it (skillinstall.RefreshIfStale). Best-effort and
+// silent: a failure never affects the command it precedes. Skipped for
+// development builds, which would otherwise install unreleased text, and for
+// commands that install skills themselves or must stay minimal.
+func maybeRefreshEmbeddedSkills(args []string) {
+	if isDevBuild(version) {
+		return
+	}
+	switch firstPositional(args) {
+	case "completion", "__complete", "git-credential", "hook", "setup", "update",
+		"login", "logout", "refresh-skills", "profiles", "version":
+		return
+	}
+	_, _ = refreshIfStale()
+}

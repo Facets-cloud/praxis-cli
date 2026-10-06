@@ -176,14 +176,9 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 			return fmt.Errorf("install: %w", err)
 		}
 
-		// Refresh installed skill files with the (still-running) old
-		// binary's embedded content. The new binary won't take effect
-		// for the meta-skill until the user re-runs login/refresh from
-		// the new binary, but this catches simple in-binary content
-		// changes and is also where v0.6's `refresh-skills` behavior
-		// folds in. Best-effort: a refresh failure does not roll back
-		// the binary update.
-		refreshed, refreshErr := refreshSkills()
+		// No skill refresh here: this process still holds the old skill text.
+		// The new binary rewrites the praxis skill on its next run
+		// (maybeRefreshEmbeddedSkills).
 
 		// The binary just moved for anyone whose hooks were wired from a
 		// version-stamped path; re-point them so the update does not leave a
@@ -192,25 +187,16 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 
 		if asJSON {
 			payload := map[string]any{
-				"updated":         true,
-				"from_version":    current,
-				"to_version":      latest,
-				"refreshed_count": len(refreshed),
-			}
-			if refreshErr != nil {
-				payload["refresh_error"] = refreshErr.Error()
+				"updated":      true,
+				"from_version": current,
+				"to_version":   latest,
 			}
 			return finishToolUpdate(out, asJSON, true, payload)
 		}
 
 		fmt.Fprintf(out, "✓ Updated to %s.\n", latest)
 		printHookRepair(out, asJSON, repaired, repairWarn)
-		if refreshErr != nil {
-			fmt.Fprintf(out, "  ⚠ skill refresh skipped: %v\n", refreshErr)
-		} else if len(refreshed) > 0 {
-			fmt.Fprintf(out, "  ✓ refreshed %d installed skill(s)\n", len(refreshed))
-			fmt.Fprintln(out, "\nFor catalog changes, run `praxis login` to re-fetch.")
-		}
+		fmt.Fprintln(out, "  The praxis skill updates on the next praxis command. For catalog changes, run `praxis refresh-skills`.")
 		return finishToolUpdate(out, asJSON, true, nil)
 	},
 }
