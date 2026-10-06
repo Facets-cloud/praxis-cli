@@ -20,7 +20,9 @@ import (
 // .git-less, lowercased host/path so https, ssh, and scp forms of the same repo
 // collapse to one identity. Returns "" for empty input.
 func CanonicalGitURL(raw string) string {
-	s := strings.TrimSpace(raw)
+	// Lowercase first: the result is lowercase anyway, and schemes are
+	// case-insensitive (HTTPS:// is valid).
+	s := strings.ToLower(strings.TrimSpace(raw))
 	if s == "" {
 		return ""
 	}
@@ -37,7 +39,7 @@ func CanonicalGitURL(raw string) string {
 	s = strings.TrimSuffix(s, "/")
 	s = strings.TrimSuffix(s, ".git")
 	s = strings.TrimSuffix(s, "/")
-	return strings.ToLower(s)
+	return s
 }
 
 // NudgeContext is the additionalContext a hook injects when cwd's repo is a

@@ -222,3 +222,51 @@ func refreshRaptorSkills(out io.Writer, asJSON bool) ([]skillInstallationLite, e
 	}
 	return nil, err
 }
+
+// raptorSkillAt reports whether host h reads a raptor skill: in its own skill
+// folder, or in the user-level folder raptor writes for its agent.
+func raptorSkillAt(h harness.Harness) bool {
+	if _, err := os.Stat(filepath.Join(h.SkillDir, "raptor", "SKILL.md")); err == nil {
+		return true
+	}
+	agent, ok := raptorAgents[h.Name]
+	if !ok {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(home, "."+agent, "skills", "raptor", "SKILL.md"))
+	return err == nil
+}
+
+// raptorSkillEverywhere reports whether every detected host raptor supports
+// reads a raptor skill. Hosts raptor does not support (Antigravity) do not
+// count; with no supported host at all it is false.
+func raptorSkillEverywhere(hosts []harness.Harness) bool {
+	n := 0
+	for _, h := range hosts {
+		if _, ok := raptorAgents[h.Name]; !ok {
+			continue
+		}
+		if !raptorSkillAt(h) {
+			return false
+		}
+		n++
+	}
+	return n > 0
+}
+
+// replacementAt reports whether host h has the skill that stands for
+// capability c, for skillinstall.RetireReplacedGlobals.
+func replacementAt(h harness.Harness, c string) bool {
+	switch c {
+	case "praxis-v1":
+		_, err := os.Stat(filepath.Join(h.SkillDir, "praxis", "SKILL.md"))
+		return err == nil
+	case "raptor-v1":
+		return raptorSkillAt(h)
+	}
+	return false
+}

@@ -49,6 +49,12 @@ skills and agent files. A failed fetch leaves the installed ones in place. A
 successful fetch replaces the previous profile's `praxis-<name>` skills.
 `praxis logout` removes them, the agent files and the hooks. It keeps `praxis`.
 
+30 older GLOBAL skills are now covered by this package (16) and by the raptor
+skill (14); [Legacy map](legacy-skill-map.md) lists them. praxis does not install
+them where the replacement is in place, and any praxis command removes copies
+already installed. A host without the raptor skill keeps the 14 Facets ones as a
+fallback. An organization or personal skill with the same name always stays.
+
 ## The raptor skill
 
 Login, `refresh-skills`, `profiles use` and `setup` run

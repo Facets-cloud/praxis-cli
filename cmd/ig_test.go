@@ -656,8 +656,9 @@ func TestIgClaims_OnePerLine(t *testing.T) {
 
 	orig := igcatalog.Claims
 	igcatalog.Claims = func(_ string, _ map[string]string, git string) ([]string, error) {
-		if git != "https://github.com/acme/api.git" {
-			t.Errorf("git = %q", git)
+		// The server matches the canonical form only.
+		if git != "github.com/acme/api" {
+			t.Errorf("git = %q, want the canonical github.com/acme/api", git)
 		}
 		return []string{"payments", "identity"}, nil
 	}

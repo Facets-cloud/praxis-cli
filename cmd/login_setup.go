@@ -172,7 +172,18 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 	// re-run on a flaky network without leaving the user empty-handed.
 	// Host-dependent (no point fetching if we can't install).
 	if !noHosts {
-		skills, fetchErr := fetchCatalog(baseURL, auth)
+		// Claim the replacements that are in place, so the server and the
+		// client filter leave out the GLOBAL skills they replace. raptor-v1
+		// needs raptor's skill on every detected host raptor supports;
+		// otherwise those hosts keep the old raptor-route skills as fallback.
+		var caps []string
+		if len(state.metaSkill) > 0 {
+			caps = append(caps, "praxis-v1")
+		}
+		if raptorSkillEverywhere(detectHarnesses()) {
+			caps = append(caps, "raptor-v1")
+		}
+		skills, fetchErr := fetchCatalog(baseURL, auth, caps...)
 		switch {
 		case fetchErr != nil:
 			if !asJSON {
@@ -427,20 +438,13 @@ func installFetchedCatalog(out io.Writer, asJSON bool, skills []skillcatalog.Ski
 	failures := 0
 	for _, sk := range skills {
 		prefixed := sk.PrefixedName()
-		var results []skillinstall.Installation
-		var err error
-		if sk.IsMultiFile() {
-			// Multi-file skill: write SKILL.md (with preamble) + supporting
-			// files as a directory tree. Supporting files install verbatim —
-			// the server already branded them; no preamble (SKILL.md-only).
-			files := make([]skillinstall.FileBody, len(sk.Files))
-			for i, f := range sk.Files {
-				files[i] = skillinstall.FileBody{Path: f.Path, Content: f.Content}
-			}
-			results, err = installSkillTree(prefixed, sk.RenderedContent(), files, hosts)
-		} else {
-			results, err = installSkillBody(prefixed, sk.RenderedContent(), hosts)
+		// Supporting files install verbatim — the server already branded
+		// them; only SKILL.md gets the preamble.
+		files := make([]skillinstall.FileBody, len(sk.Files))
+		for i, f := range sk.Files {
+			files[i] = skillinstall.FileBody{Path: f.Path, Content: f.Content}
 		}
+		results, err := installCatalogSkill(prefixed, sk.Scope, sk.RenderedContent(), files, hosts)
 		if err != nil {
 			if !asJSON {
 				fmt.Fprintf(out, "  ✗ %-40s failed: %v\n", prefixed, err)

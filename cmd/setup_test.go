@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"io"
 	"os"
@@ -275,14 +276,18 @@ func TestMaybeRefreshEmbeddedSkills(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.version+" "+strings.Join(tc.args, " "), func(t *testing.T) {
-			origV, origR := version, refreshIfStale
-			calls := 0
+			origV, origR, origG := version, refreshIfStale, retireReplacedGlobals
+			calls, retires := 0, 0
 			version = tc.version
 			refreshIfStale = func() ([]skillinstall.Installation, error) { calls++; return nil, nil }
-			t.Cleanup(func() { version, refreshIfStale = origV, origR })
+			retireReplacedGlobals = func(func(harness.Harness, string) bool) ([]skillinstall.Installation, error) {
+				retires++
+				return nil, nil
+			}
+			t.Cleanup(func() { version, refreshIfStale, retireReplacedGlobals = origV, origR, origG })
 			maybeRefreshEmbeddedSkills(tc.args)
-			if (calls == 1) != tc.want {
-				t.Errorf("refresh calls = %d, want %t", calls, tc.want)
+			if (calls == 1) != tc.want || (retires == 1) != tc.want {
+				t.Errorf("refresh calls = %d, retire calls = %d, want %t", calls, retires, tc.want)
 			}
 		})
 	}

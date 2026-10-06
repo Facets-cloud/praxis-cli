@@ -28,9 +28,9 @@ CI principal's scope. Keep secrets out of generated workflow literals and logs.
 Public binary releases avoid distributing access to the private ig source.
 Use pinned, reviewed release/tool versions according to repository policy.
 
-Discover claiming catalogs with `praxis ig claims --git github.com/ORG/REPO`
-(the bare host/owner/repo form: an https or `.git` URL matches nothing); a repo
-can be claimed more than once. Pull each manifest with
+Discover claiming catalogs with `praxis ig claims --git <repo-url>` (any form:
+praxis canonicalizes it to `host/owner/repo`); a repo can be claimed more than
+once. Pull each manifest with
 `praxis ig manifest pull C`. Build from that checkout's exact commit; preserve
 `git`, `sha` and `graph_digest`. A manifest can point to code plus extractors; review executable
 extractors as code, not harmless configuration.

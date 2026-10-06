@@ -21,8 +21,8 @@ import (
 var (
 	detectHarnesses         = harness.Detected
 	installSkill            = skillinstall.Install
-	installSkillBody        = skillinstall.InstallWithBody
-	installSkillTree        = skillinstall.InstallTreeWithBodies
+	installCatalogSkill     = skillinstall.InstallCatalogSkill
+	retireReplacedGlobals   = skillinstall.RetireReplacedGlobals
 	listInstalledSkill      = skillinstall.List
 	refreshIfStale          = skillinstall.RefreshIfStale
 	retireLegacySkills      = skillinstall.RetireLegacyBuiltins

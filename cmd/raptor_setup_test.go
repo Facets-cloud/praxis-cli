@@ -391,7 +391,7 @@ func TestLoginInstallsRaptorSkill(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(home, ".agents", "skills", "raptor", "SKILL.md"), []byte("x"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			fetchCatalog = func(string, map[string]string) ([]skillcatalog.Skill, error) { return nil, nil }
+			fetchCatalog = func(string, map[string]string, ...string) ([]skillcatalog.Skill, error) { return nil, nil }
 			fetchAgents = func(string, map[string]string) ([]agentcatalog.Agent, error) { return nil, nil }
 			t.Cleanup(func() {
 				ensureRaptorBinary, detectHarnesses, fetchCatalog, fetchAgents = origEnsure, origDetect, origFetch, origAgents
@@ -580,6 +580,73 @@ func TestUpdateRefreshesRaptorSkillAfterUpgrade(t *testing.T) {
 			}
 			if w, _ := payload["raptor_skill_warning"].(string); w != tc.wantWarning {
 				t.Errorf("raptor_skill_warning = %q, want %q", w, tc.wantWarning)
+			}
+		})
+	}
+}
+
+func TestRaptorSkillEverywhere(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claude := harness.Harness{Name: "claude-code", SkillDir: filepath.Join(home, ".claude", "skills")}
+	codex := harness.Harness{Name: "codex", SkillDir: filepath.Join(home, ".agents", "skills")}
+	anti := harness.Harness{Name: "antigravity", SkillDir: filepath.Join(home, ".gemini", "config", "skills")}
+	put := func(dir string) {
+		mustMkdir(t, filepath.Join(dir, "raptor"))
+		if err := os.WriteFile(filepath.Join(dir, "raptor", "SKILL.md"), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if raptorSkillEverywhere([]harness.Harness{claude, codex}) {
+		t.Error("no raptor skill anywhere reported as everywhere")
+	}
+	put(claude.SkillDir)
+	if raptorSkillEverywhere([]harness.Harness{claude, codex}) {
+		t.Error("codex has no raptor skill, yet everywhere")
+	}
+	put(filepath.Join(home, ".codex", "skills")) // raptor's own folder for codex
+	if !raptorSkillEverywhere([]harness.Harness{claude, codex, anti}) {
+		t.Error("claude and codex have it; antigravity must not count")
+	}
+	if raptorSkillEverywhere([]harness.Harness{anti}) {
+		t.Error("no raptor-supported host at all must be false")
+	}
+}
+
+// Login claims praxis-v1 when the praxis skill installed and raptor-v1 only
+// when raptor's skill is on every detected raptor host.
+func TestLoginClaimsCapabilities(t *testing.T) {
+	for _, tc := range []struct {
+		raptor bool
+		want   string
+	}{{false, "[praxis-v1]"}, {true, "[praxis-v1 raptor-v1]"}} {
+		t.Run(fmt.Sprint(tc.raptor), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			setRootProfile(t, "")
+			stubMCPManifestFetch(t)
+			claudeDir := filepath.Join(home, ".claude", "skills")
+			if tc.raptor {
+				mustMkdir(t, filepath.Join(claudeDir, "raptor"))
+				if err := os.WriteFile(filepath.Join(claudeDir, "raptor", "SKILL.md"), []byte("x"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var got []string
+			origDetect, origFetch, origAgents := detectHarnesses, fetchCatalog, fetchAgents
+			detectHarnesses = func() []harness.Harness {
+				return []harness.Harness{{Name: "claude-code", SkillDir: claudeDir}}
+			}
+			fetchCatalog = func(_ string, _ map[string]string, caps ...string) ([]skillcatalog.Skill, error) {
+				got = caps
+				return nil, nil
+			}
+			fetchAgents = func(string, map[string]string) ([]agentcatalog.Agent, error) { return nil, nil }
+			t.Cleanup(func() { detectHarnesses, fetchCatalog, fetchAgents = origDetect, origFetch, origAgents })
+
+			runPostAuthSetup(io.Discard, true, "https://cp.invalid", bearer("tok"))
+			if fmt.Sprint(got) != tc.want {
+				t.Errorf("caps = %v, want %s", got, tc.want)
 			}
 		})
 	}

@@ -10,6 +10,8 @@ func TestCanonicalGitURL(t *testing.T) {
 		"git@github.com:org/repo.git",
 		"ssh://git@github.com/org/repo.git",
 		"  https://github.com/ORG/Repo.git/ ",
+		"HTTPS://GitHub.com/Org/Repo.git",
+		"SSH://git@github.com/org/repo.GIT",
 	}
 	want := "github.com/org/repo"
 	for _, in := range same {

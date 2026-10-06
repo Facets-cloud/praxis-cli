@@ -88,6 +88,9 @@ offline.
 			raptorSkills, skillErr = refreshRaptorSkills(out, asJSON)
 			raptorErr = errors.Join(raptorErr, skillErr)
 		}
+		// With praxis and raptor's skills in place, drop the GLOBAL skills
+		// they replace (best-effort, like the per-command check).
+		_, _ = retireReplacedGlobals(replacementAt)
 		if n > 0 {
 			markBootstrapDone() // mark ONLY after a real install; a no-host run
 			// stays retryable so first-run installs once a host appears.
@@ -295,4 +298,5 @@ func maybeRefreshEmbeddedSkills(args []string) {
 		return
 	}
 	_, _ = refreshIfStale()
+	_, _ = retireReplacedGlobals(replacementAt)
 }
