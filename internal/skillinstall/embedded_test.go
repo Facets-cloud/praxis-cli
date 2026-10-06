@@ -386,3 +386,62 @@ func TestRefreshIfStale_OnlyStaleEntries(t *testing.T) {
 		t.Error("a current install was rewritten")
 	}
 }
+
+func TestInstallCatalogSkill_RecordsSourceAndScope(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	got, err := InstallCatalogSkill("praxis-x", "organization", "body", []FileBody{{"ref.md", "r"}}, fakeHosts(t)[:1])
+	if err != nil || len(got) != 1 || got[0].Source != "catalog" || got[0].Scope != "organization" || got[0].Digest == "" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(filepath.Dir(got[0].Path), "ref.md")); string(b) != "r" {
+		t.Error("supporting file not written")
+	}
+}
+
+// Only replaced GLOBAL catalog skills go, and only where the replacement is in
+// place; org skills of the same name and other skills stay.
+func TestRetireReplacedGlobals(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	all := fakeHosts(t)
+	claude, codex, gemini := all[0], all[1], all[2]
+	gemini.SkillDir = codex.SkillDir // shared ~/.agents/skills
+	mustCatalog := func(h harness.Harness, name, scope string) {
+		t.Helper()
+		if _, err := InstallCatalogSkill(name, scope, "body", nil, []harness.Harness{h}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustCatalog(claude, "praxis-cloud-operations", "global")        // praxis-v1, praxis here → goes
+	mustCatalog(claude, "praxis-facets-blueprint", "global")        // raptor-v1, no raptor here → stays
+	mustCatalog(claude, "praxis-db-migrate", "organization")        // org namesake → stays
+	mustCatalog(claude, "praxis-incident-notes", "global")          // not replaced → stays
+	mustCatalog(codex, "praxis-facets-blueprint", "global")         // raptor here → goes
+	mustCatalog(gemini, "praxis-facets-blueprint", "global")        // same folder → goes
+	legacy := legacyInstall(t, claude, "praxis-k8s-operations", "") // old receipt: no scope → treated global → goes
+
+	has := func(h harness.Harness, c string) bool {
+		return (c == "praxis-v1" && h.Name == "claude-code") || (c == "raptor-v1" && h.SkillDir == codex.SkillDir)
+	}
+	retired, err := RetireReplacedGlobals(has)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retired) != 4 {
+		t.Errorf("retired %d, want 4: %+v", len(retired), retired)
+	}
+	left, _ := List()
+	var names []string
+	for _, e := range left {
+		names = append(names, e.Harness+":"+e.SkillName)
+	}
+	slices.Sort(names)
+	want := []string{"claude-code:praxis-db-migrate", "claude-code:praxis-facets-blueprint", "claude-code:praxis-incident-notes"}
+	if !slices.Equal(names, want) {
+		t.Errorf("receipt keeps %v, want %v", names, want)
+	}
+	for _, gone := range []string{legacy.Path, filepath.Join(codex.SkillDir, "praxis-facets-blueprint")} {
+		if _, err := os.Stat(gone); !os.IsNotExist(err) {
+			t.Errorf("%s still discoverable: %v", gone, err)
+		}
+	}
+}

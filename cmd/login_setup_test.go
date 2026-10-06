@@ -58,7 +58,7 @@ func TestRunPostAuthSetup_CatalogFetchFailure_PreservesExisting(t *testing.T) {
 	installSkill = func(name string, h []harness.Harness) ([]skillinstall.Installation, error) {
 		return []skillinstall.Installation{{SkillName: name, Harness: "claude-code", Path: "/x"}}, nil
 	}
-	fetchCatalog = func(baseURL string, auth map[string]string) ([]skillcatalog.Skill, error) {
+	fetchCatalog = func(baseURL string, auth map[string]string, _ ...string) ([]skillcatalog.Skill, error) {
 		return nil, errors.New("simulated network failure")
 	}
 	t.Cleanup(func() {
@@ -170,7 +170,7 @@ func TestRunPostAuthSetup_ProjectScope_WritesIntoProjectDir(t *testing.T) {
 	t.Cleanup(func() { detectHarnesses = origDetect })
 
 	origFetchSk := fetchCatalog
-	fetchCatalog = func(_ string, _ map[string]string) ([]skillcatalog.Skill, error) { return nil, nil }
+	fetchCatalog = func(_ string, _ map[string]string, _ ...string) ([]skillcatalog.Skill, error) { return nil, nil }
 	t.Cleanup(func() { fetchCatalog = origFetchSk })
 
 	origFetchAg := fetchAgents
@@ -230,7 +230,7 @@ func TestRunPostAuthSetup_ProjectScope_DoesNotWipeUserLevelInstall(t *testing.T)
 	t.Cleanup(func() { detectHarnesses = origDetect })
 
 	origFetchSk := fetchCatalog
-	fetchCatalog = func(_ string, _ map[string]string) ([]skillcatalog.Skill, error) { return nil, nil }
+	fetchCatalog = func(_ string, _ map[string]string, _ ...string) ([]skillcatalog.Skill, error) { return nil, nil }
 	t.Cleanup(func() { fetchCatalog = origFetchSk })
 
 	origFetchAg := fetchAgents
@@ -263,7 +263,7 @@ func TestRunPostAuthSetupFetchesAndInstallsAgents(t *testing.T) {
 
 	origFetchSk := fetchCatalog
 	defer func() { fetchCatalog = origFetchSk }()
-	fetchCatalog = func(_ string, _ map[string]string) ([]skillcatalog.Skill, error) { return nil, nil }
+	fetchCatalog = func(_ string, _ map[string]string, _ ...string) ([]skillcatalog.Skill, error) { return nil, nil }
 
 	origFetchAg := fetchAgents
 	defer func() { fetchAgents = origFetchAg }()
@@ -323,7 +323,7 @@ func TestRunPostAuthSetupAgentFetchFailureLeavesExistingInPlace(t *testing.T) {
 
 	origFetchSk := fetchCatalog
 	defer func() { fetchCatalog = origFetchSk }()
-	fetchCatalog = func(_ string, _ map[string]string) ([]skillcatalog.Skill, error) { return nil, nil }
+	fetchCatalog = func(_ string, _ map[string]string, _ ...string) ([]skillcatalog.Skill, error) { return nil, nil }
 
 	origFetchAg := fetchAgents
 	defer func() { fetchAgents = origFetchAg }()
@@ -363,57 +363,40 @@ func TestRunPostAuthSetupAgentFetchFailureLeavesExistingInPlace(t *testing.T) {
 	}
 }
 
-// TestInstallFetchedCatalog_RoutesMultiFileToTree verifies the install branch:
-// single-file skills go through installSkillBody (one SKILL.md), multi-file
-// skills go through installSkillTree with their supporting files attached.
-func TestInstallFetchedCatalog_RoutesMultiFileToTree(t *testing.T) {
+// TestInstallFetchedCatalog_PassesScopeAndFiles: every catalog skill installs
+// through installCatalogSkill with its scope (so a later cleanup can tell a
+// GLOBAL skill from an org namesake) and its supporting files.
+func TestInstallFetchedCatalog_PassesScopeAndFiles(t *testing.T) {
 	hosts := []harness.Harness{{Name: "claude-code", SkillDir: t.TempDir(), Detected: true}}
-
-	var bodyCalls, treeCalls []string
-	var treeFiles []skillinstall.FileBody
-	origBody, origTree := installSkillBody, installSkillTree
-	installSkillBody = func(name, _ string, _ []harness.Harness) ([]skillinstall.Installation, error) {
-		bodyCalls = append(bodyCalls, name)
+	type call struct {
+		name, scope string
+		files       int
+	}
+	var calls []call
+	orig := installCatalogSkill
+	installCatalogSkill = func(name, scope, _ string, files []skillinstall.FileBody, _ []harness.Harness) ([]skillinstall.Installation, error) {
+		calls = append(calls, call{name, scope, len(files)})
 		return []skillinstall.Installation{{SkillName: name, Harness: "claude-code", Path: "/x/SKILL.md"}}, nil
 	}
-	installSkillTree = func(name, _ string, files []skillinstall.FileBody, _ []harness.Harness) ([]skillinstall.Installation, error) {
-		treeCalls = append(treeCalls, name)
-		treeFiles = files
-		return []skillinstall.Installation{{SkillName: name, Harness: "claude-code", Path: "/x/SKILL.md"}}, nil
-	}
-	t.Cleanup(func() { installSkillBody, installSkillTree = origBody, origTree })
+	t.Cleanup(func() { installCatalogSkill = orig })
 
 	skills := []skillcatalog.Skill{
-		{Name: "plain", Content: "---\nname: plain\n---\nbody"},
-		{
-			Name:    "gcp",
-			Content: "---\nname: gcp\n---\nbody",
-			Files:   []skillcatalog.SkillFile{{Path: "catalog.md", Content: "c"}},
-		},
+		{Name: "plain", Scope: "organization", Content: "---\nname: plain\n---\nbody"},
+		{Name: "gcp", Scope: "global", Content: "---\nname: gcp\n---\nbody", Files: []skillcatalog.SkillFile{{Path: "catalog.md", Content: "c"}}},
 	}
-
 	var buf bytes.Buffer
 	installFetchedCatalog(&buf, false, skills, hosts)
 
-	if len(bodyCalls) != 1 || bodyCalls[0] != "praxis-plain" {
-		t.Errorf("single-file should route to installSkillBody; got %v", bodyCalls)
+	want := []call{{"praxis-plain", "organization", 0}, {"praxis-gcp", "global", 1}}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %+v, want %+v", calls, want)
 	}
-	if len(treeCalls) != 1 || treeCalls[0] != "praxis-gcp" {
-		t.Errorf("multi-file should route to installSkillTree; got %v", treeCalls)
-	}
-	if len(treeFiles) != 1 || treeFiles[0].Path != "catalog.md" {
-		t.Errorf("tree install should receive supporting files; got %v", treeFiles)
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Errorf("call %d = %+v, want %+v", i, calls[i], want[i])
+		}
 	}
 }
-
-// TestRunPostAuthSetup_EndToEnd_NoGeminiConflict is the full inside-out proof
-// for issue #9. It drives the REAL runPostAuthSetup — real harness detection,
-// real meta-skill embed install, real catalog install — on a simulated
-// Codex+Gemini machine. Only the network seams (catalog/agents/MCP) are
-// stubbed. It then asserts the exact condition Gemini CLI warns on — the same
-// skill name resolving from BOTH ~/.gemini/skills and ~/.agents/skills — is
-// never created: every praxis skill lives only at the shared alias, and
-// nothing praxis-managed is written to ~/.gemini/skills.
 func TestRunPostAuthSetup_EndToEnd_NoGeminiConflict(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -451,7 +434,7 @@ func TestRunPostAuthSetup_EndToEnd_NoGeminiConflict(t *testing.T) {
 	// Stub only the network seams. Catalog returns one real single-file skill;
 	// agents empty. Install/detection/migration all run for real.
 	origFetch, origAgents := fetchCatalog, fetchAgents
-	fetchCatalog = func(_ string, _ map[string]string) ([]skillcatalog.Skill, error) {
+	fetchCatalog = func(_ string, _ map[string]string, _ ...string) ([]skillcatalog.Skill, error) {
 		return []skillcatalog.Skill{{Name: "cloudops", Content: "---\nname: cloudops\n---\nbody"}}, nil
 	}
 	fetchAgents = func(_ string, _ map[string]string) ([]agentcatalog.Agent, error) { return nil, nil }

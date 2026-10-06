@@ -175,7 +175,10 @@ func yamlString(s string) string {
 }
 
 // Fetch is the HTTP seam — tests swap it to avoid hitting the network.
-var Fetch = func(baseURL string, auth map[string]string) ([]Skill, error) {
+// caps are the capability tokens this CLI can claim ("praxis-v1",
+// "raptor-v1"). They go to the server as `consolidated=`, and the skills they
+// replace are dropped from the result either way.
+var Fetch = func(baseURL string, auth map[string]string, caps ...string) ([]Skill, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("baseURL is required")
 	}
@@ -184,6 +187,10 @@ var Fetch = func(baseURL string, auth map[string]string) ([]Skill, error) {
 	}
 
 	url := strings.TrimRight(baseURL, "/") + bundlePath
+	caps = capabilities(caps)
+	if len(caps) > 0 {
+		url += "?consolidated=" + strings.Join(caps, ",")
+	}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -216,7 +223,7 @@ var Fetch = func(baseURL string, auth map[string]string) ([]Skill, error) {
 	if err := json.Unmarshal(body, &skills); err != nil {
 		return nil, fmt.Errorf("parse bundle: %w", err)
 	}
-	return skills, nil
+	return dropReplaced(skills, caps), nil
 }
 
 func truncate(s string, max int) string {

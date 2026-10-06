@@ -19,6 +19,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
+	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 )
 
 // Installation is one (skill, harness, file) tuple — the unit recorded in
@@ -629,4 +630,60 @@ func RefreshIfStale() ([]Installation, error) {
 		}
 		return e.Digest != d, nil
 	})
+}
+
+// InstallCatalogSkill installs one org catalog skill and records its source
+// and scope (global | organization | personal) in the receipt, so a later
+// cleanup can tell a replaced GLOBAL skill from an org skill of the same name.
+func InstallCatalogSkill(name, scope, primary string, files []FileBody, hosts []harness.Harness) (out []Installation, err error) {
+	w := packageWrite{name: name, source: "catalog", scope: scope, write: func(dir string) error { return writeBodies(dir, primary, files) }}
+	err = withSkillLock(func() error {
+		var e error
+		out, e = applyPackages([]packageWrite{w}, nil, hosts)
+		return e
+	})
+	return
+}
+
+// RetireReplacedGlobals removes installed copies of the GLOBAL skills that the
+// praxis and raptor CLIs now ship (skillcatalog.ReplacedBy), on each host where
+// has reports the replacement in place. Only catalog installs qualify; an
+// entry recorded as organization or personal stays. An entry from an older
+// praxis has no scope, so it is treated as global; the next login reinstalls
+// an org skill of that name. Changed copies are backed up first.
+func RetireReplacedGlobals(has func(h harness.Harness, capability string) bool) (retired []Installation, err error) {
+	err = withSkillLock(func() error {
+		receipt, err := loadReceipt()
+		if err != nil {
+			return err
+		}
+		var where []harness.Harness
+		seenHost := map[string]bool{}
+		for _, e := range receipt.Skills {
+			c := skillcatalog.ReplacedBy(e.SkillName)
+			if c == "" || !strings.HasPrefix(e.SkillName, skillcatalog.PraxisPrefix) ||
+				(e.Scope != "" && e.Scope != "global") ||
+				(e.Source != "" && e.Source != "cli" && e.Source != "catalog") {
+				continue
+			}
+			h := harness.Harness{Name: e.Harness, SkillDir: filepath.Dir(filepath.Dir(e.Path))}
+			if !has(h, c) {
+				continue
+			}
+			retired = append(retired, e)
+			if key := h.Name + "\x00" + h.SkillDir; !seenHost[key] {
+				seenHost[key] = true
+				where = append(where, h)
+			}
+		}
+		if len(retired) == 0 {
+			return nil
+		}
+		if _, err := applyPackages(nil, retired, where); err != nil {
+			retired = nil
+			return err
+		}
+		return nil
+	})
+	return
 }

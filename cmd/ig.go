@@ -20,6 +20,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/igcatalog"
+	"github.com/Facets-cloud/praxis-cli/internal/ighook"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
 )
@@ -702,17 +703,19 @@ func gzipBytes(data []byte) []byte {
 // --- claims ------------------------------------------------------------
 
 var igClaimsCmd = &cobra.Command{
-	Use:   "claims --git <canonical-url>",
+	Use:   "claims --git <url>",
 	Short: "Print the catalogs claiming a repo, one name per line (for CI loops)",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		if igClaimsGit == "" {
-			usageExit(out, "--git is required", "praxis ig claims --git https://github.com/org/repo.git")
+			usageExit(out, "--git is required", "praxis ig claims --git github.com/org/repo")
 		}
 		active := activeOrAuthExit(out)
 
-		names, err := igcatalog.Claims(active.Profile.URL, active.Profile.Auth(), igClaimsGit)
+		// The server matches the canonical form exactly (host/owner/repo,
+		// lowercase, no scheme, no .git); accept any spelling of the URL.
+		names, err := igcatalog.Claims(active.Profile.URL, active.Profile.Auth(), ighook.CanonicalGitURL(igClaimsGit))
 		if err != nil {
 			return reportHTTPErr(out, active.Name, err)
 		}
