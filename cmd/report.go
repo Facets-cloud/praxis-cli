@@ -13,6 +13,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // reportMaxBody caps what `praxis report` reads from stdin.
@@ -159,10 +160,26 @@ func recordHistory(args []string, command string, started time.Time, failed bool
 		Version:    strings.TrimPrefix(version, "v"),
 		Session:    httpclient.Session(),
 		Command:    command,
-		Flags:      clifeed.FlagNames(args),
+		Flags:      parsedFlagNames(args),
 		Exit:       exit,
 		DurationMS: time.Since(started).Milliseconds(),
 	})
+}
+
+// parsedFlagNames lists the flags that cobra parsed for the command that args
+// ran, as "--name". It reads the parsed flag set, not the raw arguments, so a
+// value can never pass for a flag name: not a separate value that starts with
+// "-", not a value attached to a short flag ("-pprod"), and nothing after "--".
+func parsedFlagNames(args []string) []string {
+	c, _, err := rootCmd.Find(args)
+	if err != nil || c == nil {
+		return nil
+	}
+	var out []string
+	c.Flags().Visit(func(f *pflag.Flag) {
+		out = append(out, "--"+f.Name)
+	})
+	return out
 }
 
 // flushSkipped lists commands after which queued reports are not sent:

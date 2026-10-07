@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -37,21 +36,6 @@ func historyPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, historyFile), nil
-}
-
-// FlagNames returns the flag names in args, without values: "--output=json"
-// gives "--output", and the value after "-p" is dropped because it does not
-// start with "-".
-func FlagNames(args []string) []string {
-	var out []string
-	for _, a := range args {
-		if !strings.HasPrefix(a, "-") || a == "-" || a == "--" {
-			continue
-		}
-		name, _, _ := strings.Cut(a, "=")
-		out = append(out, name)
-	}
-	return out
 }
 
 // AppendHistory adds one entry to the shared history file and keeps the file

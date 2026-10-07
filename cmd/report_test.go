@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/spf13/pflag"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -128,7 +129,23 @@ func TestRecordHistoryKeepsFlagNamesOnly(t *testing.T) {
 	for _, v := range httpclient.CIEnvVars() {
 		t.Setenv(v, "")
 	}
-	recordHistory([]string{"mcp", "cloud_cli", "list", "--json", "--profile=s3cr3t-value", "-p", "other-s3cr3t"}, "mcp", time.Now(), true)
+	// Parse the flags the way Execute does: "-p" gets the value "-s3cr3t" (a value
+	// that starts with "-"), and "--json" is a real flag. Neither value may be kept.
+	args := []string{"status", "--json", "-p", "-s3cr3t", "--", "-other-s3cr3t"}
+	c, rest, err := rootCmd.Find(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ParseFlags(rest); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		c.Flags().VisitAll(func(f *pflag.Flag) {
+			_ = f.Value.Set(f.DefValue)
+			f.Changed = false
+		})
+	})
+	recordHistory(args, "status", time.Now(), true)
 	recordHistory([]string{"--version"}, "", time.Now(), false)
 	recordHistory([]string{"version"}, "version", time.Now(), false)
 	recordHistory([]string{"hook", "x"}, "hook", time.Now(), false)
@@ -137,12 +154,12 @@ func TestRecordHistoryKeepsFlagNamesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "s3cr3t") || strings.Contains(string(raw), "cloud_cli") {
-		t.Fatalf("history holds an argument or a value: %s", raw)
+	if strings.Contains(string(raw), "s3cr3t") {
+		t.Fatalf("history holds a value: %s", raw)
 	}
 	got := clifeed.ReadHistory(10)
-	if len(got) != 1 || got[0].Command != "mcp" || got[0].Exit != 1 || got[0].CLI != "praxis" ||
-		strings.Join(got[0].Flags, " ") != "--json --profile -p" {
+	if len(got) != 1 || got[0].Command != "status" || got[0].Exit != 1 || got[0].CLI != "praxis" ||
+		strings.Join(got[0].Flags, " ") != "--json --profile" {
 		t.Fatalf("history = %+v", got)
 	}
 }

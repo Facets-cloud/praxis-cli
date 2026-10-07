@@ -90,8 +90,8 @@ first line is the title. Then say what you tried and what happened: quote the
 command and the error, never the values you passed. Last, say how you recovered;
 that is the most useful line. Do not report a mistake that the error's own hint
 fixed. Do not ask first, and do not retry a failed send: praxis keeps it and
-sends it later. Reports are off in CI. Tell the user that you filed one, and show
-its first line.
+sends it later. Reports are off in CI. Tell the user what the command said (filed,
+or kept for later), and show the first line.
 
 ## Working contract
 

@@ -9,20 +9,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
-
-func TestFlagNamesKeepNamesOnly(t *testing.T) {
-	got := FlagNames([]string{"mcp", "cloud_cli", "--json", "--profile=prod", "-p", "secret-value", "-", "--", "--token=abc123"})
-	want := []string{"--json", "--profile", "-p", "--token"}
-	if strings.Join(got, " ") != strings.Join(want, " ") {
-		t.Fatalf("FlagNames = %v, want %v", got, want)
-	}
-}
 
 func TestHistoryAppendReadAndTrim(t *testing.T) {
 	home := isolate(t)
@@ -166,18 +159,20 @@ func TestQueueAndFlush(t *testing.T) {
 		t.Fatal("HasQueuedReports = false")
 	}
 
-	// A transient failure keeps every report.
+	// A transient failure keeps every report, and moves the one it tried to the
+	// back of the queue.
 	reportServer(t, http.StatusBadGateway, `{"error":"upstream"}`, nil)
 	FlushReports(context.Background(), 3)
 	if n := countFiles(t, dir); n != 2 {
 		t.Fatalf("after 502: %d files, want 2", n)
 	}
 
-	// Filed reports are removed, oldest first, up to the limit.
+	// Filed reports are removed, oldest first, up to the limit. "queued 0" went to
+	// the back after the 502, so "queued 1" goes first.
 	var got []ReportRequest
 	reportServer(t, http.StatusCreated, `{"status":"filed","id":"r"}`, &got)
 	FlushReports(context.Background(), 1)
-	if n := countFiles(t, dir); n != 1 || len(got) != 1 || got[0].Body != "queued 0" {
+	if n := countFiles(t, dir); n != 1 || len(got) != 1 || got[0].Body != "queued 1" {
 		t.Fatalf("after one flush: %d files, sent %+v", n, got)
 	}
 
@@ -215,4 +210,52 @@ func countFiles(t *testing.T, dir string) int {
 		t.Fatal(err)
 	}
 	return len(entries)
+}
+
+// A transient failure moves the report to the back and stops; a 429 keeps it in
+// place and stops; a 503 removes it.
+func TestFlushRotatesKeepsAndDrops(t *testing.T) {
+	home := isolate(t)
+	dir := filepath.Join(home, ".facets", "reports")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	put := func(name, body string) {
+		raw, _ := json.Marshal(ReportRequest{Body: body})
+		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("100-praxis.json", "transient")
+	put("101-raptor.json", "disabled")
+	put("102-praxis.json", "limited")
+	status := map[string]int{"transient": http.StatusBadGateway, "disabled": http.StatusServiceUnavailable, "limited": http.StatusTooManyRequests}
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ReportRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		seen = append(seen, req.Body)
+		w.WriteHeader(status[req.Body])
+	}))
+	defer srv.Close()
+	t.Setenv("FACETS_CLI_FEED_URL", srv.URL+"/cli/v1/check")
+
+	FlushReports(context.Background(), 3)
+	if strings.Join(seen, ",") != "transient" {
+		t.Fatalf("first flush sent %v, want only the transient one", seen)
+	}
+	FlushReports(context.Background(), 3)
+	if strings.Join(seen, ",") != "transient,disabled,limited" {
+		t.Fatalf("second flush sent %v", seen)
+	}
+	entries, _ := os.ReadDir(dir)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	// The 503 report is gone; the 429 report and the rotated transient one stay.
+	if len(names) != 2 || names[0] != "102-praxis.json" || !strings.HasSuffix(names[1], "-praxis.json") || names[1] == "100-praxis.json" {
+		t.Fatalf("queue = %v", names)
+	}
 }

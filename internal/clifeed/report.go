@@ -167,14 +167,46 @@ func QueueReport(req ReportRequest, cli string) error {
 	if err != nil {
 		return err
 	}
-	name := fmt.Sprintf("%d-%s.json", time.Now().UnixNano(), cli)
-	return os.WriteFile(filepath.Join(dir, name), raw, 0o600)
+	return writeQueued(dir, fmt.Sprintf("%d-%s.json", time.Now().UnixNano(), cli), raw)
 }
 
-// FlushReports sends up to max queued reports, oldest first. A filed or
-// refused report is removed; a transient failure keeps it and stops the
-// flush, because the next one would fail the same way. It is silent and
-// best-effort.
+// writeQueued writes a queue file through a temporary name and a rename, so a
+// flush in another process never reads a half-written report.
+func writeQueued(dir, name string, raw []byte) error {
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), filepath.Join(dir, name))
+}
+
+// requeueAtBack gives a report that failed again a new, current name, so the
+// oldest-first order tries the others first next time. The CLI suffix stays.
+func requeueAtBack(dir, name string, raw []byte) {
+	_, suffix, _ := strings.Cut(name, "-")
+	if writeQueued(dir, fmt.Sprintf("%d-%s", time.Now().UnixNano(), suffix), raw) == nil {
+		_ = os.Remove(filepath.Join(dir, name))
+	}
+}
+
+// FlushReports sends up to max queued reports, oldest first. A filed report,
+// one refused for good (a 4xx other than 429) and one refused because reports
+// are off (503) are removed. A transient failure moves the report to the back
+// of the queue, so it cannot block the others, and stops the flush, because
+// the next one would likely fail the same way. A 429 keeps the report and
+// stops. It is silent and best-effort.
 func FlushReports(ctx context.Context, max int) {
 	dir, err := queueDir()
 	if err != nil {
@@ -206,7 +238,11 @@ func FlushReports(ctx context.Context, max int) {
 		}
 		_, err = sendRaw(ctx, raw)
 		var re *ReportError
-		if errors.As(err, &re) && re.Transient() {
+		switch {
+		case errors.As(err, &re) && re.Transient():
+			requeueAtBack(dir, name, raw)
+			return
+		case errors.As(err, &re) && re.Status == http.StatusTooManyRequests:
 			return
 		}
 		_ = os.Remove(path)
