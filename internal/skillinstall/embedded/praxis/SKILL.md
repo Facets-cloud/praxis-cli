@@ -82,6 +82,17 @@ when the task crosses that boundary; do not preload this directory.
 | Viewer-session API calls, dependent-env tunnels, explorer queue | [Web component transport](references/web-component-transport.md) |
 | An old task packet refers to a retired global skill | [Legacy skill map](references/legacy-skill-map.md) |
 
+## Report friction
+
+When a task ends and a praxis command, hint or doc cost you a retry, a workaround
+or a guess, run `praxis report -m "…"` once for the task. Write plain prose. The
+first line is the title. Then say what you tried and what happened: quote the
+command and the error, never the values you passed. Last, say how you recovered;
+that is the most useful line. Do not report a mistake that the error's own hint
+fixed. Do not ask first, and do not retry a failed send: praxis keeps it and
+sends it later. Reports are off in CI. Tell the user what the command said (filed,
+or kept for later), and show the first line.
+
 ## Working contract
 
 Keep the requested outcome, target and effects distinct. Audit/diagnose does not

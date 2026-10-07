@@ -20,6 +20,24 @@ var (
 // session is one id per process unless an agent host or CI run names one.
 var session = sessionID(os.Getenv)
 
+// Session is the session id this process sends in X-Facets-Client. The
+// friction report history uses it to group the commands of one session.
+func Session() string { return session }
+
+// CIName is the CI system that runs this process ("other" for an unknown one
+// that sets CI), and empty outside CI.
+func CIName() string { return ciName(os.Getenv) }
+
+// CIEnvVars lists every environment variable that marks a CI run, so a test
+// can clear them all.
+func CIEnvVars() []string {
+	out := make([]string, 0, len(ciMarkers)+1)
+	for _, m := range ciMarkers {
+		out = append(out, m.env)
+	}
+	return append(out, "CI")
+}
+
 // identityTransport adds the identity headers, so no call site can forget them.
 type identityTransport struct{}
 

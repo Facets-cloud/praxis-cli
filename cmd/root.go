@@ -139,6 +139,7 @@ func refuseSelection(out io.Writer, asJSON bool, what, hintFmt, name, how, acts 
 
 // Execute runs the root command. Called from main.
 func Execute() {
+	started := time.Now()
 	httpclient.Version, httpclient.Command = version, commandPath(os.Args[1:])
 	// First-run: land the pre-login GTM skill into the AI host so a freshly
 	// installed praxis is discoverable before any login. Marker-gated (one
@@ -212,6 +213,10 @@ func Execute() {
 	}
 
 	err := rootCmd.Execute()
+	// History and the report flush run before any os.Exit, so a failed command
+	// is recorded too. Both are best-effort and silent.
+	recordHistory(os.Args[1:], httpclient.Command, started, err != nil)
+	flushQueuedReports(os.Args[1:], httpclient.Command)
 	// Run the notification before any os.Exit so an error path still nags
 	// (the deferred-then-Exit ordering is handled explicitly here).
 	if notify != nil {
