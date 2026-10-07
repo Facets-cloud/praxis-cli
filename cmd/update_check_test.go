@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
 	"os"
 	"strings"
 	"testing"
@@ -32,11 +33,12 @@ func fakeHome(t *testing.T) string {
 }
 
 // writeCache seeds praxis's throttle entry with the given age and latest version.
+// writeCache seeds the praxis entry as a check by this binary would write it:
+// stamped with the current census key, so only its age decides freshness.
 func writeCache(t *testing.T, age time.Duration, latest string) {
 	t.Helper()
-	if err := saveFreshnessCache(freshnessCache{
-		"praxis": {CheckedAt: time.Now().Add(-age), LatestVersion: latest},
-	}); err != nil {
+	entry := toolCacheEntry{CheckedAt: time.Now().Add(-age), LatestVersion: latest}.keyed(censusKeyFor("praxis"))
+	if err := saveFreshnessCache(freshnessCache{"praxis": entry}); err != nil {
 		t.Fatalf("saveFreshnessCache: %v", err)
 	}
 }
@@ -603,5 +605,92 @@ func TestQuietDailyCheckClaimsTheSlotOnce(t *testing.T) {
 	// Only praxis is claimed: raptor's entry is not touched.
 	if c, _ := readFreshnessCache(); len(c) != 1 {
 		t.Errorf("cache = %+v, want only the praxis entry", c)
+	}
+}
+
+// A change of praxis version, CP or user makes the praxis entry stale at once,
+// so the census sees an upgrade the same day, and a CI step with credentials is
+// counted after a first step without. No change sends nothing.
+func TestQuietDailyCheckFollowsTheCensusKey(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+	t.Setenv("CONTROL_PLANE_URL", "")
+	t.Setenv("FACETS_USERNAME", "")
+	t.Setenv("FACETS_TOKEN", "")
+	clifeed.SetProfileFlag("")
+	origV, origF := version, fetchLatestRelease
+	t.Cleanup(func() { version, fetchLatestRelease = origV, origF })
+	version = "1.0.0"
+	calls := 0
+	fetchLatestRelease = func() (*selfupdate.Release, error) {
+		calls++
+		return &selfupdate.Release{TagName: "v1.2.0"}, nil
+	}
+	now := time.Now()
+
+	quietDailyCheck(now)
+	quietDailyCheck(now.Add(time.Minute))
+	if calls != 1 {
+		t.Fatalf("calls=%d with nothing changed, want 1", calls)
+	}
+
+	t.Setenv("CONTROL_PLANE_URL", "https://acme.console.facets.cloud")
+	t.Setenv("FACETS_USERNAME", "ci@acme.io")
+	t.Setenv("FACETS_TOKEN", "x")
+	quietDailyCheck(now.Add(2 * time.Minute))
+	quietDailyCheck(now.Add(3 * time.Minute))
+	if calls != 2 {
+		t.Fatalf("calls=%d after the CP appeared, want 2", calls)
+	}
+	if c, _ := readFreshnessCache(); c["praxis"].CPURL != "https://acme.console.facets.cloud" || c["praxis"].User != "ci@acme.io" {
+		t.Errorf("cache = %+v, want the CP and user stamped", c["praxis"])
+	}
+
+	version = "1.1.0"
+	quietDailyCheck(now.Add(4 * time.Minute))
+	if calls != 3 {
+		t.Fatalf("calls=%d after an upgrade, want 3", calls)
+	}
+}
+
+func TestProfileFlagFromArgs(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"status"}, ""},
+		{[]string{"status", "--profile", "prod"}, "prod"},
+		{[]string{"--profile=prod", "mcp"}, "prod"},
+		{[]string{"mcp", "-p", "prod"}, "prod"},
+		{[]string{"mcp", "-pprod"}, "prod"},
+		{[]string{"mcp", "--", "-p", "prod"}, ""},
+		{[]string{"mcp", "-p"}, ""},
+		{[]string{"status", "--profile", "first", "--profile", "second"}, "second"},
+		{[]string{"status", "-pfirst", "--profile=second", "--", "-p", "third"}, "second"},
+	} {
+		if got := profileFlagFromArgs(tc.args); got != tc.want {
+			t.Errorf("profileFlagFromArgs(%v) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
+// A cache from before the census key (no version stamped) is stale, so the
+// first run after an upgrade sends a check.
+func TestCacheWithoutCensusKeyIsStale(t *testing.T) {
+	fakeHome(t)
+	withVersion(t, "1.0.0")
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+	if err := saveFreshnessCache(freshnessCache{"praxis": {CheckedAt: time.Now(), LatestVersion: "v1.0.0"}}); err != nil {
+		t.Fatal(err)
+	}
+	orig := fetchLatestRelease
+	t.Cleanup(func() { fetchLatestRelease = orig })
+	fetched := false
+	fetchLatestRelease = func() (*selfupdate.Release, error) {
+		fetched = true
+		return &selfupdate.Release{TagName: "v1.1.0"}, nil
+	}
+	if got := checkForUpdate(); got != "v1.1.0" || !fetched {
+		t.Fatalf("checkForUpdate() = %q, fetched=%v; want a fetch and v1.1.0", got, fetched)
 	}
 }

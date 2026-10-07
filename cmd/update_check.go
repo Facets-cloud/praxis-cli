@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
@@ -39,7 +40,37 @@ var updateCheckRetryDelay = 2 * time.Second
 type toolCacheEntry struct {
 	CheckedAt     time.Time `json:"checked_at"`
 	LatestVersion string    `json:"latest_version"`
+	// Version, CPURL and User are what praxis's last check told the census (the
+	// raptor entry leaves them empty). When one differs now, the praxis entry is
+	// stale, so the census sees an upgrade at once, and a CI step with
+	// credentials is counted after a first step without.
+	Version string `json:"version,omitempty"`
+	CPURL   string `json:"cp_url,omitempty"`
+	User    string `json:"user,omitempty"`
 }
+
+// censusKeyFor is the census key of this invocation for a tool's entry: the
+// praxis version and its CP and user for praxis, and nothing for raptor, whose
+// census raptor sends itself.
+func censusKeyFor(tool string) toolCacheEntry {
+	if tool != "praxis" {
+		return toolCacheEntry{}
+	}
+	cpURL, user := clifeed.Identity()
+	return toolCacheEntry{Version: strings.TrimPrefix(version, "v"), CPURL: cpURL, User: user}
+}
+
+// sameKey reports whether entry e was written for census key k.
+func (e toolCacheEntry) sameKey(k toolCacheEntry) bool {
+	return e.Version == k.Version && e.CPURL == k.CPURL && e.User == k.User
+}
+
+// keyed returns e stamped with census key k.
+func (e toolCacheEntry) keyed(k toolCacheEntry) toolCacheEntry {
+	e.Version, e.CPURL, e.User = k.Version, k.CPURL, k.User
+	return e
+}
+
 type freshnessCache map[string]toolCacheEntry
 
 // toolSpec describes a tool whose freshness praxis tracks. praxis and raptor
@@ -146,9 +177,11 @@ func toolsFreshness(now time.Time, mode freshMode) []Freshness {
 // empty tag so an offline/API outage honors the 24h throttle (compareSemver
 // treats "" as not-stale) instead of re-fetching every run.
 func latestTagFor(spec toolSpec, now time.Time, mode freshMode) string {
+	key := censusKeyFor(spec.Name)
 	if mode != freshLive {
 		if c, err := readFreshnessCache(); err == nil {
-			if e, ok := c[spec.Name]; ok && (mode == freshCached || now.Sub(e.CheckedAt) < updateCheckInterval) {
+			e, ok := c[spec.Name]
+			if ok && (mode == freshCached || (now.Sub(e.CheckedAt) < updateCheckInterval && e.sameKey(key))) {
 				return e.LatestVersion
 			}
 		}
@@ -157,7 +190,7 @@ func latestTagFor(spec toolSpec, now time.Time, mode freshMode) string {
 		return "" // status default: local-only, never fetch
 	}
 	tag := fetchTagWithRetry(spec.fetchTag)
-	putCacheEntry(spec.Name, toolCacheEntry{CheckedAt: now, LatestVersion: tag})
+	putCacheEntry(spec.Name, toolCacheEntry{CheckedAt: now, LatestVersion: tag}.keyed(key))
 	return tag
 }
 
@@ -552,9 +585,10 @@ func maxInt(vals ...int) int {
 // waiting after updateCheckMaxWait, so an interrupted fetch then costs one
 // attempt a day, not one for every command an agent runs.
 func claimDailySlot(tool string, now time.Time) bool {
+	key := censusKeyFor(tool)
 	c, err := readFreshnessCache()
 	if err == nil {
-		if e, ok := c[tool]; ok && now.Sub(e.CheckedAt) < updateCheckInterval {
+		if e, ok := c[tool]; ok && now.Sub(e.CheckedAt) < updateCheckInterval && e.sameKey(key) {
 			return false
 		}
 	}
@@ -562,7 +596,7 @@ func claimDailySlot(tool string, now time.Time) bool {
 	if err == nil {
 		prev = c[tool].LatestVersion
 	}
-	putCacheEntry(tool, toolCacheEntry{CheckedAt: now, LatestVersion: prev})
+	putCacheEntry(tool, toolCacheEntry{CheckedAt: now, LatestVersion: prev}.keyed(key))
 	return true
 }
 

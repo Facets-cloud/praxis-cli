@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
@@ -141,6 +142,9 @@ func refuseSelection(out io.Writer, asJSON bool, what, hintFmt, name, how, acts 
 func Execute() {
 	started := time.Now()
 	httpclient.Version, httpclient.Command = version, commandPath(os.Args[1:])
+	// The census must name the profile this command uses, and the background
+	// check starts before cobra parses --profile.
+	clifeed.SetProfileFlag(profileFlagFromArgs(os.Args[1:]))
 	// First-run: land the pre-login GTM skill into the AI host so a freshly
 	// installed praxis is discoverable before any login. Marker-gated (one
 	// stat() after the first time) and skipped for machine-invoked commands;
@@ -235,4 +239,29 @@ func commandPath(args []string) string {
 		return ""
 	}
 	return strings.TrimPrefix(c.CommandPath(), rootCmd.Name()+" ")
+}
+
+// profileFlagFromArgs finds the --profile (-p) value in args, before "--", in
+// any form that pflag accepts: "--profile X", "--profile=X", "-p X", "-pX".
+// When the flag repeats, the last value wins, as it does in pflag. It returns
+// "" when there is none.
+func profileFlagFromArgs(args []string) string {
+	value := ""
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			return value
+		case a == "--profile" || a == "-p":
+			if i+1 < len(args) {
+				i++
+				value = args[i]
+			}
+		case strings.HasPrefix(a, "--profile="):
+			value = strings.TrimPrefix(a, "--profile=")
+		case strings.HasPrefix(a, "-p") && !strings.HasPrefix(a, "--") && len(a) > 2:
+			value = strings.TrimPrefix(strings.TrimPrefix(a, "-p"), "=")
+		}
+	}
+	return value
 }
