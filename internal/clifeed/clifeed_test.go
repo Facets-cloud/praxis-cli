@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 )
@@ -117,5 +118,33 @@ func TestInstallIDIsCreatedOnceAndShared(t *testing.T) {
 	}
 	if got := InstallID(); got != "from-raptor-0001" {
 		t.Errorf("InstallID = %q, want raptor's", got)
+	}
+}
+
+func TestCheckSendsInstallAgeAndContainer(t *testing.T) {
+	home := isolate(t)
+	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+	var got request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(feedAnswer))
+	}))
+	defer srv.Close()
+	t.Setenv("FACETS_CLI_FEED_URL", srv.URL)
+
+	if _, err := Target("praxis"); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Container || got.InstallAgeSeconds == nil || *got.InstallAgeSeconds > 60 {
+		t.Fatalf("container=%v age=%v, want a container and a fresh install ID", got.Container, got.InstallAgeSeconds)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(filepath.Join(home, installIDFile), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if age := installAgeSeconds(); age == nil || *age < 47*3600 {
+		t.Fatalf("age = %v, want about 48 hours", age)
 	}
 }
