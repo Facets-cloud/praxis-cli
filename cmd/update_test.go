@@ -213,7 +213,8 @@ func TestFeedReleaseMapsAssetsAndDigest(t *testing.T) {
 	for _, a := range rel.Assets {
 		byName[a.Name] = a
 	}
-	if len(byName) != 2 || byName["praxis_darwin_arm64"].Digest != "sha256:abc" || byName["praxis_linux_amd64"].Digest != "" {
+	// The asset without a SHA-256 is dropped.
+	if len(byName) != 1 || byName["praxis_darwin_arm64"].Digest != "sha256:abc" {
 		t.Errorf("assets = %+v", rel.Assets)
 	}
 }

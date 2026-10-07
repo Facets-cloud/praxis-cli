@@ -207,15 +207,21 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 }
 
 // latestPraxisRelease returns the release praxis must move to: from the
-// central feed, else from the GitHub API.
+// central feed, else from the GitHub API. A feed release without a verifiable
+// asset for this platform also falls back to GitHub, whose release carries
+// checksums.txt.
 func latestPraxisRelease() (*selfupdate.Release, error) {
 	if r, err := clifeed.Target("praxis"); err == nil {
-		return feedRelease(r), nil
+		rel := feedRelease(r)
+		if _, _, err := selfupdate.AssetForPlatform(rel); err == nil {
+			return rel, nil
+		}
 	}
 	return selfupdate.LatestRelease()
 }
 
 // feedRelease puts a feed release in the GitHub shape the update code reads.
+// It drops an asset without a SHA-256, so the download is always verified.
 func feedRelease(r clifeed.Release) *selfupdate.Release {
 	tag := "v" + strings.TrimPrefix(r.Target, "v")
 	rel := &selfupdate.Release{
@@ -224,14 +230,14 @@ func feedRelease(r clifeed.Release) *selfupdate.Release {
 	}
 	for platform, a := range r.Assets {
 		goos, goarch, ok := strings.Cut(platform, "/")
-		if !ok || a.URL == "" {
+		if !ok || a.URL == "" || a.SHA256 == "" {
 			continue
 		}
-		asset := selfupdate.Asset{Name: "praxis_" + goos + "_" + goarch, BrowserDownloadURL: a.URL}
-		if a.SHA256 != "" {
-			asset.Digest = "sha256:" + a.SHA256
-		}
-		rel.Assets = append(rel.Assets, asset)
+		rel.Assets = append(rel.Assets, selfupdate.Asset{
+			Name:               "praxis_" + goos + "_" + goarch,
+			BrowserDownloadURL: a.URL,
+			Digest:             "sha256:" + a.SHA256,
+		})
 	}
 	return rel
 }
