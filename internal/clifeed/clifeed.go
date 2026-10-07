@@ -60,6 +60,7 @@ type request struct {
 	InstallID string `json:"install_id,omitempty"`
 	CPURL     string `json:"cp_url,omitempty"`
 	User      string `json:"user,omitempty"`
+	Setup     *setup `json:"setup,omitempty"`
 }
 
 var (
@@ -132,10 +133,11 @@ func check() (response, error) {
 	return out, nil
 }
 
-// census is what the feed records besides the identity headers. Each part is
-// best-effort; a missing one is left out.
+// census is what the feed records besides the identity headers: the install
+// ID, the active profile, and the setup snapshot. Each part is best-effort; a
+// missing one is left out.
 func census() request {
-	req := request{InstallID: InstallID()}
+	req := request{InstallID: InstallID(), Setup: collectSetup()}
 	if a, err := credentials.ResolveActive(""); err == nil && a.Loaded {
 		req.CPURL, req.User = a.Profile.URL, a.Profile.Username
 	}
