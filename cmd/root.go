@@ -242,24 +242,26 @@ func commandPath(args []string) string {
 }
 
 // profileFlagFromArgs finds the --profile (-p) value in args, before "--", in
-// any form that pflag accepts: "--profile X", "--profile=X", "-p X", "-pX". It
-// returns "" when there is none.
+// any form that pflag accepts: "--profile X", "--profile=X", "-p X", "-pX".
+// When the flag repeats, the last value wins, as it does in pflag. It returns
+// "" when there is none.
 func profileFlagFromArgs(args []string) string {
+	value := ""
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "--":
-			return ""
+			return value
 		case a == "--profile" || a == "-p":
 			if i+1 < len(args) {
-				return args[i+1]
+				i++
+				value = args[i]
 			}
-			return ""
 		case strings.HasPrefix(a, "--profile="):
-			return strings.TrimPrefix(a, "--profile=")
+			value = strings.TrimPrefix(a, "--profile=")
 		case strings.HasPrefix(a, "-p") && !strings.HasPrefix(a, "--") && len(a) > 2:
-			return strings.TrimPrefix(strings.TrimPrefix(a, "-p"), "=")
+			value = strings.TrimPrefix(strings.TrimPrefix(a, "-p"), "=")
 		}
 	}
-	return ""
+	return value
 }

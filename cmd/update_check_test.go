@@ -665,6 +665,8 @@ func TestProfileFlagFromArgs(t *testing.T) {
 		{[]string{"mcp", "-pprod"}, "prod"},
 		{[]string{"mcp", "--", "-p", "prod"}, ""},
 		{[]string{"mcp", "-p"}, ""},
+		{[]string{"status", "--profile", "first", "--profile", "second"}, "second"},
+		{[]string{"status", "-pfirst", "--profile=second", "--", "-p", "third"}, "second"},
 	} {
 		if got := profileFlagFromArgs(tc.args); got != tc.want {
 			t.Errorf("profileFlagFromArgs(%v) = %q, want %q", tc.args, got, tc.want)
