@@ -61,6 +61,46 @@ type request struct {
 	CPURL     string `json:"cp_url,omitempty"`
 	User      string `json:"user,omitempty"`
 	Setup     *setup `json:"setup,omitempty"`
+	// Container and InstallAgeSeconds let the census tell a fresh CI container
+	// (one job, a new install ID) from a real install, also when the CI system
+	// sets no CI variable.
+	Container         bool   `json:"container,omitempty"`
+	InstallAgeSeconds *int64 `json:"install_age_s,omitempty"`
+}
+
+// containerMarkers are files that a container runtime creates.
+var containerMarkers = []string{"/.dockerenv", "/run/.containerenv"}
+
+// inContainer reports whether praxis runs in a container: a Docker or Podman
+// marker file, or a Kubernetes pod.
+func inContainer() bool {
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		return true
+	}
+	for _, m := range containerMarkers {
+		if _, err := os.Stat(m); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// installAgeSeconds is the age of the install-ID file, which is written once:
+// a few seconds on a machine that was created for this run. Nil when unknown.
+func installAgeSeconds() *int64 {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	info, err := os.Stat(filepath.Join(home, installIDFile))
+	if err != nil {
+		return nil
+	}
+	age := int64(time.Since(info.ModTime()).Seconds())
+	if age < 0 {
+		age = 0
+	}
+	return &age
 }
 
 var (
@@ -137,7 +177,8 @@ func check() (response, error) {
 // ID, the active profile, and the setup snapshot. Each part is best-effort; a
 // missing one is left out.
 func census() request {
-	req := request{InstallID: InstallID(), Setup: collectSetup()}
+	req := request{InstallID: InstallID(), Setup: collectSetup(), Container: inContainer()}
+	req.InstallAgeSeconds = installAgeSeconds()
 	req.CPURL, req.User = Identity()
 	return req
 }
