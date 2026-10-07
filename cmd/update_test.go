@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
 	"github.com/Facets-cloud/praxis-cli/internal/selfupdate"
 )
 
@@ -194,5 +195,61 @@ func TestUpdateCmd_ResolvesTheLinkForANonBrewInstall(t *testing.T) {
 	}
 	if replacedTarget != want {
 		t.Fatalf("replaced %q, want the real file %q (never the link)", replacedTarget, want)
+	}
+}
+
+// A feed release names the platform as "<os>/<arch>" and carries a SHA-256
+// for each asset; the update path reads it in the GitHub shape.
+func TestFeedReleaseMapsAssetsAndDigest(t *testing.T) {
+	rel := feedRelease(clifeed.Release{Target: "2.1.0", Assets: map[string]clifeed.Asset{
+		"darwin/arm64": {URL: "https://example.test/praxis_darwin_arm64", SHA256: "abc"},
+		"linux/amd64":  {URL: "https://example.test/praxis_linux_amd64"},
+		"bad":          {URL: "https://example.test/x"},
+	}})
+	if rel.TagName != "v2.1.0" || !strings.HasSuffix(rel.HTMLURL, "/releases/tag/v2.1.0") {
+		t.Fatalf("release = %+v", rel)
+	}
+	byName := map[string]selfupdate.Asset{}
+	for _, a := range rel.Assets {
+		byName[a.Name] = a
+	}
+	// The asset without a SHA-256 is dropped.
+	if len(byName) != 1 || byName["praxis_darwin_arm64"].Digest != "sha256:abc" {
+		t.Errorf("assets = %+v", rel.Assets)
+	}
+}
+
+// With no checksums.txt, the update verifies the download against the asset's
+// digest.
+func TestUpdateCmd_VerifiesTheAssetDigest(t *testing.T) {
+	rel := &selfupdate.Release{TagName: "v999.0.0", Assets: []selfupdate.Asset{
+		{Name: "praxis_" + runtime.GOOS + "_" + runtime.GOARCH, BrowserDownloadURL: "https://example.test/bin", Digest: "sha256:feed01"},
+	}}
+	withFakeRelease(t, rel, nil)
+	self := filepath.Join(t.TempDir(), "praxis")
+	if err := os.WriteFile(self, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	withSelfPath(t, self)
+	origD, origV := downloadAsset, verifyChecksum
+	t.Cleanup(func() { downloadAsset, verifyChecksum = origD, origV })
+	tmp := filepath.Join(t.TempDir(), "dl")
+	if err := os.WriteFile(tmp, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	downloadAsset = func(string) (string, error) { return tmp, nil }
+	var expected string
+	verifyChecksum = func(_, want string) error { expected = want; return errors.New("stop here") }
+
+	updateYes = true
+	t.Cleanup(func() { updateYes = false })
+	var buf bytes.Buffer
+	updateCmd.SetOut(&buf)
+	err := updateCmd.RunE(updateCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "stop here") {
+		t.Fatalf("err = %v, want the stub's error", err)
+	}
+	if expected != "feed01" {
+		t.Errorf("verified against %q, want the digest", expected)
 	}
 }

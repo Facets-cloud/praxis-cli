@@ -16,7 +16,8 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
-// updateCheckInterval throttles how often the background check hits GitHub.
+// updateCheckInterval throttles how often the background check calls the
+// central feed (or GitHub, its fallback).
 const updateCheckInterval = 24 * time.Hour
 
 // updateCheckMaxWait caps how long Execute waits for the background check before
@@ -543,4 +544,37 @@ func maxInt(vals ...int) int {
 		}
 	}
 	return m
+}
+
+// claimDailySlot marks the tool as checked now, keeping its last known tag,
+// and reports true, when its cache entry is stale. It reports false when the
+// entry is fresh. The quiet path calls it before the fetch: a quiet run stops
+// waiting after updateCheckMaxWait, so an interrupted fetch then costs one
+// attempt a day, not one for every command an agent runs.
+func claimDailySlot(tool string, now time.Time) bool {
+	c, err := readFreshnessCache()
+	if err == nil {
+		if e, ok := c[tool]; ok && now.Sub(e.CheckedAt) < updateCheckInterval {
+			return false
+		}
+	}
+	prev := ""
+	if err == nil {
+		prev = c[tool].LatestVersion
+	}
+	putCacheEntry(tool, toolCacheEntry{CheckedAt: now, LatestVersion: prev})
+	return true
+}
+
+// quietDailyCheck is the background check of a run that a person does not
+// watch: it sends praxis's daily check to the feed, at most once a day, and
+// prints nothing.
+func quietDailyCheck(now time.Time) {
+	spec := praxisSpec()
+	if _, _, checkable := spec.current(); !checkable || os.Getenv("PRAXIS_NO_UPDATE_CHECK") != "" {
+		return
+	}
+	if claimDailySlot(spec.Name, now) {
+		latestTagFor(spec, now, freshLive)
+	}
 }

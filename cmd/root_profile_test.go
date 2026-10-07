@@ -26,6 +26,11 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Unsetenv(credentials.EnvProfile)
+	// No test may send a census record to the real feed. A closed port fails at
+	// once, so the code under test falls back to its GitHub seam as before.
+	if err := os.Setenv("FACETS_CLI_FEED_URL", "http://127.0.0.1:1/cli/v1/check"); err != nil {
+		panic(err)
+	}
 	// raptor's credentials walk starts at cwd and climbs to /, which passes
 	// through the developer's real home. Start it at the (faked) HOME instead so
 	// no test reads a live ~/.facets/credentials.

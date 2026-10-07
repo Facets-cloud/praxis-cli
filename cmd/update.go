@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/selfupdate"
 	"github.com/spf13/cobra"
@@ -19,7 +20,7 @@ var (
 // Package-level seams so unit tests can stub network + filesystem deps
 // without spawning a subprocess. Tests assign and restore via defer.
 var (
-	fetchLatestRelease = selfupdate.LatestRelease
+	fetchLatestRelease = latestPraxisRelease
 	downloadAsset      = selfupdate.Download
 	fetchTextBody      = selfupdate.FetchText
 	verifyChecksum     = selfupdate.VerifyChecksum
@@ -30,6 +31,9 @@ var (
 	// Freshness-engine seams (see cmd/update_check.go). raptor is a second tool
 	// the same engine tracks; these let tests stub its release + local version.
 	fetchRaptorTag = func() (string, error) {
+		if r, err := clifeed.Target("raptor"); err == nil {
+			return "v" + strings.TrimPrefix(r.Target, "v"), nil
+		}
 		return selfupdate.LatestReleaseTagFor("Facets-cloud/raptor-releases")
 	}
 	raptorLocalVersion = execRaptorVersion // (version, installed) from `raptor --version`
@@ -44,9 +48,8 @@ func init() {
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update Praxis and Raptor to their latest releases",
-	Long: `Check GitHub Releases for a newer version of praxis. If found,
-download the asset for this OS/arch, verify its checksum against the release's
-checksums.txt, and atomically replace the running binary.
+	Long: `Check for a newer version of praxis. If found, download the asset for
+this OS/arch, verify its checksum, and atomically replace the running binary.
 
 Then run 'raptor upgrade', also when praxis is already current, and have the
 new raptor refresh its skill. A missing raptor is installed to ~/.local/bin
@@ -147,6 +150,8 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 			if err != nil {
 				return err
 			}
+		} else if d, ok := strings.CutPrefix(binAsset.Digest, "sha256:"); ok {
+			expected = d
 		}
 
 		if !asJSON {
@@ -166,7 +171,7 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 				return err
 			}
 		} else if !asJSON {
-			fmt.Fprintln(out, "(release has no checksums.txt — skipping verification)")
+			fmt.Fprintln(out, "(release has no checksum — skipping verification)")
 		}
 
 		if !asJSON {
@@ -199,4 +204,40 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 		fmt.Fprintln(out, "  The praxis skill updates on the next praxis command. For catalog changes, run `praxis refresh-skills`.")
 		return finishToolUpdate(out, asJSON, true, nil)
 	},
+}
+
+// latestPraxisRelease returns the release praxis must move to: from the
+// central feed, else from the GitHub API. A feed release without a verifiable
+// asset for this platform also falls back to GitHub, whose release carries
+// checksums.txt.
+func latestPraxisRelease() (*selfupdate.Release, error) {
+	if r, err := clifeed.Target("praxis"); err == nil {
+		rel := feedRelease(r)
+		if _, _, err := selfupdate.AssetForPlatform(rel); err == nil {
+			return rel, nil
+		}
+	}
+	return selfupdate.LatestRelease()
+}
+
+// feedRelease puts a feed release in the GitHub shape the update code reads.
+// It drops an asset without a SHA-256, so the download is always verified.
+func feedRelease(r clifeed.Release) *selfupdate.Release {
+	tag := "v" + strings.TrimPrefix(r.Target, "v")
+	rel := &selfupdate.Release{
+		TagName: tag,
+		HTMLURL: "https://github.com/Facets-cloud/praxis-cli/releases/tag/" + tag,
+	}
+	for platform, a := range r.Assets {
+		goos, goarch, ok := strings.Cut(platform, "/")
+		if !ok || a.URL == "" || a.SHA256 == "" {
+			continue
+		}
+		rel.Assets = append(rel.Assets, selfupdate.Asset{
+			Name:               "praxis_" + goos + "_" + goarch,
+			BrowserDownloadURL: a.URL,
+			Digest:             "sha256:" + a.SHA256,
+		})
+	}
+	return rel
 }
