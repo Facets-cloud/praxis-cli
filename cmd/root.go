@@ -184,7 +184,7 @@ func Execute() {
 	if !render.IsTTY(os.Stderr) && !skipUpdateCheck(os.Args[1:]) {
 		done := make(chan struct{})
 		go func() {
-			checkTool(praxisSpec(), time.Now(), freshCachedOrFetch)
+			quietDailyCheck(time.Now())
 			close(done)
 		}()
 		notify = func() {

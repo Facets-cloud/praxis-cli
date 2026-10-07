@@ -571,3 +571,37 @@ func TestRuneWidth(t *testing.T) {
 		}
 	}
 }
+
+// The quiet path takes the daily slot before it fetches, so an agent that
+// exits mid-fetch does not retry on every command. A fresh slot fetches nothing.
+func TestQuietDailyCheckClaimsTheSlotOnce(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+	origV, origF := version, fetchLatestRelease
+	t.Cleanup(func() { version, fetchLatestRelease = origV, origF })
+	version = "1.0.0"
+	calls := 0
+	var seenDuringFetch toolCacheEntry
+	fetchLatestRelease = func() (*selfupdate.Release, error) {
+		calls++
+		c, _ := readFreshnessCache()
+		seenDuringFetch = c["praxis"]
+		return &selfupdate.Release{TagName: "v1.2.0"}, nil
+	}
+	now := time.Now()
+	quietDailyCheck(now)
+	if calls != 1 || seenDuringFetch.CheckedAt.IsZero() {
+		t.Fatalf("calls=%d, slot during fetch=%+v; want one fetch after the claim", calls, seenDuringFetch)
+	}
+	if c, _ := readFreshnessCache(); c["praxis"].LatestVersion != "v1.2.0" {
+		t.Errorf("cache = %+v, want the fetched tag", c["praxis"])
+	}
+	quietDailyCheck(now.Add(time.Hour))
+	if calls != 1 {
+		t.Errorf("calls=%d after a fresh slot, want no second fetch", calls)
+	}
+	// Only praxis is claimed: raptor's entry is not touched.
+	if c, _ := readFreshnessCache(); len(c) != 1 {
+		t.Errorf("cache = %+v, want only the praxis entry", c)
+	}
+}
