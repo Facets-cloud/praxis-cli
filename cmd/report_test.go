@@ -176,3 +176,16 @@ func TestFlushIsSkippedForReportAndInCI(t *testing.T) {
 		t.Error("flush ran where it is skipped")
 	}
 }
+
+// A report over the server's limit is refused here, and is neither sent nor queued.
+func TestReportOverTheServerLimitIsRefused(t *testing.T) {
+	sent, queued := reportEnv(t, nil)
+	reportMessage = ""
+	_, err := runReportCmd(t, strings.Repeat("x", reportMaxBody+1))
+	if err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Fatalf("err = %v, want a size refusal", err)
+	}
+	if len(*sent) != 0 || len(*queued) != 0 {
+		t.Errorf("sent=%d queued=%d, want none", len(*sent), len(*queued))
+	}
+}

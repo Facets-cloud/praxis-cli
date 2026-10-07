@@ -16,7 +16,9 @@ import (
 )
 
 // reportMaxBody caps what `praxis report` reads from stdin.
-const reportMaxBody = 128 << 10
+// reportMaxBody matches the server's limit, so a report the server would refuse is
+// refused here, with the reason, and is never queued.
+const reportMaxBody = 64 << 10
 
 // reportFlushMax and reportFlushBudget bound the flush of queued reports after
 // a command.
@@ -104,7 +106,7 @@ func runReport(cmd *cobra.Command, _ []string) error {
 func reportBody(stdin io.Reader) (string, error) {
 	body := strings.TrimSpace(reportMessage)
 	if body == "" && !isTerminal(stdin) {
-		raw, err := io.ReadAll(io.LimitReader(stdin, reportMaxBody))
+		raw, err := io.ReadAll(io.LimitReader(stdin, reportMaxBody+1))
 		if err != nil {
 			return "", fmt.Errorf("read the report from stdin: %w", err)
 		}
@@ -112,6 +114,9 @@ func reportBody(stdin io.Reader) (string, error) {
 	}
 	if body == "" {
 		return "", errors.New("the report is empty: pass it with -m, or on stdin")
+	}
+	if len(body) > reportMaxBody {
+		return "", fmt.Errorf("the report is more than %d bytes; shorten it, nothing was sent", reportMaxBody)
 	}
 	return body, nil
 }
