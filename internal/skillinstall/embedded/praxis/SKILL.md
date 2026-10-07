@@ -81,7 +81,17 @@ when the task crosses that boundary; do not preload this directory.
 | Theme, shadow root, five UI states, bundling | [Web component design](references/web-component-design.md) |
 | Viewer-session API calls, dependent-env tunnels, explorer queue | [Web component transport](references/web-component-transport.md) |
 | An old task packet refers to a retired global skill | [Legacy skill map](references/legacy-skill-map.md) |
-| A retry, a workaround, a wrong hint or a missing doc cost you time | [Friction reports](references/reporting.md) |
+
+## Report friction
+
+When a task ends and a praxis command, hint or doc cost you a retry, a workaround
+or a guess, run `praxis report -m "…"` once for the task. Write plain prose. The
+first line is the title. Then say what you tried and what happened: quote the
+command and the error, never the values you passed. Last, say how you recovered;
+that is the most useful line. Do not report a mistake that the error's own hint
+fixed. Do not ask first, and do not retry a failed send: praxis keeps it and
+sends it later. Reports are off in CI. Tell the user that you filed one, and show
+its first line.
 
 ## Working contract
 
@@ -90,9 +100,6 @@ authorize a repair, account connection, publication, message, schedule or releas
 Do not switch shared defaults, upgrade tools or refresh installed skills merely
 to get past a read failure. When an operation is asynchronous, retain its returned
 identity and verify that operation; a timeout is not proof it stopped.
-
-When friction cost you a retry or a workaround, file it with `praxis report`
-at the end of the task and tell the user what you filed.
 
 Report what was inspected/changed, the target, evidence and uncertainty. Failed
 access is not absence; truncated pages are not complete inventories; an accepted
