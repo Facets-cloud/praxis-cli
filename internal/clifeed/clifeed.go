@@ -138,10 +138,26 @@ func check() (response, error) {
 // missing one is left out.
 func census() request {
 	req := request{InstallID: InstallID(), Setup: collectSetup()}
-	if a, err := credentials.ResolveActive(""); err == nil && a.Loaded {
-		req.CPURL, req.User = a.Profile.URL, a.Profile.Username
-	}
+	req.CPURL, req.User = Identity()
 	return req
+}
+
+// profileFlag is the --profile value of this invocation, set before any check
+// runs, so the census names the profile that the command itself uses.
+var profileFlag string
+
+// SetProfileFlag records the --profile value of this invocation.
+func SetProfileFlag(name string) { profileFlag = name }
+
+// Identity is the CP URL and user that this invocation uses: the --profile
+// flag, else the praxis environment variables, else the active profile. Both
+// are empty when there is none.
+func Identity() (cpURL, user string) {
+	a, err := credentials.ResolveActive(profileFlag)
+	if err != nil || !a.Loaded {
+		return "", ""
+	}
+	return a.Profile.URL, a.Profile.Username
 }
 
 // InstallID returns this machine's install ID, and creates it on first use.
