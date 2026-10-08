@@ -14,6 +14,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/raptorinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 )
@@ -141,7 +142,7 @@ func runInstallRaptorSkills(raptor string, hosts []harness.Harness) ([]skillInst
 	if raptor == "" {
 		return nil, errors.New("raptor CLI is missing, so its skill was not installed")
 	}
-	base, err := os.UserHomeDir()
+	base, err := paths.Home()
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +237,7 @@ func raptorSkillAt(h harness.Harness) bool {
 	if !ok {
 		return false
 	}
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return false
 	}

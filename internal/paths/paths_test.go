@@ -29,7 +29,7 @@ func TestDir_BuildsUnderHome(t *testing.T) {
 }
 
 func TestDir_NoHome(t *testing.T) {
-	// Both HOME (Unix) and USERPROFILE (Windows) cleared so os.UserHomeDir()
+	// Both HOME (Unix) and USERPROFILE (Windows) cleared so Home()
 	// errors. We don't assert on the exact error message — just that one is
 	// returned and Dir doesn't paper over it.
 	t.Setenv("HOME", "")

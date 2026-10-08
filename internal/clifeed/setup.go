@@ -68,7 +68,7 @@ func raptorSkillError() string {
 // sends a new check with a fresh snapshot. A check that a skill command sends
 // at its start would otherwise hold the skills from before that command.
 func SkillsKey() string {
-	home, _ := os.UserHomeDir()
+	home, _ := paths.Home()
 	skills, legacy, catalog := skillState(home)
 	versions := make([]string, 0, len(skills))
 	for _, k := range skills {
@@ -104,7 +104,7 @@ var (
 
 // collectSetup builds the snapshot. Every part is best-effort.
 func collectSetup() *setup {
-	home, _ := os.UserHomeDir()
+	home, _ := paths.Home()
 	s := &setup{}
 	self := resolvedSelf()
 	if self != "" {
@@ -230,7 +230,7 @@ func tilde(path, home string) string {
 		return "~"
 	}
 	if rest, ok := strings.CutPrefix(path, home+string(filepath.Separator)); ok {
-		return "~/" + rest
+		return "~/" + filepath.ToSlash(rest)
 	}
 	return path
 }

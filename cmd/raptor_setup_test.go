@@ -46,6 +46,9 @@ func fakeRaptor(t *testing.T, home, version string, upgradeExit int) (marker str
 }
 
 func TestUpdateAlsoUpgradesRaptor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a fake raptor shell script and a release without Windows assets")
+	}
 	tests := []struct {
 		name        string
 		tag         string
@@ -115,6 +118,9 @@ func TestUpdateAlsoUpgradesRaptor(t *testing.T) {
 }
 
 func TestRunRaptorUpgrade(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a fake raptor shell script and a release without Windows assets")
+	}
 	t.Run("interactive streams raptor and passes no --yes", func(t *testing.T) {
 		useRealRaptorSetup(t)
 		home := t.TempDir()
@@ -161,6 +167,9 @@ func (f raptorReleaseTransport) RoundTrip(r *http.Request) (*http.Response, erro
 // Login installs a missing raptor from the public release, verified by digest,
 // and never sends the control-plane token to GitHub.
 func TestLoginInstallsMissingRaptor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a fake raptor shell script and a release without Windows assets")
+	}
 	useRealRaptorSetup(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -288,6 +297,9 @@ func calls(t *testing.T, log string) []string {
 }
 
 func TestInstallRaptorSkills(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a fake raptor shell script and a release without Windows assets")
+	}
 	user := func(home string) []harness.Harness {
 		return []harness.Harness{
 			{Name: "claude-code", SkillDir: filepath.Join(home, ".claude", "skills")},
@@ -363,6 +375,9 @@ func TestInstallRaptorSkills(t *testing.T) {
 // it; a failure is a warning and the rest of login still runs. A
 // project-scoped login still installs the raptor skill at user level.
 func TestLoginInstallsRaptorSkill(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a fake raptor shell script and a release without Windows assets")
+	}
 	for _, tc := range []struct {
 		fail    string
 		project bool
@@ -421,6 +436,9 @@ func TestLoginInstallsRaptorSkill(t *testing.T) {
 
 // Explicit setup installs the raptor skill; the silent first run never runs raptor.
 func TestSetupInstallsRaptorSkill(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a fake raptor shell script and a release without Windows assets")
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	setRootProfile(t, "")

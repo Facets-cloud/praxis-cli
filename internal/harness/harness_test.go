@@ -3,6 +3,7 @@ package harness
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -209,9 +210,9 @@ func TestProjectScoped(t *testing.T) {
 		{
 			// Paths not under the user's home are left unchanged.
 			name:      "non-home dirs left unchanged",
-			harness:   Harness{Name: "x", SkillDir: "/etc/skills", AgentDir: "/etc/agents"},
-			wantSkill: "/etc/skills",
-			wantAgent: "/etc/agents",
+			harness:   Harness{Name: "x", SkillDir: outsideHome("etc/skills"), AgentDir: outsideHome("etc/agents")},
+			wantSkill: outsideHome("etc/skills"),
+			wantAgent: outsideHome("etc/agents"),
 		},
 	}
 	for _, tt := range tests {
@@ -308,4 +309,13 @@ func TestAllHarnessesHaveAgentDir(t *testing.T) {
 			t.Errorf("harness %q AgentDir = %q, want %q", h.Name, h.AgentDir, got)
 		}
 	}
+}
+
+// outsideHome is an absolute path outside any home folder: /<rel>, or C:\<rel>
+// on Windows, where /<rel> is not absolute.
+func outsideHome(rel string) string {
+	if runtime.GOOS == "windows" {
+		return `C:\` + filepath.FromSlash(rel)
+	}
+	return "/" + rel
 }

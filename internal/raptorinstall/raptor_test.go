@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -72,6 +73,9 @@ func TestEnsureDownloadValidation(t *testing.T) {
 }
 
 func TestEnsurePreservesExistingFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses an extension-less raptor file and Unix executable bits")
+	}
 	for _, tc := range []struct {
 		name      string
 		mode      os.FileMode
@@ -161,6 +165,9 @@ func TestEnsureDoesNotClobberConcurrentInstall(t *testing.T) {
 }
 
 func TestEnsureRejectsRelativePATHExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses an extension-less raptor file, which LookPath does not find on Windows")
+	}
 	t.Setenv("HOME", t.TempDir())
 	base := t.TempDir()
 	t.Chdir(base)

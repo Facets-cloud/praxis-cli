@@ -2,13 +2,16 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -151,8 +154,9 @@ func TestInstallBootstrapSkillsInstallsPraxisAndRetiresReplaced(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(old, "SKILL.md"), []byte("old"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	receipt := `{"skills":[{"skill_name":"praxis-getting-started","harness":"claude-code","path":"` +
-		filepath.Join(old, "SKILL.md") + `","installed_at":"2026-09-01T00:00:00Z"}]}`
+	oldPath, _ := json.Marshal(filepath.Join(old, "SKILL.md")) // a Windows path holds backslashes
+	receipt := `{"skills":[{"skill_name":"praxis-getting-started","harness":"claude-code","path":` +
+		string(oldPath) + `,"installed_at":"2026-09-01T00:00:00Z"}]}`
 	mustMkdir(t, filepath.Join(home, ".praxis"))
 	if err := os.WriteFile(filepath.Join(home, ".praxis", "installed.json"), []byte(receipt), 0600); err != nil {
 		t.Fatal(err)
@@ -174,6 +178,9 @@ func TestInstallBootstrapSkillsInstallsPraxisAndRetiresReplaced(t *testing.T) {
 // repairPraxisHooks heals a hook wired from a version-stamped path, and must
 // leave a machine that never logged in without any hooks at all.
 func TestRepairPraxisHooksHealsStalePathAndAddsNone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a bin/praxis symlink without .exe, which LookPath does not find on Windows")
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	binDir := filepath.Join(home, "bin")
@@ -220,6 +227,9 @@ func TestRepairPraxisHooksHealsStalePathAndAddsNone(t *testing.T) {
 
 // An unparseable settings.json must surface, not vanish.
 func TestRepairPraxisHooksReportsUnparseableSettings(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a bin/praxis symlink without .exe, which LookPath does not find on Windows")
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	binDir := filepath.Join(home, "bin")
@@ -392,7 +402,7 @@ func TestStartBackgroundSetup(t *testing.T) {
 	orig := setupExecutable
 	t.Cleanup(func() { setupExecutable = orig })
 
-	setupExecutable = func() (string, error) { return "/usr/bin/true", nil }
+	setupExecutable = func() (string, error) { return trueBinary(t), nil }
 	if err := startBackgroundSetup(dir); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -401,7 +411,8 @@ func TestStartBackgroundSetup(t *testing.T) {
 	}
 
 	setupExecutable = func() (string, error) { return filepath.Join(dir, "missing"), nil }
-	if err := startBackgroundSetup(dir); !errors.Is(err, os.ErrNotExist) {
+	// Windows reports a missing program as exec.ErrNotFound.
+	if err := startBackgroundSetup(dir); !errors.Is(err, os.ErrNotExist) && !errors.Is(err, exec.ErrNotFound) {
 		t.Errorf("missing binary: err = %v, want ErrNotExist", err)
 	}
 }
@@ -430,4 +441,16 @@ func TestSetupRecordsVersion(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".praxis", setupClaimFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("claim after a successful setup: %v, want removed", err)
 	}
+}
+
+// trueBinary is a program that starts and exits at once on this platform.
+func trueBinary(t *testing.T) string {
+	if runtime.GOOS == "windows" {
+		p, err := exec.LookPath("whoami.exe")
+		if err != nil {
+			t.Skip("whoami.exe not found")
+		}
+		return p
+	}
+	return "/usr/bin/true"
 }

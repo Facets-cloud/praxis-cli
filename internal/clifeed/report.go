@@ -16,6 +16,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
 // reportHistoryRows is how many history entries a report attaches.
@@ -146,7 +147,7 @@ func sendRaw(ctx context.Context, raw []byte) (ReportResult, error) {
 }
 
 func queueDir() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return "", err
 	}

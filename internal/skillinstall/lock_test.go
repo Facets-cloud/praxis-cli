@@ -43,3 +43,13 @@ func TestLockFileIsExclusive(t *testing.T) {
 		t.Fatal("the second lock did not get the lock after the release")
 	}
 }
+
+// A digest counts executable bits only where files have them.
+func TestExecBitsOn(t *testing.T) {
+	if got := execBitsOn("linux", 0o755); got != 0o111 {
+		t.Errorf("linux: %o, want 111", got)
+	}
+	if got := execBitsOn("windows", 0o755); got != 0 {
+		t.Errorf("windows: %o, want 0", got)
+	}
+}

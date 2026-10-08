@@ -165,7 +165,7 @@ func repairPraxisHooks() (repaired []string, warning string) {
 	if !ok {
 		return nil, ""
 	}
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return nil, ""
 	}

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
 // historyFile is the command history that a friction report attaches. raptor
@@ -31,7 +33,7 @@ type HistoryEntry struct {
 }
 
 func historyPath() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return "", err
 	}

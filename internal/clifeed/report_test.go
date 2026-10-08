@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,7 +30,7 @@ func TestHistoryAppendReadAndTrim(t *testing.T) {
 		t.Fatalf("ReadHistory = %+v", got)
 	}
 	path := filepath.Join(home, historyFile)
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(path); err != nil || (info.Mode().Perm() != 0o600 && runtime.GOOS != "windows") { // no Unix modes on Windows
 		t.Fatalf("history file: %v, %v", info, err)
 	}
 
@@ -152,7 +153,7 @@ func TestQueueAndFlush(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	dir := filepath.Join(home, reportQueueDir)
-	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
+	if info, err := os.Stat(dir); err != nil || (info.Mode().Perm() != 0o700 && runtime.GOOS != "windows") { // no Unix modes on Windows
 		t.Fatalf("queue dir: %v, %v", info, err)
 	}
 	if !HasQueuedReports() {

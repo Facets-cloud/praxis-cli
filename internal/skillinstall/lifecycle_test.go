@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -516,6 +517,9 @@ func TestLifecycle_Retire(t *testing.T) {
 
 // Scripts become executable; other files keep at most their source exec bit.
 func TestLifecycle_FileModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("checks Unix file modes")
+	}
 	t.Setenv("HOME", t.TempDir())
 	hosts := fakeHosts(t)[:1]
 	tree := fstest.MapFS{

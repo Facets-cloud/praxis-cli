@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
 type Result struct {
@@ -37,7 +39,7 @@ func ensure(client *http.Client, endpoint, goos, goarch string) (Result, error) 
 	if (goos != "darwin" && goos != "linux" && goos != "windows") || (goarch != "amd64" && goarch != "arm64") {
 		return Result{}, fmt.Errorf("raptor has no supported binary for %s/%s", goos, goarch)
 	}
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return Result{}, err
 	}
@@ -143,7 +145,7 @@ func Find() (string, error) {
 	} else if errors.Is(err, exec.ErrDot) {
 		return "", err
 	}
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return "", err
 	}

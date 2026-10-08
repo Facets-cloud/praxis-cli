@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -117,6 +118,18 @@ func noSymlinkPath(p string) error {
 	return nil
 }
 
+// execBits is the part of a file mode that a tree digest includes. Windows has
+// no executable bits (a file reports 0666), so there it is always 0; otherwise
+// an installed tree could never match the embedded one.
+func execBits(m fs.FileMode) fs.FileMode { return execBitsOn(runtime.GOOS, m) }
+
+func execBitsOn(goos string, m fs.FileMode) fs.FileMode {
+	if goos == "windows" {
+		return 0
+	}
+	return m.Perm() & 0111
+}
+
 // digestTree includes relative paths, file bytes and executable bits. Refuse
 // symlinks and special files instead of hashing their external targets.
 func digestTree(dir string) (string, error) {
@@ -156,7 +169,7 @@ func hashTree(dir string, links bool) (string, error) {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(h, "file:%s:%o:%d\x00", filepath.ToSlash(rel), info.Mode().Perm()&0111, len(b))
+		fmt.Fprintf(h, "file:%s:%o:%d\x00", filepath.ToSlash(rel), execBits(info.Mode()), len(b))
 		_, _ = h.Write(b)
 		return nil
 	})
@@ -480,6 +493,10 @@ func applyPackages(writes []packageWrite, retire []Installation, hosts []harness
 			if err != nil {
 				return nil, err
 			}
+			// On Windows, SameFile reads the file ID through the path that Lstat
+			// saw, on first use. Load it now: the rename below moves that path,
+			// and the rollback check would then never match.
+			os.SameFile(c.activeInfo, c.activeInfo)
 			c.activeDigest, err = hashTree(c.stage, true)
 			if err != nil {
 				return nil, err

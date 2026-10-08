@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -61,7 +62,7 @@ func TestInstall_PraxisWritesWholeTree(t *testing.T) {
 				continue
 			}
 			if strings.HasPrefix(p, "scripts/") {
-				if fi, _ := os.Stat(dst); fi.Mode().Perm() != 0700 {
+				if fi, _ := os.Stat(dst); fi.Mode().Perm() != 0700 && runtime.GOOS != "windows" { // no Unix modes on Windows
 					t.Errorf("%s mode = %o, want 700", dst, fi.Mode().Perm())
 				}
 			}

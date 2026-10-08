@@ -24,6 +24,7 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
 // defaultURL is the feed. FACETS_CLI_FEED_URL overrides it for tests.
@@ -88,7 +89,7 @@ func inContainer() bool {
 // installAgeSeconds is the age of the install-ID file, which is written once:
 // a few seconds on a machine that was created for this run. Nil when unknown.
 func installAgeSeconds() *int64 {
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return nil
 	}
@@ -204,7 +205,7 @@ func Identity() (cpURL, user string) {
 // InstallID returns this machine's install ID, and creates it on first use.
 // It returns "" when the home folder cannot hold one.
 func InstallID() string {
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return ""
 	}

@@ -27,6 +27,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
 // Harness is one supported AI host.
@@ -41,7 +43,7 @@ type Harness struct {
 
 // All returns every supported harness with its detection state filled in.
 func All() []Harness {
-	home, _ := os.UserHomeDir()
+	home, _ := paths.Home()
 	return []Harness{
 		detectClaudeCode(home),
 		detectCodex(home),
@@ -180,7 +182,7 @@ func detectAntigravity(home string) Harness {
 // targets move. A directory that is not under the home dir is left
 // unchanged.
 func (h Harness) ProjectScoped(projectDir string) Harness {
-	home, _ := os.UserHomeDir()
+	home, _ := paths.Home()
 	h.SkillDir = rebaseUnderHome(home, projectDir, h.SkillDir)
 	h.AgentDir = rebaseUnderHome(home, projectDir, h.AgentDir)
 	return h

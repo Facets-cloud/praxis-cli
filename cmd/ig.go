@@ -21,6 +21,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/igcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/ighook"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
 )
@@ -110,7 +111,7 @@ func igHome() (string, error) {
 	if h := os.Getenv("IG_HOME"); h != "" {
 		return h, nil
 	}
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return "", err
 	}
