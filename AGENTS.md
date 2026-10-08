@@ -319,6 +319,40 @@ uses access(2) (`selfupdate.Writable`), which never opens the file. Linux never
 writes in place (ETXTBSY), and an install that praxis cannot replace is refused
 before the download.
 
+## Windows
+
+praxis ships for Windows (amd64, arm64). The `test-windows` CI job must stay
+green. These rules come from the first Windows port (October 2026); each one
+was a real bug.
+
+- **Home folder:** use `paths.Home()`. Never call `os.UserHomeDir()` or read
+  `$HOME` directly: on Windows Go reads `USERPROFILE`. raptor uses the same
+  rule (`pkg/homedir`); if the two differ, the CLIs read different
+  `~/.facets/credentials`.
+- **Unix-only calls go in build-tagged files**: `*_unix.go`
+  (`//go:build !windows`) and `*_windows.go`. Examples: the skill lock
+  (`lock_*.go`), `rename_noreplace_*.go`, `detach_*.go`, `exec_*.go`,
+  `selfupdate/replace_*.go`. Check with `GOOS=windows go vet ./...`.
+- **A running `.exe` cannot be overwritten or deleted, but it can be
+  renamed.** `praxis update` renames it aside, and `CleanupOld` removes the old
+  copy at the next start. Never write into the running binary on Windows.
+- **No executable bits on Windows** (files report `0666`). A digest or a mode
+  comparison must ignore them there (`execBits`).
+- **`os.SameFile` after a rename:** on Windows it reads the file ID through
+  the `Lstat` path on first use. Call `os.SameFile(info, info)` before you
+  rename that path.
+- **Paths:** `filepath` for the disk; `/` for embedded files, census values
+  and anything sent to the server. Binary names get `.exe` on Windows.
+- **Line endings:** `.gitattributes` keeps the embedded skill tree LF, because
+  it is part of the binary's digest.
+- **Tests:** `t.Setenv("HOME", …)` isolates on Windows too (through
+  `paths.Home()`). Do not assert Unix modes on Windows. Quote Windows paths in
+  JSON fixtures (`json.Marshal`). Build expected paths with `filepath.Join`.
+  Skip only a test that is Unix by nature, and give the reason in `t.Skip`.
+- **Shells:** Claude Code on Windows runs hook commands through Git Bash. Git
+  for Windows adds Git Credential Manager system-wide, so the
+  `praxis git-credential` setup clears it with an empty helper line.
+
 ## Build & run
 
 ```bash

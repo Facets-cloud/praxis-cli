@@ -346,6 +346,9 @@ func TestFetchText_Error(t *testing.T) {
 }
 
 func TestAtomicReplace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("checks Unix file modes; replace_windows_test.go covers Windows")
+	}
 	dir := t.TempDir()
 	current := filepath.Join(dir, "binary")
 	newFile := filepath.Join(dir, "downloaded")
@@ -385,6 +388,9 @@ func TestAtomicReplace(t *testing.T) {
 }
 
 func TestAtomicReplace_TargetMissing_DefaultsTo0755(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("checks Unix file modes")
+	}
 	dir := t.TempDir()
 	current := filepath.Join(dir, "doesnotexist")
 	newFile := filepath.Join(dir, "downloaded")
@@ -457,6 +463,9 @@ func TestTargetPathMissingFile(t *testing.T) {
 }
 
 func TestHomebrewCask(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew paths are Unix paths; there is no Homebrew on Windows")
+	}
 	tests := []struct {
 		name, in string
 		want     bool
@@ -498,6 +507,9 @@ func TestDownload_FallsBackToTheTempFolder(t *testing.T) {
 }
 
 func TestCanReplace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod does not make a folder read-only on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores file modes")
 	}

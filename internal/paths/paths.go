@@ -60,8 +60,20 @@ func RootIsPinned() bool {
 }
 
 // Dir returns the HOME root ~/.praxis (does not create it).
+// Home is the user's home folder: $HOME when it is set to an absolute path,
+// else os.UserHomeDir. That is the same on macOS and Linux. On Windows,
+// os.UserHomeDir reads USERPROFILE; a Git Bash HOME (passed to praxis in
+// Windows form) and a test's HOME win over it. raptor uses the same rule, so
+// both CLIs find the same ~/.facets/credentials.
+func Home() (string, error) {
+	if h := os.Getenv("HOME"); h != "" && filepath.IsAbs(h) {
+		return h, nil
+	}
+	return os.UserHomeDir()
+}
+
 func Dir() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := Home()
 	if err != nil {
 		return "", err
 	}
@@ -85,7 +97,7 @@ func Dir() (string, error) {
 // alignUnder) so a symlinked home — macOS $HOME=/tmp/x, where /tmp is a link
 // to /private/tmp — doesn't read as "outside home".
 func ProjectRoot() (string, bool, error) {
-	home, err := os.UserHomeDir()
+	home, err := Home()
 	if err != nil {
 		return "", false, nil //nolint:nilerr // deliberate: no home dir available, no project root
 	}
@@ -147,7 +159,7 @@ func EnsureProjectRoot() (string, error) {
 	if root, ok, _ := ProjectRoot(); ok {
 		return root, os.MkdirAll(root, 0o700)
 	}
-	home, err := os.UserHomeDir()
+	home, err := Home()
 	if err != nil {
 		return "", err
 	}
@@ -188,7 +200,7 @@ func LegacyConfig() (string, error) {
 // (<dir>/.praxis/config.json) in the tree with no <dir>/.facets/credentials
 // beside it. Such a tree is no longer local mode; callers print a hint.
 func LegacyProjectPointer() (path, profile string, ok bool) {
-	home, err := os.UserHomeDir()
+	home, err := Home()
 	if err != nil {
 		return "", "", false
 	}

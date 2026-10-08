@@ -295,7 +295,7 @@ func ifTrue(cond bool, v string) any {
 // the wiring `praxis login` does. Never fatal; returns a warning so a JSON
 // logout does not claim success while hooks remain.
 func unwirePraxisHooks() (removed bool, warning string) {
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return false, fmt.Sprintf("removing praxis hooks failed: %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -109,7 +110,7 @@ func TestInstallIDIsCreatedOnceAndShared(t *testing.T) {
 		t.Fatalf("install IDs %q / %q", first, InstallID())
 	}
 	info, err := os.Stat(filepath.Join(home, installIDFile))
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || (info.Mode().Perm() != 0o600 && runtime.GOOS != "windows") { // no Unix modes on Windows
 		t.Fatalf("install-id file: %v, %v", info, err)
 	}
 	// An ID that raptor wrote first is kept as it is.

@@ -17,6 +17,9 @@ import (
 )
 
 func TestInstallMethod(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the cases are Unix paths; TestTildeUsesSlashes runs everywhere")
+	}
 	home := "/Users/dev"
 	for path, want := range map[string]string{
 		"/opt/homebrew/Caskroom/praxis/2.0.0/praxis_darwin_arm64": "brew",
@@ -33,6 +36,9 @@ func TestInstallMethod(t *testing.T) {
 }
 
 func TestTilde(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the cases are Unix paths; TestTildeUsesSlashes runs everywhere")
+	}
 	if got := tilde("/Users/dev/.local/bin/praxis", "/Users/dev"); got != "~/.local/bin/praxis" {
 		t.Errorf("tilde = %q", got)
 	}
@@ -94,7 +100,7 @@ func TestSkillStateCountsFromTheReceipt(t *testing.T) {
 	home := isolate(t)
 	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return home, nil }))
 	receipt := `{"skills": [
-	  {"skill_name": "praxis", "harness": "claude-code", "path": "` + home + `/.claude/skills/praxis/SKILL.md", "source": "embedded", "digest": "515c9936fae88c6328dfbdf6"},
+	  {"skill_name": "praxis", "harness": "claude-code", "path": ` + jsonString(filepath.Join(home, ".claude", "skills", "praxis", "SKILL.md")) + `, "source": "embedded", "digest": "515c9936fae88c6328dfbdf6"},
 	  {"skill_name": "praxis-cloud-operations", "harness": "claude-code", "path": "x", "source": "catalog"},
 	  {"skill_name": "praxis-cloud-operations", "harness": "codex", "path": "x", "source": "catalog", "scope": "organization"},
 	  {"skill_name": "praxis-team-runbook", "harness": "claude-code", "path": "x", "source": "catalog"}]}`
@@ -183,4 +189,25 @@ func TestSkillsKeyFollowsTheReceipt(t *testing.T) {
 	if SkillsKey() == empty {
 		t.Error("the skills key did not change with the receipt")
 	}
+}
+
+// The census holds "~/" paths with forward slashes on every platform, also for
+// a home with a trailing separator.
+func TestTildeUsesSlashes(t *testing.T) {
+	home := t.TempDir()
+	for _, h := range []string{home, home + string(filepath.Separator)} {
+		if got := tilde(filepath.Join(home, ".local", "bin", "praxis"), h); got != "~/.local/bin/praxis" {
+			t.Errorf("tilde(home=%q) = %q, want ~/.local/bin/praxis", h, got)
+		}
+		if got := tilde(home, h); got != "~" {
+			t.Errorf("tilde(home itself, %q) = %q, want ~", h, got)
+		}
+	}
+}
+
+// jsonString quotes s for a hand-written JSON fixture; a Windows path holds
+// backslashes.
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }

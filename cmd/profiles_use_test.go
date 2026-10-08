@@ -551,7 +551,7 @@ func TestRenderProfileSwitchText(t *testing.T) {
 				Profile: "vymo", Previous: "acme", URL: "https://vymo.test",
 				ShadowedRoot: "/h/repo/.praxis", MultiProfile: true,
 			},
-			contains: []string{`Switched to profile "vymo"`, "Note:", "/h/repo/.facets/credentials", `still use "acme"`, "--local"},
+			contains: []string{`Switched to profile "vymo"`, "Note:", filepath.Join("/h/repo", ".facets", "credentials"), `still use "acme"`, "--local"},
 		},
 	}
 	for _, tc := range tests {

@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
 type Result struct {
@@ -34,14 +36,14 @@ func ensure(client *http.Client, endpoint, goos, goarch string) (Result, error) 
 	} else if errors.Is(err, exec.ErrDot) {
 		return Result{}, err
 	}
-	if (goos != "darwin" && goos != "linux") || (goarch != "amd64" && goarch != "arm64") {
+	if (goos != "darwin" && goos != "linux" && goos != "windows") || (goarch != "amd64" && goarch != "arm64") {
 		return Result{}, fmt.Errorf("raptor has no supported binary for %s/%s", goos, goarch)
 	}
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return Result{}, err
 	}
-	dest := filepath.Join(home, ".local", "bin", "raptor")
+	dest := filepath.Join(home, ".local", "bin", "raptor"+exeSuffix(goos))
 	if _, err := os.Lstat(dest); !os.IsNotExist(err) {
 		return Result{}, fmt.Errorf("preserving existing non-executable Raptor path %s; repair it explicitly", dest)
 	}
@@ -61,7 +63,7 @@ func ensure(client *http.Client, endpoint, goos, goarch string) (Result, error) 
 	if err != nil {
 		return Result{}, fmt.Errorf("raptor release metadata: %w", err)
 	}
-	name := "raptor-" + goos + "-" + goarch
+	name := "raptor-" + goos + "-" + goarch + exeSuffix(goos)
 	for _, asset := range release.Assets {
 		if asset.Name != name {
 			continue
@@ -131,7 +133,7 @@ func get(client *http.Client, url string) (*http.Response, error) {
 func resultFor(path string, installed bool) Result {
 	result := Result{Path: path, Installed: installed}
 	if _, err := exec.LookPath("raptor"); err != nil {
-		result.PathWarning = "To run raptor from your shell, add this line to your shell profile, then open a new terminal: export PATH=\"" + filepath.Dir(path) + ":$PATH\". Praxis can use the full path without it."
+		result.PathWarning = pathWarning(runtime.GOOS, filepath.Dir(path))
 	}
 	return result
 }
@@ -143,9 +145,28 @@ func Find() (string, error) {
 	} else if errors.Is(err, exec.ErrDot) {
 		return "", err
 	}
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return "", err
 	}
 	return exec.LookPath(filepath.Join(home, ".local", "bin", "raptor"))
+}
+
+// exeSuffix is ".exe" for a Windows binary.
+func exeSuffix(goos string) string {
+	if goos == "windows" {
+		return ".exe"
+	}
+	return ""
+}
+
+// pathWarning tells the user how to put dir on the PATH, in the form of their
+// platform.
+func pathWarning(goos, dir string) string {
+	if goos == "windows" {
+		return "To run raptor from your shell, add " + dir + " to your user PATH, then open a new terminal. In PowerShell: " +
+			"[Environment]::SetEnvironmentVariable('Path', \"" + dir + ";\" + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User'). " +
+			"Praxis can use the full path without it."
+	}
+	return "To run raptor from your shell, add this line to your shell profile, then open a new terminal: export PATH=\"" + dir + ":$PATH\". Praxis can use the full path without it."
 }

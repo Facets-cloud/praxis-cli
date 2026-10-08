@@ -14,6 +14,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
+	"github.com/Facets-cloud/praxis-cli/internal/selfupdate"
 	"github.com/spf13/cobra"
 )
 
@@ -138,8 +139,17 @@ func refuseSelection(out io.Writer, asJSON bool, what, hintFmt, name, how, acts 
 	return true
 }
 
+// cleanupOldBinaries removes the copies that an earlier update on Windows
+// renamed aside (selfupdate.CleanupOld). A no-op elsewhere.
+func cleanupOldBinaries() {
+	if self, err := os.Executable(); err == nil {
+		selfupdate.CleanupOld(self)
+	}
+}
+
 // Execute runs the root command. Called from main.
 func Execute() {
+	cleanupOldBinaries()
 	// The temporary praxis of an in-place update does only the update.
 	if len(os.Args) > 1 && os.Args[1] == finishUpdateArg {
 		self, _ := os.Executable()

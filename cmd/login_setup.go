@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -327,7 +326,7 @@ func wirePraxisHooks(out io.Writer, asJSON bool, hosts []harness.Harness) []stri
 		}
 		return nil
 	}
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return nil
 	}

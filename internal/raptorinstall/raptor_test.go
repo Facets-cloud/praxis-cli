@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -72,6 +73,9 @@ func TestEnsureDownloadValidation(t *testing.T) {
 }
 
 func TestEnsurePreservesExistingFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses an extension-less raptor file and Unix executable bits")
+	}
 	for _, tc := range []struct {
 		name      string
 		mode      os.FileMode
@@ -113,7 +117,7 @@ func TestEnsureUnsupportedAndMalformedRelease(t *testing.T) {
 		name, goos, body, want string
 		status                 int
 	}{
-		{"unsupported", "windows", `{}`, "supported", 200},
+		{"unsupported", "freebsd", `{}`, "supported", 200},
 		{"malformed", "linux", `{`, "metadata", 200},
 		{"missing-asset", "linux", `{"assets":[]}`, "no asset", 200},
 		{"metadata-unavailable", "linux", `{}`, "HTTP 403", 403},
@@ -161,6 +165,9 @@ func TestEnsureDoesNotClobberConcurrentInstall(t *testing.T) {
 }
 
 func TestEnsureRejectsRelativePATHExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses an extension-less raptor file, which LookPath does not find on Windows")
+	}
 	t.Setenv("HOME", t.TempDir())
 	base := t.TempDir()
 	t.Chdir(base)
@@ -181,5 +188,22 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestExeSuffix(t *testing.T) {
+	for goos, want := range map[string]string{"windows": ".exe", "darwin": "", "linux": ""} {
+		if got := exeSuffix(goos); got != want {
+			t.Errorf("exeSuffix(%q) = %q, want %q", goos, got, want)
+		}
+	}
+}
+
+func TestPathWarning(t *testing.T) {
+	if w := pathWarning("windows", `C:\\Users\\a\\.local\\bin`); strings.Contains(w, "export PATH") || !strings.Contains(w, "SetEnvironmentVariable") {
+		t.Errorf("windows warning = %q", w)
+	}
+	if w := pathWarning("linux", "/home/a/.local/bin"); !strings.Contains(w, `export PATH="/home/a/.local/bin:$PATH"`) {
+		t.Errorf("linux warning = %q", w)
 	}
 }

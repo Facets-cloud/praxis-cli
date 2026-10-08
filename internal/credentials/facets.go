@@ -41,7 +41,7 @@ func SetGetwdForTest(fn func() (string, error)) func() {
 
 // FacetsHome is ~/.facets/credentials — where a global PAT login writes.
 func FacetsHome() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return "", err
 	}

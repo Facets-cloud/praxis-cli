@@ -601,7 +601,7 @@ func embeddedDigest(name string) (string, error) {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(h, "file:%s:%o:%d\x00", p, installedMode(p, info.Mode())&0111, len(b))
+		fmt.Fprintf(h, "file:%s:%o:%d\x00", p, execBits(installedMode(p, info.Mode())), len(b))
 		_, _ = h.Write(b)
 		return nil
 	})

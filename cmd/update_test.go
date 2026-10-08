@@ -293,6 +293,9 @@ func withWriteInPlace(t *testing.T, safe bool) {
 // An install that praxis cannot replace is refused before the download, with
 // the reason and the fixes.
 func TestUpdateCmd_RefusesWhatItCannotReplace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod does not make a folder read-only on Windows")
+	}
 	skipIfRoot(t)
 	tests := []struct {
 		name string
@@ -327,6 +330,9 @@ func TestUpdateCmd_RefusesWhatItCannotReplace(t *testing.T) {
 // When the rename fails but the user may write the file (macOS), the update
 // hands the write to a temporary copy of praxis.
 func TestUpdateCmd_HandsTheWriteToAHelper(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the exec hand-off is macOS only; Windows renames the running binary aside")
+	}
 	skipIfRoot(t)
 	withFakeRelease(t, newerRelease(), nil)
 	withWriteInPlace(t, true)
@@ -453,6 +459,9 @@ func brewInstall(t *testing.T, token string) string {
 // A Homebrew install is updated by its own brew: `brew update`, then `brew
 // upgrade --cask <token>`, with no download by praxis.
 func TestUpdateCmd_UpdatesAHomebrewInstallWithBrew(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no Homebrew on Windows")
+	}
 	withFakeRelease(t, newerRelease(), nil)
 	prefix := brewInstall(t, "praxis-test")
 	var calls []string
@@ -482,6 +491,9 @@ func TestUpdateCmd_UpdatesAHomebrewInstallWithBrew(t *testing.T) {
 
 // A failed brew step fails the update and shows brew's output.
 func TestUpdateCmd_ReportsABrewFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no Homebrew on Windows")
+	}
 	withFakeRelease(t, newerRelease(), nil)
 	brewInstall(t, "praxis")
 	origB := runBrew
@@ -503,6 +515,9 @@ func TestUpdateCmd_ReportsABrewFailure(t *testing.T) {
 }
 
 func TestBrewFor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no Homebrew on Windows")
+	}
 	skipIfRoot(t)
 	prefix := t.TempDir()
 	caskDir := filepath.Join(prefix, "Caskroom", "praxis", "1.0.0")
@@ -540,6 +555,9 @@ func TestBrewFor(t *testing.T) {
 
 // execBrew turns off brew's own auto-update, cleanup and hints.
 func TestExecBrewEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no Homebrew on Windows")
+	}
 	brew := writeHelper(t, "brew", "#!/bin/sh\necho \"$HOMEBREW_NO_AUTO_UPDATE$HOMEBREW_NO_INSTALL_CLEANUP$HOMEBREW_NO_ENV_HINTS $*\"\n")
 	var buf bytes.Buffer
 	if err := execBrew(&buf, brew, "upgrade", "--cask", "praxis"); err != nil {
@@ -604,4 +622,9 @@ func TestBrewUpdate_TextOutput(t *testing.T) {
 			t.Errorf("output = %q, want %q", buf.String(), want)
 		}
 	}
+}
+
+// The start-up clean-up never fails a command, on any platform.
+func TestCleanupOldBinariesIsSafe(t *testing.T) {
+	cleanupOldBinaries()
 }

@@ -3,6 +3,7 @@ package credentials
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -92,7 +93,7 @@ func TestPut_RoutesByCredentialType(t *testing.T) {
 			}
 			if tt.wantFacets {
 				fi, _ := os.Stat(homeFacets(t))
-				if fi.Mode().Perm() != 0o600 {
+				if fi.Mode().Perm() != 0o600 && runtime.GOOS != "windows" { // no Unix modes on Windows
 					t.Errorf("facets file mode = %o, want 0600", fi.Mode().Perm())
 				}
 				if got := facets["p"]; got.URL != "https://cp.test" || got.Username != "u@x" || got.Token != "pat" {

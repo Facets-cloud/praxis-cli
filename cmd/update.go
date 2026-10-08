@@ -8,8 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"syscall"
 
 	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
@@ -248,6 +248,13 @@ func notReplaceableError(path string) error {
 	case !selfupdate.WriteInPlaceSafe && selfupdate.Writable(path):
 		reason = "you cannot write to its folder, and on this system praxis cannot change its own file while it runs"
 	}
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf(`praxis cannot update %s: %s.
+Do one of these:
+  - Open PowerShell with "Run as administrator", then run: praxis update
+  - Remove this copy (Remove-Item "%s"), then install praxis again in %%USERPROFILE%%\.local\bin. You can update a copy there without administrator rights`,
+			path, reason, path)
+	}
 	return fmt.Errorf(`praxis cannot update %s: %s.
 Do one of these:
   - Run: sudo praxis update
@@ -290,7 +297,7 @@ func startUpdateHelper(tmpPath, target, from, to string, asJSON bool) error {
 		format = "json"
 	}
 	if err == nil {
-		err = syscall.Exec(helper.Name(), []string{helper.Name(), finishUpdateArg, tmpPath, target, from, to, format}, os.Environ())
+		err = execHelper(helper.Name(), []string{helper.Name(), finishUpdateArg, tmpPath, target, from, to, format})
 	}
 	os.Remove(helper.Name())
 	return fmt.Errorf("install: %w", err)

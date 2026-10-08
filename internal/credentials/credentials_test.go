@@ -3,6 +3,7 @@ package credentials
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -196,7 +197,7 @@ func TestDeleteAll_AlsoClearsActivePointer(t *testing.T) {
 	}
 
 	// Both files should be gone.
-	home, _ := os.UserHomeDir()
+	home, _ := paths.Home()
 	if _, err := os.Stat(filepath.Join(home, ".praxis", "credentials")); !os.IsNotExist(err) {
 		t.Errorf("credentials file still exists after DeleteAll")
 	}
@@ -230,9 +231,12 @@ func TestList_DefaultFirstThenAlphabetical(t *testing.T) {
 }
 
 func TestSave_FilePerm0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix file modes")
+	}
 	withHome(t)
 	_ = Put("default", Profile{URL: "x", Token: "t"})
-	home, _ := os.UserHomeDir()
+	home, _ := paths.Home()
 	info, err := os.Stat(filepath.Join(home, ".praxis", "credentials"))
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +249,7 @@ func TestSave_FilePerm0600(t *testing.T) {
 func TestINI_FormatMatchesFacetsConvention(t *testing.T) {
 	withHome(t)
 	_ = Put("default", Profile{URL: "https://default.test", Username: "a@x", Token: "t"})
-	home, _ := os.UserHomeDir()
+	home, _ := paths.Home()
 	body, _ := os.ReadFile(filepath.Join(home, ".praxis", "credentials"))
 	for _, want := range []string{"[default]", "url      = https://default.test", "username = a@x", "token    = t"} {
 		if !strings.Contains(string(body), want) {
