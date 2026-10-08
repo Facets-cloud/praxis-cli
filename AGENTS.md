@@ -319,6 +319,16 @@ uses access(2) (`selfupdate.Writable`), which never opens the file. Linux never
 writes in place (ETXTBSY), and an install that praxis cannot replace is refused
 before the download.
 
+The automatic update (`cmd/auto_update.go`) does the same after a command, from
+a detached `praxis __auto-update`, when the daily check cached a newer release.
+It runs brew for a Homebrew install and otherwise only renames: it never writes
+in place, because agents run praxis in parallel and the Apple silicon kill hits
+every run of the file. It is off for dev builds, CI, containers, root, an
+unwritable folder and `PRAXIS_NO_AUTO_UPGRADE`. One claim file
+(`claimSetup`) and a version check in the detached praxis keep parallel runs to
+one update. Tests must never start it for real: `TestMain` stubs
+`startAutoUpdate`, because the test binary would run as `praxis __auto-update`.
+
 ## Windows
 
 praxis ships for Windows (amd64, arm64). The `test-windows` CI job must stay

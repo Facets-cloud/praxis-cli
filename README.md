@@ -98,6 +98,13 @@ the script lists a Homebrew praxis if both are on your PATH.
 `praxis update` updates a script install in place (on Windows too: it renames
 the running `praxis.exe` aside and removes it at the next start). A Homebrew install is
 updated with `brew upgrade --cask praxis`, which `praxis update` runs for you.
+
+praxis also updates itself. When a newer release exists, praxis does the same
+update in the background after a command, for the next command. It does not do
+this in CI, in a container, as root, or when you cannot write to praxis's
+folder; there it tells you to run `praxis update`. Set
+`PRAXIS_NO_AUTO_UPGRADE=1` to turn it off.
+
 Latest release: <https://github.com/Facets-cloud/praxis-cli/releases/latest>.
 
 ## Set up — one command

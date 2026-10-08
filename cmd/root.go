@@ -159,6 +159,15 @@ func Execute() {
 		}
 		return
 	}
+	// The detached praxis of an automatic update does only the update.
+	if len(os.Args) > 1 && os.Args[1] == autoUpdateArg {
+		httpclient.Version, httpclient.Command = version, autoUpdateArg
+		if err := runAutoUpdate(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			osExit(1)
+		}
+		return
+	}
 	started := time.Now()
 	httpclient.Version, httpclient.Command = version, commandPath(os.Args[1:])
 	// The census must name the profile this command uses, and the background
@@ -229,6 +238,9 @@ func Execute() {
 			select {
 			case nags := <-ch:
 				for _, n := range nags {
+					if n.Freshness.Tool == "praxis" && autoUpdateHandles(n.Freshness.Latest) {
+						continue
+					}
 					printFreshnessBox(n.Freshness, n.Action, os.Stderr)
 				}
 			case <-time.After(updateCheckMaxWait):
@@ -249,6 +261,12 @@ func Execute() {
 	if notify != nil {
 		notify()
 	}
+	if render.IsTTY(os.Stderr) && !skipUpdateCheck(os.Args[1:]) {
+		if msg := autoUpdateNotice(); msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+	}
+	maybeAutoUpdate(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)

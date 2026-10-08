@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -39,6 +40,8 @@ func TestMain(m *testing.M) {
 	// Tests that exercise that path swap the real functions back in.
 	ensureRaptorBinary = func() (raptorinstall.Result, error) { return raptorinstall.Result{}, nil }
 	updateRaptor = func(io.Writer, bool, bool) (raptorUpgradeResult, error) { return raptorUpgradeResult{}, nil }
+	// A real start would run the test binary as `praxis __auto-update`.
+	startAutoUpdate = func(string, string) error { return errors.New("no automatic update in tests") }
 	code := m.Run()
 	restore()
 	_ = os.RemoveAll(home)
