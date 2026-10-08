@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
-	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/raptorinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 )
@@ -124,75 +124,109 @@ func prepareRaptor(out io.Writer, asJSON bool) (raptorinstall.Result, error) {
 	return result, err
 }
 
-// raptorAgents maps a praxis host to raptor's --agent name. Antigravity has
-// no raptor agent yet, so it gets no raptor skill.
-var raptorAgents = map[string]string{"claude-code": "claude", "codex": "codex", "gemini-cli": "gemini"}
+// raptorAgents maps a praxis host to the raptor --agent name that writes the
+// same skills folder: ~/.claude/skills, ~/.agents/skills (Codex and Gemini
+// CLI) and ~/.gemini/config/skills (Antigravity).
+var raptorAgents = map[string]string{"claude-code": "claude", "codex": "agents", "gemini-cli": "agents", "antigravity": "antigravity"}
 
-// minRaptorSkillVersion is the first raptor that ships the one raptor skill.
-const minRaptorSkillVersion = "0.1.107"
+// raptorHostLayoutMarker is in `raptor install skill --help` from the first
+// raptor that writes the folders above. Older raptors wrote ~/.codex/skills and
+// ~/.gemini/skills, which Codex and Antigravity do not read.
+const raptorHostLayoutMarker = "~/.gemini/config/skills"
+
+// raptorSkillResult is one folder of `raptor install skill -o json`.
+type raptorSkillResult struct {
+	Host  string `json:"host"`
+	Dir   string `json:"dir"`
+	Error string `json:"error"`
+}
 
 // runInstallRaptorSkills asks raptor to install its own skill, at user level,
-// for each host. raptor then registers the path and rewrites the skill after
-// every upgrade, so praxis never owns a copy that can go stale. The skill does
-// not depend on the praxis profile, so a project-scoped login installs it at
-// user level too: a project copy would only give the host a second one. A host
-// that already reads a raptor skill from the shared ~/.agents/skills root is
-// left alone for the same reason. hosts must be the user-level hosts.
+// for every host in one call. raptor records each folder and refreshes it
+// after every upgrade, so praxis never owns a copy that can go stale. raptor
+// writes the same folder that praxis reads for each host (harness.SkillDir).
+// The skill does not depend on the praxis profile, so a project-scoped login
+// installs it at user level too: a project copy would only give the host a
+// second one. hosts must be the user-level hosts.
 func runInstallRaptorSkills(raptor string, hosts []harness.Harness) ([]skillInstallationLite, error) {
 	if raptor == "" {
 		return nil, errors.New("raptor CLI is missing, so its skill was not installed")
 	}
-	base, err := paths.Home()
+	base, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
-	v, err := raptorVersionAt(raptor)
-	if err != nil {
-		return nil, fmt.Errorf("raptor at %s did not answer --version, so its skill was not installed: %w", raptor, err)
-	}
-	if v != "" && compareSemver(v, minRaptorSkillVersion) < 0 {
-		return nil, fmt.Errorf("raptor %s is too old to install its skill; run `praxis update`", v)
-	}
-	var installed []skillInstallationLite
-	var errs []error
+	args := []string{"install", "skill", "-o", "json"}
 	done := map[string]bool{}
 	for _, h := range hosts {
-		agent, ok := raptorAgents[h.Name]
-		if !ok || done[agent] {
+		if agent, ok := raptorAgents[h.Name]; ok && !done[agent] {
+			done[agent] = true
+			args = append(args, "--agent", agent)
+		}
+	}
+	if len(done) == 0 {
+		return nil, nil
+	}
+	if err := checkRaptorHostLayout(raptor); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, raptor, args...)
+	cmd.Dir = base
+	cmd.Env = append(os.Environ(), "RAPTOR_NO_UPDATE_CHECK=1")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, runErr := cmd.Output()
+	var report struct {
+		Results []raptorSkillResult `json:"results"`
+	}
+	if err := json.Unmarshal(out, &report); err != nil {
+		return nil, fmt.Errorf("raptor skill: %w: %s", errors.Join(runErr, err), strings.TrimSpace(stderr.String()))
+	}
+	return raptorSkillInstalls(hosts, report.Results, runErr)
+}
+
+// raptorSkillInstalls lists the hosts whose folder raptor wrote, and an error
+// for each folder that failed.
+func raptorSkillInstalls(hosts []harness.Harness, results []raptorSkillResult, runErr error) ([]skillInstallationLite, error) {
+	failed := map[string]string{}
+	var errs []error
+	for _, r := range results {
+		if r.Error != "" {
+			failed[filepath.Clean(r.Dir)] = r.Error
+			errs = append(errs, fmt.Errorf("raptor skill for %s: %s", r.Host, r.Error))
+		}
+	}
+	if runErr != nil && len(errs) == 0 {
+		errs = append(errs, fmt.Errorf("raptor skill: %w", runErr))
+	}
+	var installed []skillInstallationLite
+	for _, h := range hosts {
+		if _, ok := raptorAgents[h.Name]; !ok {
 			continue
 		}
-		done[agent] = true
-		native := filepath.Join(base, "."+agent, "skills")
-		if h.SkillDir != native {
-			if _, err := os.Stat(filepath.Join(h.SkillDir, "raptor", "SKILL.md")); err == nil {
-				continue
-			}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		cmd := exec.CommandContext(ctx, raptor, "install", "skill", "--agent", agent)
-		cmd.Dir = base
-		cmd.Env = append(os.Environ(), "RAPTOR_NO_UPDATE_CHECK=1")
-		out, err := cmd.CombinedOutput()
-		cancel()
-		if err != nil {
-			errs = append(errs, fmt.Errorf("raptor skill for %s: %w: %s", h.Name, err, strings.TrimSpace(string(out))))
+		if _, bad := failed[filepath.Clean(h.SkillDir)]; bad || !raptorSkillAt(h) {
 			continue
 		}
-		installed = append(installed, skillInstallationLite{Harness: h.Name, Path: filepath.Join(native, "raptor", "SKILL.md")})
+		installed = append(installed, skillInstallationLite{Harness: h.Name, Path: filepath.Join(h.SkillDir, "raptor", "SKILL.md")})
 	}
 	return installed, errors.Join(errs...)
 }
 
-// raptorVersionAt is the release version of the raptor at path, or "" for a
-// development build. An error means raptor did not answer.
-func raptorVersionAt(path string) (string, error) {
+// checkRaptorHostLayout fails when the raptor at path predates the shared
+// host layout, so praxis never asks it to write folders the hosts do not read.
+func checkRaptorHostLayout(path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	out, err := exec.CommandContext(ctx, path, "install", "skill", "--help").Output()
 	if err != nil {
-		return "", err
+		return fmt.Errorf("raptor at %s did not answer `install skill --help`, so its skill was not installed: %w", path, err)
 	}
-	return raptorSemver.FindString(string(out)), nil
+	if !strings.Contains(string(out), raptorHostLayoutMarker) {
+		return fmt.Errorf("raptor at %s is too old to install its skill for every agent host; run `praxis update`", path)
+	}
+	return nil
 }
 
 // reportRaptorSkills prints where raptor installed its skill, then any failure.
@@ -227,27 +261,15 @@ func refreshRaptorSkills(out io.Writer, asJSON bool) ([]skillInstallationLite, e
 	return nil, err
 }
 
-// raptorSkillAt reports whether host h reads a raptor skill: in its own skill
-// folder, or in the user-level folder raptor writes for its agent.
+// raptorSkillAt reports whether host h reads a raptor skill in its own skill
+// folder, which is where raptor writes it.
 func raptorSkillAt(h harness.Harness) bool {
-	if _, err := os.Stat(filepath.Join(h.SkillDir, "raptor", "SKILL.md")); err == nil {
-		return true
-	}
-	agent, ok := raptorAgents[h.Name]
-	if !ok {
-		return false
-	}
-	home, err := paths.Home()
-	if err != nil {
-		return false
-	}
-	_, err = os.Stat(filepath.Join(home, "."+agent, "skills", "raptor", "SKILL.md"))
+	_, err := os.Stat(filepath.Join(h.SkillDir, "raptor", "SKILL.md"))
 	return err == nil
 }
 
 // raptorSkillEverywhere reports whether every detected host raptor supports
-// reads a raptor skill. Hosts raptor does not support (Antigravity) do not
-// count; with no supported host at all it is false.
+// reads a raptor skill. With no supported host at all it is false.
 func raptorSkillEverywhere(hosts []harness.Harness) bool {
 	n := 0
 	for _, h := range hosts {

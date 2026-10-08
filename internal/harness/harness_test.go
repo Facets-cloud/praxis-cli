@@ -115,16 +115,28 @@ func TestDetect_Antigravity_AppDataDir(t *testing.T) {
 	}
 }
 
-func TestDetect_Antigravity_NotOnBareGemini(t *testing.T) {
+func TestDetect_Antigravity_OnBareGemini(t *testing.T) {
 	home := withIsolatedHome(t)
-	// A bare ~/.gemini (Gemini CLI's signal) must NOT trip Antigravity —
-	// the two share the ~/.gemini root and must stay disambiguated.
+	// A standard Antigravity.app install leaves only ~/.gemini (and
+	// ~/.gemini/antigravity, ~/.gemini/config) and no binary on PATH. Like
+	// skoop and raptor, any ~/.gemini folder counts.
 	if err := os.MkdirAll(filepath.Join(home, ".gemini"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	h, _ := ByName("antigravity")
+	if !h.Detected {
+		t.Errorf("Antigravity not detected on ~/.gemini: %+v", h)
+	}
+}
+
+func TestDetect_Antigravity_NotOnAGeminiFile(t *testing.T) {
+	home := withIsolatedHome(t)
+	if err := os.WriteFile(filepath.Join(home, ".gemini"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := ByName("antigravity")
 	if h.Detected {
-		t.Errorf("Antigravity must not be detected on a bare ~/.gemini: %+v", h)
+		t.Errorf("Antigravity detected on a ~/.gemini file: %+v", h)
 	}
 }
 
