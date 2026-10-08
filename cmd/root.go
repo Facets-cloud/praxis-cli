@@ -153,6 +153,9 @@ func Execute() {
 	// After a brew upgrade, `praxis update` or a manual install, bring the
 	// installed praxis skill to this binary's text. Silent; see the func doc.
 	maybeRefreshEmbeddedSkills(os.Args[1:])
+	// Once per version, run setup in the background: the hook repair, raptor
+	// and its skill. The Homebrew cask no longer runs it.
+	maybeStartSetup(os.Args[1:])
 	// Control-plane PATs an older praxis kept in ~/.praxis/credentials move to
 	// raptor's file, the shared store; its active-profile pointer becomes the
 	// [default] section. Silent and best-effort.

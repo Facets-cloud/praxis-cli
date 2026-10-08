@@ -2,13 +2,16 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/claudehooks"
 )
@@ -290,5 +293,141 @@ func TestMaybeRefreshEmbeddedSkills(t *testing.T) {
 				t.Errorf("refresh calls = %d, retire calls = %d, want %t", calls, retires, tc.want)
 			}
 		})
+	}
+}
+
+// Setup starts once per release version, outside CI, for ordinary commands,
+// and only from the process that takes the claim.
+func TestMaybeStartSetup(t *testing.T) {
+	tests := []struct {
+		name     string
+		version  string
+		args     []string
+		ci       string
+		marker   string        // "" = no setup-version file
+		claimAge time.Duration // 0 = no claim file
+		startErr error
+		want     bool
+	}{
+		{"fresh install", "2.1.0", []string{"status"}, "", "", 0, nil, true},
+		{"after an upgrade", "2.1.0", []string{"mcp", "k8s_cli"}, "", "2.0.2", 0, nil, true},
+		{"bare praxis", "2.1.0", nil, "", "2.0.2", 0, nil, true},
+		{"already ran", "2.1.0", []string{"status"}, "", "2.1.0", 0, nil, false},
+		{"another process started it", "2.1.0", []string{"status"}, "", "2.0.2", time.Minute, nil, false},
+		{"failed setup, retry later", "2.1.0", []string{"status"}, "", "2.0.2", 59 * time.Minute, nil, false},
+		{"failed setup, retry now", "2.1.0", []string{"status"}, "", "2.0.2", 2 * time.Hour, nil, true},
+		{"dev build", "dev", []string{"status"}, "", "", 0, nil, false},
+		{"describe build", "2.1.0-3-gabc1234", []string{"status"}, "", "", 0, nil, false},
+		{"CI", "2.1.0", []string{"status"}, "true", "", 0, nil, false},
+		{"prompt hook", "2.1.0", []string{"hook", "user-prompt-submit"}, "", "", 0, nil, false},
+		{"ig hook", "2.1.0", []string{"ig", "hook"}, "", "", 0, nil, false},
+		{"login runs raptor itself", "2.1.0", []string{"login"}, "", "", 0, nil, false},
+		{"update", "2.1.0", []string{"update"}, "", "", 0, nil, false},
+		{"setup itself", "2.1.0", []string{"setup"}, "", "", 0, nil, false},
+		{"start fails", "2.1.0", []string{"status"}, "", "2.0.2", 0, os.ErrPermission, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			for _, k := range httpclient.CIEnvVars() {
+				t.Setenv(k, "")
+			}
+			t.Setenv("CI", tc.ci)
+			dir := filepath.Join(home, ".praxis")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			marker, claim := filepath.Join(dir, setupVersionFile), filepath.Join(dir, setupClaimFile)
+			if tc.marker != "" {
+				if err := os.WriteFile(marker, []byte(tc.marker+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.claimAge > 0 {
+				if err := os.WriteFile(claim, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				old := time.Now().Add(-tc.claimAge)
+				if err := os.Chtimes(claim, old, old); err != nil {
+					t.Fatal(err)
+				}
+			}
+			origV, origS := version, startSetup
+			starts := 0
+			version = tc.version
+			startSetup = func(string) error { starts++; return tc.startErr }
+			t.Cleanup(func() { version, startSetup = origV, origS })
+
+			maybeStartSetup(tc.args)
+
+			if (starts == 1) != tc.want {
+				t.Fatalf("starts = %d, want started %t", starts, tc.want)
+			}
+			// Only the setup process records the version.
+			b, _ := os.ReadFile(marker)
+			if got := strings.TrimSpace(string(b)); got != tc.marker {
+				t.Errorf("setup-version = %q, want %q", got, tc.marker)
+			}
+			info, err := os.Stat(claim)
+			switch {
+			case tc.want && tc.startErr == nil:
+				if err != nil || time.Since(info.ModTime()) > time.Minute {
+					t.Errorf("want a fresh claim, got %v", err)
+				}
+			case tc.want:
+				if err == nil {
+					t.Error("a failed start must release the claim")
+				}
+			case tc.claimAge == 0 && err == nil:
+				t.Error("a skipped command must not take the claim")
+			}
+		})
+	}
+}
+
+// The background setup gets its own log, and the caller does not wait for it.
+func TestStartBackgroundSetup(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".praxis")
+	orig := setupExecutable
+	t.Cleanup(func() { setupExecutable = orig })
+
+	setupExecutable = func() (string, error) { return "/usr/bin/true", nil }
+	if err := startBackgroundSetup(dir); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "setup.log")); err != nil {
+		t.Errorf("setup.log: %v", err)
+	}
+
+	setupExecutable = func() (string, error) { return filepath.Join(dir, "missing"), nil }
+	if err := startBackgroundSetup(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("missing binary: err = %v, want ErrNotExist", err)
+	}
+}
+
+// A successful setup records its version and releases the claim.
+func TestSetupRecordsVersion(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if !claimSetup(filepath.Join(home, ".praxis", setupClaimFile), time.Now()) {
+		t.Fatal("claim")
+	}
+	origV := version
+	version = "2.1.0"
+	t.Cleanup(func() { version = origV })
+	var out bytes.Buffer
+	setupCmd.SetOut(&out)
+	t.Cleanup(func() { setupCmd.SetOut(nil) })
+
+	if err := setupCmd.RunE(setupCmd, nil); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(home, ".praxis", setupVersionFile))
+	if err != nil || strings.TrimSpace(string(b)) != "2.1.0" {
+		t.Errorf("setup-version = %q, %v; want 2.1.0", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".praxis", setupClaimFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("claim after a successful setup: %v, want removed", err)
 	}
 }
