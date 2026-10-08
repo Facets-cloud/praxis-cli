@@ -303,11 +303,21 @@ the other:
   Homebrew can no longer upgrade or uninstall (`brew upgrade` then fails with
   "already a Binary at …", and its rollback can purge the Caskroom entry).
 
-`praxis update` additionally REFUSES a Homebrew-managed install
-(`selfupdate.HomebrewCask`) rather than write into brew's tree: brew records the
-version in its own metadata, so a self-update there makes `brew info` report a
-version that is not on disk. This exits 0 with `reason: homebrew_managed` — it
-is guidance, not a failure.
+`praxis update` never writes into brew's tree (`selfupdate.HomebrewCask`): brew
+records the version in its own metadata, so a self-update there makes `brew
+info` report a version that is not on disk. It runs that prefix's own brew
+instead (`brew update`, then `brew upgrade --cask <token>`, see `brewFor`). When
+that brew is missing or the user cannot write to the cask's folder, it exits 0
+with `reason: homebrew_managed` and names the command — guidance, not a failure.
+
+Outside brew, `praxis update` renames over the real file. When the folder is not
+writable, on macOS only, it writes into the existing file through a temporary
+copy of praxis (`startUpdateHelper` → `__finish-update`, handled first in
+`Execute`): on Apple silicon, a binary that writes its own file while it runs
+has its next runs killed by macOS for about 40 seconds. Every permission check
+uses access(2) (`selfupdate.Writable`), which never opens the file. Linux never
+writes in place (ETXTBSY), and an install that praxis cannot replace is refused
+before the download.
 
 ## Build & run
 

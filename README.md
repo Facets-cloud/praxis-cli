@@ -73,8 +73,8 @@ curl -fsSL -o praxis \
 chmod +x praxis && sudo mv praxis /usr/local/bin/
 ```
 
-Once installed, `praxis update` self-updates against GitHub Releases
-on both platforms. Latest release: <https://github.com/Facets-cloud/praxis-cli/releases/latest>.
+Once installed, `praxis update` updates praxis on both platforms. A Homebrew
+install is updated with `brew upgrade --cask praxis`, which praxis runs for you. Latest release: <https://github.com/Facets-cloud/praxis-cli/releases/latest>.
 
 ## Set up — one command
 
@@ -268,7 +268,8 @@ praxis refresh-skills [--project] [--json]
    (like `praxis login --local`, minus auth) and install there.
 
 praxis update [--yes] [--json]
-   Self-update binary. --json implies --yes.
+   Update praxis (with brew for a Homebrew install), then raptor.
+   --json implies --yes.
 
 praxis version [--json]   build metadata
 praxis completion <shell> shell completion script (bash/zsh/fish/ps)
