@@ -168,7 +168,7 @@ func QueueReport(req ReportRequest, cli string) error {
 	if err != nil {
 		return err
 	}
-	return writeQueued(dir, fmt.Sprintf("%d-%s.json", time.Now().UnixNano(), cli), raw)
+	return writeQueued(dir, queueName(dir, cli+".json"), raw)
 }
 
 // writeQueued writes a queue file through a temporary name and a rename, so a
@@ -197,7 +197,7 @@ func writeQueued(dir, name string, raw []byte) error {
 // oldest-first order tries the others first next time. The CLI suffix stays.
 func requeueAtBack(dir, name string, raw []byte) {
 	_, suffix, _ := strings.Cut(name, "-")
-	if writeQueued(dir, fmt.Sprintf("%d-%s", time.Now().UnixNano(), suffix), raw) == nil {
+	if writeQueued(dir, queueName(dir, suffix), raw) == nil {
 		_ = os.Remove(filepath.Join(dir, name))
 	}
 }
@@ -267,4 +267,21 @@ func HasQueuedReports() bool {
 		}
 	}
 	return false
+}
+
+// queueNow is the clock of queue names; a variable so tests can stop it.
+var queueNow = time.Now
+
+// queueName is a free "<unix nanos>-<suffix>" name in dir, so names sort oldest
+// first. Windows' clock can give two calls the same value; a taken name then
+// moves up one nanosecond instead of replacing a queued report.
+func queueName(dir, suffix string) string {
+	n := queueNow().UnixNano()
+	for {
+		name := fmt.Sprintf("%d-%s", n, suffix)
+		if _, err := os.Lstat(filepath.Join(dir, name)); errors.Is(err, os.ErrNotExist) {
+			return name
+		}
+		n++
+	}
 }
