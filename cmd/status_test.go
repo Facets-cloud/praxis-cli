@@ -625,7 +625,8 @@ func TestRaptorAssetName(t *testing.T) {
 		{"darwin", "amd64", "raptor-darwin-amd64"},
 		{"linux", "amd64", "raptor-linux-amd64"},
 		{"linux", "arm64", "raptor-linux-arm64"},
-		{"windows", "amd64", ""}, // not published — must not invent a URL
+		{"windows", "amd64", "raptor-windows-amd64.exe"},
+		{"freebsd", "amd64", ""}, // not published — must not invent a URL
 		{"linux", "386", ""},
 	} {
 		if got := raptorAssetName(tt.goos, tt.goarch); got != tt.want {
@@ -683,7 +684,7 @@ func TestRaptorStatusBlock_InstallHint(t *testing.T) {
 	})
 
 	t.Run("unpublished platform: docs only, no fabricated url", func(t *testing.T) {
-		b := raptorStatusBlockFor(raptorstate.State{}, credentials.Active{Profile: credentials.Profile{URL: "https://x.test"}}, "windows", "amd64")
+		b := raptorStatusBlockFor(raptorstate.State{}, credentials.Active{Profile: credentials.Profile{URL: "https://x.test"}}, "freebsd", "amd64")
 		hint, _ := b["install_hint"].(map[string]any)
 		if hint == nil {
 			t.Fatal("install_hint missing")
@@ -714,4 +715,16 @@ func TestRaptorStatusBlock_InstallHint(t *testing.T) {
 func toStrings(v any) []string {
 	out, _ := v.([]string)
 	return out
+}
+
+// Windows has no curl/chmod/sudo hatch: praxis setup installs raptor.
+func TestRaptorStatusBlock_WindowsHint(t *testing.T) {
+	b := raptorStatusBlockFor(raptorstate.State{}, credentials.Active{Profile: credentials.Profile{URL: "https://x.test"}}, "windows", "amd64")
+	hint, _ := b["install_hint"].(map[string]any)
+	if got := strings.Join(toStrings(hint["no_sudo_commands"]), "\n"); got != "praxis setup" {
+		t.Errorf("no_sudo_commands = %q, want praxis setup", got)
+	}
+	if !strings.Contains(hint["asset_url"].(string), "raptor-windows-amd64.exe") {
+		t.Errorf("asset_url = %v", hint["asset_url"])
+	}
 }

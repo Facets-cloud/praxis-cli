@@ -198,3 +198,12 @@ func TestExeSuffix(t *testing.T) {
 		}
 	}
 }
+
+func TestPathWarning(t *testing.T) {
+	if w := pathWarning("windows", `C:\\Users\\a\\.local\\bin`); strings.Contains(w, "export PATH") || !strings.Contains(w, "SetEnvironmentVariable") {
+		t.Errorf("windows warning = %q", w)
+	}
+	if w := pathWarning("linux", "/home/a/.local/bin"); !strings.Contains(w, `export PATH="/home/a/.local/bin:$PATH"`) {
+		t.Errorf("linux warning = %q", w)
+	}
+}

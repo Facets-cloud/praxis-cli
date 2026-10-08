@@ -133,7 +133,7 @@ func get(client *http.Client, url string) (*http.Response, error) {
 func resultFor(path string, installed bool) Result {
 	result := Result{Path: path, Installed: installed}
 	if _, err := exec.LookPath("raptor"); err != nil {
-		result.PathWarning = "To run raptor from your shell, add this line to your shell profile, then open a new terminal: export PATH=\"" + filepath.Dir(path) + ":$PATH\". Praxis can use the full path without it."
+		result.PathWarning = pathWarning(runtime.GOOS, filepath.Dir(path))
 	}
 	return result
 }
@@ -158,4 +158,15 @@ func exeSuffix(goos string) string {
 		return ".exe"
 	}
 	return ""
+}
+
+// pathWarning tells the user how to put dir on the PATH, in the form of their
+// platform.
+func pathWarning(goos, dir string) string {
+	if goos == "windows" {
+		return "To run raptor from your shell, add " + dir + " to your user PATH, then open a new terminal. In PowerShell: " +
+			"[Environment]::SetEnvironmentVariable('Path', \"" + dir + ";\" + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User'). " +
+			"Praxis can use the full path without it."
+	}
+	return "To run raptor from your shell, add this line to your shell profile, then open a new terminal: export PATH=\"" + dir + ":$PATH\". Praxis can use the full path without it."
 }

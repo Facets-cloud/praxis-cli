@@ -226,10 +226,16 @@ func tilde(path, home string) string {
 	if home == "" {
 		return path
 	}
-	if path == home {
+	sep := string(filepath.Separator)
+	if path == home || path == strings.TrimSuffix(home, sep) {
 		return "~"
 	}
-	if rest, ok := strings.CutPrefix(path, home+string(filepath.Separator)); ok {
+	// A home with a trailing separator (or a root such as C:\) keeps it once.
+	prefix := home
+	if !strings.HasSuffix(prefix, sep) {
+		prefix += sep
+	}
+	if rest, ok := strings.CutPrefix(path, prefix); ok {
 		return "~/" + filepath.ToSlash(rest)
 	}
 	return path

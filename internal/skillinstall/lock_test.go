@@ -23,13 +23,13 @@ func TestLockFileIsExclusive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := make(chan struct{})
+	got := make(chan error, 1)
 	go func() {
 		second, err := lockFile(open())
 		if err == nil {
 			second()
 		}
-		close(got)
+		got <- err
 	}()
 	select {
 	case <-got:
@@ -38,7 +38,10 @@ func TestLockFileIsExclusive(t *testing.T) {
 	}
 	unlock()
 	select {
-	case <-got:
+	case err := <-got:
+		if err != nil {
+			t.Fatalf("second lock: %v", err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the second lock did not get the lock after the release")
 	}

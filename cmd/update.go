@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
@@ -246,6 +247,13 @@ func notReplaceableError(path string) error {
 		reason = "root owns this file, and you cannot write to its folder"
 	case !selfupdate.WriteInPlaceSafe && selfupdate.Writable(path):
 		reason = "you cannot write to its folder, and on this system praxis cannot change its own file while it runs"
+	}
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf(`praxis cannot update %s: %s.
+Do one of these:
+  - Open PowerShell with "Run as administrator", then run: praxis update
+  - Remove this copy (Remove-Item "%s"), then install praxis again in %%USERPROFILE%%\.local\bin. You can update a copy there without administrator rights`,
+			path, reason, path)
 	}
 	return fmt.Errorf(`praxis cannot update %s: %s.
 Do one of these:

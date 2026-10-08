@@ -176,8 +176,11 @@ current staleness.`,
 // publishes no build for it. Names match the assets actually on
 // Facets-cloud/raptor-releases (darwin/linux, amd64/arm64).
 func raptorAssetName(goos, goarch string) string {
+	ext := ""
 	switch goos {
 	case "darwin", "linux":
+	case "windows":
+		ext = ".exe"
 	default:
 		return ""
 	}
@@ -186,7 +189,7 @@ func raptorAssetName(goos, goarch string) string {
 	default:
 		return ""
 	}
-	return fmt.Sprintf("raptor-%s-%s", goos, goarch)
+	return fmt.Sprintf("raptor-%s-%s%s", goos, goarch, ext)
 }
 
 // raptorInstallHint points at raptor's own install instructions, plus an
@@ -215,6 +218,12 @@ func raptorInstallHint(goos, goarch string) map[string]any {
 	}
 	url := raptorDownloadURL + asset
 	hint["asset_url"] = url
+	if goos == "windows" {
+		// No curl/chmod/sudo there: praxis installs raptor itself.
+		hint["no_sudo_commands"] = []string{"praxis setup"}
+		hint["note"] = `praxis setup installs raptor into %USERPROFILE%\.local\bin, which must be on the user PATH.`
+		return hint
+	}
 	hint["no_sudo_commands"] = []string{
 		"mkdir -p ~/.local/bin",
 		"curl -fsSL " + url + " -o ~/.local/bin/raptor",

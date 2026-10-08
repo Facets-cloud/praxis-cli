@@ -191,11 +191,17 @@ func TestSkillsKeyFollowsTheReceipt(t *testing.T) {
 	}
 }
 
-// The census holds "~/" paths with forward slashes on every platform.
+// The census holds "~/" paths with forward slashes on every platform, also for
+// a home with a trailing separator.
 func TestTildeUsesSlashes(t *testing.T) {
 	home := t.TempDir()
-	if got := tilde(filepath.Join(home, ".local", "bin", "praxis"), home); got != "~/.local/bin/praxis" {
-		t.Errorf("tilde = %q, want ~/.local/bin/praxis", got)
+	for _, h := range []string{home, home + string(filepath.Separator)} {
+		if got := tilde(filepath.Join(home, ".local", "bin", "praxis"), h); got != "~/.local/bin/praxis" {
+			t.Errorf("tilde(home=%q) = %q, want ~/.local/bin/praxis", h, got)
+		}
+		if got := tilde(home, h); got != "~" {
+			t.Errorf("tilde(home itself, %q) = %q, want ~", h, got)
+		}
 	}
 }
 

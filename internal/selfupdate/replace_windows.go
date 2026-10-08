@@ -1,9 +1,11 @@
 package selfupdate
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -12,12 +14,18 @@ import (
 // <name>.old-<time>, and the new file takes its place. CleanupOld removes the
 // old file at a later start. A failed move puts the old binary back.
 func replaceFile(newPath, currentPath string) error {
+	// A rename cannot cross volumes; refuse before the running binary moves.
+	if !strings.EqualFold(filepath.VolumeName(newPath), filepath.VolumeName(currentPath)) {
+		return fmt.Errorf("the download %s is not on the volume of %s", newPath, currentPath)
+	}
 	old := currentPath + ".old-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if err := os.Rename(currentPath, old); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	if err := os.Rename(newPath, currentPath); err != nil {
-		_ = os.Rename(old, currentPath)
+		if rerr := os.Rename(old, currentPath); rerr != nil {
+			return fmt.Errorf("%w; restoring the old binary also failed (%w): it is at %s, rename it to %s", err, rerr, old, currentPath)
+		}
 		return err
 	}
 	return nil
