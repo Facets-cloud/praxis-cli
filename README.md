@@ -71,6 +71,20 @@ PATH, the script adds one line to your shell profile; open a new
 terminal after it. Set `FACETS_INSTALL_DIR` to install into another
 folder, or `FACETS_NO_MODIFY_PATH=1` to leave your profile alone.
 
+**Windows** — the install script, in PowerShell:
+
+```powershell
+irm https://cross.facetsapp.cloud/cli/install.ps1 | iex
+```
+
+It downloads `praxis.exe`, checks its SHA-256, and puts it in
+`%USERPROFILE%\.local\bin` without administrator rights, so a later
+`praxis update` needs none either. It adds that folder to your user PATH and
+to the current window. Other terminals need a restart to see it. Then run
+`praxis login`: it also installs `raptor.exe` into the same folder and the
+skills for your AI host. Claude Code on Windows needs
+[Git for Windows](https://git-scm.com/download/win).
+
 **macOS with Homebrew** (cask):
 
 ```bash
@@ -81,7 +95,8 @@ Homebrew owns this copy, so upgrade it with
 `brew update && brew upgrade --cask praxis`. Keep one install method:
 the script lists a Homebrew praxis if both are on your PATH.
 
-`praxis update` updates a script install in place. A Homebrew install is
+`praxis update` updates a script install in place (on Windows too: it renames
+the running `praxis.exe` aside and removes it at the next start). A Homebrew install is
 updated with `brew upgrade --cask praxis`, which `praxis update` runs for you.
 Latest release: <https://github.com/Facets-cloud/praxis-cli/releases/latest>.
 
