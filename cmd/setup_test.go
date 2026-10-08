@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"io"
 	"os"
@@ -290,5 +292,111 @@ func TestMaybeRefreshEmbeddedSkills(t *testing.T) {
 				t.Errorf("refresh calls = %d, retire calls = %d, want %t", calls, retires, tc.want)
 			}
 		})
+	}
+}
+
+// Setup starts once per release version, outside CI, for ordinary commands.
+func TestMaybeStartSetup(t *testing.T) {
+	tests := []struct {
+		name     string
+		version  string
+		args     []string
+		ci       string
+		marker   string // "" = no setup-version file
+		startErr error
+		want     bool
+	}{
+		{"fresh install", "2.1.0", []string{"status"}, "", "", nil, true},
+		{"after an upgrade", "2.1.0", []string{"mcp", "k8s_cli"}, "", "2.0.2", nil, true},
+		{"bare praxis", "2.1.0", nil, "", "2.0.2", nil, true},
+		{"already ran", "2.1.0", []string{"status"}, "", "2.1.0", nil, false},
+		{"dev build", "dev", []string{"status"}, "", "", nil, false},
+		{"describe build", "2.1.0-3-gabc1234", []string{"status"}, "", "", nil, false},
+		{"CI", "2.1.0", []string{"status"}, "true", "", nil, false},
+		{"prompt hook", "2.1.0", []string{"hook", "user-prompt-submit"}, "", "", nil, false},
+		{"ig hook", "2.1.0", []string{"ig", "hook"}, "", "", nil, false},
+		{"login runs raptor itself", "2.1.0", []string{"login"}, "", "", nil, false},
+		{"update", "2.1.0", []string{"update"}, "", "", nil, false},
+		{"setup itself", "2.1.0", []string{"setup"}, "", "", nil, false},
+		{"start fails", "2.1.0", []string{"status"}, "", "2.0.2", os.ErrPermission, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			for _, k := range httpclient.CIEnvVars() {
+				t.Setenv(k, "")
+			}
+			t.Setenv("CI", tc.ci)
+			marker := filepath.Join(home, ".praxis", setupVersionFile)
+			if tc.marker != "" {
+				if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(marker, []byte(tc.marker+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			origV, origS := version, startSetup
+			starts := 0
+			version = tc.version
+			startSetup = func(string) error { starts++; return tc.startErr }
+			t.Cleanup(func() { version, startSetup = origV, origS })
+
+			maybeStartSetup(tc.args)
+
+			if (starts == 1) != tc.want {
+				t.Fatalf("starts = %d, want started %t", starts, tc.want)
+			}
+			b, _ := os.ReadFile(marker)
+			got := strings.TrimSpace(string(b))
+			wantMarker := tc.marker
+			if tc.want && tc.startErr == nil {
+				wantMarker = tc.version
+			}
+			if got != wantMarker {
+				t.Errorf("setup-version = %q, want %q", got, wantMarker)
+			}
+		})
+	}
+}
+
+// The background setup gets its own log, and the caller does not wait for it.
+func TestStartBackgroundSetup(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".praxis")
+	orig := setupExecutable
+	t.Cleanup(func() { setupExecutable = orig })
+
+	setupExecutable = func() (string, error) { return "/usr/bin/true", nil }
+	if err := startBackgroundSetup(dir); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "setup.log")); err != nil {
+		t.Errorf("setup.log: %v", err)
+	}
+
+	setupExecutable = func() (string, error) { return filepath.Join(dir, "missing"), nil }
+	if err := startBackgroundSetup(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("missing binary: err = %v, want ErrNotExist", err)
+	}
+}
+
+// A setup run records its version, so the next command does not start it again.
+func TestSetupRecordsVersion(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	origV := version
+	version = "2.1.0"
+	t.Cleanup(func() { version = origV })
+	var out bytes.Buffer
+	setupCmd.SetOut(&out)
+	t.Cleanup(func() { setupCmd.SetOut(nil) })
+
+	if err := setupCmd.RunE(setupCmd, nil); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(home, ".praxis", setupVersionFile))
+	if err != nil || strings.TrimSpace(string(b)) != "2.1.0" {
+		t.Errorf("setup-version = %q, %v; want 2.1.0", b, err)
 	}
 }

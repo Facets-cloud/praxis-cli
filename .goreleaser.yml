@@ -78,17 +78,18 @@ homebrew_casks:
     # the staged file keeps its per-arch download name (e.g.
     # `praxis_darwin_arm64`); `target: "praxis"` only renames the
     # symlink in `bin/`, not the file on disk.
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", staged_path.to_s]
-          end
-          # Land the pre-login "getting started" skill so the user's AI host
-          # knows what Praxis is + how to sign up / log in, without waiting for a
-          # first `praxis` run. Best-effort: never fail `brew install`, and the
-          # binary's own first-run auto-install covers non-brew installs.
-          system_command "#{HOMEBREW_PREFIX}/bin/praxis", args: ["setup"], must_succeed: false
+    # This is postflight_steps, not `hooks` (which generates the
+    # deprecated `postflight do` block); goreleaser has no field for it
+    # yet. goreleaser templates the whole cask, so the Homebrew token
+    # staged_path is escaped. Homebrew runs these steps in a sandbox
+    # without the home folder, so `praxis setup` is not here: praxis
+    # starts it once per version (cmd/setup.go maybeStartSetup).
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}"]
+        end
+      end
     commit_author:
       name: praxis-bot
       email: bot@facets.cloud
