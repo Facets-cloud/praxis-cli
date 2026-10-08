@@ -21,10 +21,15 @@ var gitCredentialCmd = &cobra.Command{
 	Short: "Git credential helper: broker short-lived VCS tokens for git push",
 	Long: `Implements git's credential-helper protocol. Configure git per host:
 
-  git config --global credential.https://github.com.helper "!praxis git-credential"
+  git config --global --add credential.https://github.com.helper ""
+  git config --global --add credential.https://github.com.helper "!praxis git-credential"
   git config --global credential.https://github.com.useHttpPath true
-  git config --global credential.https://gitlab.com.helper "!praxis git-credential"
-  git config --global credential.https://bitbucket.org.helper "!praxis git-credential"
+
+Add the same two helper lines for https://gitlab.com and
+https://bitbucket.org. The empty helper clears the helpers that git inherits
+from the system configuration, such as Git Credential Manager (the Git for
+Windows default) or osxkeychain. Without it, git also asks them, and they
+store the short-lived token.
 
 Scope the helper to the specific hosts as shown. An unscoped
 'credential.helper' is invoked by git for every host, and this helper only
