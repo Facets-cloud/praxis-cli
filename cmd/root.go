@@ -195,10 +195,11 @@ func Execute() {
 			quietDailyCheck(time.Now())
 			close(done)
 		}()
+		wait := quietCheckWait()
 		notify = func() {
 			select {
 			case <-done:
-			case <-time.After(updateCheckMaxWait):
+			case <-time.After(wait):
 			}
 		}
 	}

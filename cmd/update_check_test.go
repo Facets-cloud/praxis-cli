@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"os"
 	"strings"
 	"testing"
@@ -521,6 +522,7 @@ func TestSkipUpdateCheck(t *testing.T) {
 		{[]string{"--version"}, true},
 		{[]string{"-v"}, true},
 		{[]string{"completion", "zsh"}, true},
+		{[]string{"setup", "--json"}, true},
 		// A positional value named like a command must NOT suppress the check.
 		{[]string{"login", "--profile", "update"}, false},
 		{[]string{"status", "version"}, false},
@@ -651,6 +653,14 @@ func TestQuietDailyCheckFollowsTheCensusKey(t *testing.T) {
 	if calls != 3 {
 		t.Fatalf("calls=%d after an upgrade, want 3", calls)
 	}
+
+	// A skill change (here a failed raptor skill install) sends the next check.
+	clifeed.RecordRaptorSkillError(errors.New("raptor install skill failed"))
+	quietDailyCheck(now.Add(5 * time.Minute))
+	quietDailyCheck(now.Add(6 * time.Minute))
+	if calls != 4 {
+		t.Fatalf("calls=%d after a skill change, want 4", calls)
+	}
 }
 
 func TestProfileFlagFromArgs(t *testing.T) {
@@ -692,5 +702,19 @@ func TestCacheWithoutCensusKeyIsStale(t *testing.T) {
 	}
 	if got := checkForUpdate(); got != "v1.1.0" || !fetched {
 		t.Fatalf("checkForUpdate() = %q, fetched=%v; want a fetch and v1.1.0", got, fetched)
+	}
+}
+
+// A quiet run waits for its check, except in CI.
+func TestQuietCheckWait(t *testing.T) {
+	for _, k := range httpclient.CIEnvVars() {
+		t.Setenv(k, "")
+	}
+	if got := quietCheckWait(); got != updateCheckMaxWait {
+		t.Errorf("outside CI: %v, want %v", got, updateCheckMaxWait)
+	}
+	t.Setenv("GITLAB_CI", "true")
+	if got := quietCheckWait(); got != 0 {
+		t.Errorf("in CI: %v, want 0", got)
 	}
 }
