@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -188,7 +190,7 @@ func runAutoUpdate(out io.Writer) error {
 }
 
 // autoBrewUpdate runs the prefix's brew. brew exits 0 also when its tap does
-// not have the target yet, so the Caskroom must hold the target afterwards.
+// not have the target yet, so brew must then list the target as installed.
 func autoBrewUpdate(out io.Writer, path, target string) error {
 	caskDir, _ := selfupdate.HomebrewCask(path)
 	brew, token := brewFor(caskDir)
@@ -197,10 +199,25 @@ func autoBrewUpdate(out io.Writer, path, target string) error {
 			return fmt.Errorf("brew %s: %w", strings.Join(args, " "), err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(caskDir), target)); err != nil {
-		return fmt.Errorf("brew did not install %s", target)
+	var listed bytes.Buffer
+	if err := runBrew(&listed, brew, "list", "--cask", "--versions", token); err != nil {
+		return fmt.Errorf("brew list: %w", err)
+	}
+	if !brewListed(listed.String(), token, target) {
+		return fmt.Errorf("brew did not install %s: %s", target, strings.TrimSpace(listed.String()))
 	}
 	return nil
+}
+
+// brewListed reports whether `brew list --cask --versions` output names target
+// on the line of token ("praxis 2.2.0"). brew's warnings share the output.
+func brewListed(out, token, target string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if f := strings.Fields(line); len(f) > 1 && f[0] == token && slices.Contains(f[1:], target) {
+			return true
+		}
+	}
+	return false
 }
 
 // autoRenameUpdate downloads the release beside path, checks its SHA-256 and
@@ -209,6 +226,10 @@ func autoRenameUpdate(path string) error {
 	rel, err := fetchLatestRelease()
 	if err != nil {
 		return err
+	}
+	// The release source can differ from the daily check's; never move down.
+	if compareSemver(rel.TagName, version) <= 0 {
+		return fmt.Errorf("the release source offers %s, which is not newer than %s", rel.TagName, version)
 	}
 	bin, sums, err := selfupdate.AssetForPlatform(rel)
 	if err != nil {

@@ -268,6 +268,19 @@ func TestRunAutoUpdateRefusesAnUnverifiedBuild(t *testing.T) {
 	}
 }
 
+// The fetch can reach another release source than the daily check did.
+func TestRunAutoUpdateRefusesAnOlderRelease(t *testing.T) {
+	bin := autoUpdateEnvFor(t)
+	cachePraxisTarget(t, "v2.2.0")
+	withFakeRelease(t, &selfupdate.Release{TagName: "v2.0.2"}, nil)
+	if err := runAutoUpdate(io.Discard); err == nil || !strings.Contains(err.Error(), "not newer") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := readBin(t, bin); got != "old praxis" {
+		t.Errorf("binary = %q", got)
+	}
+}
+
 func TestRunAutoUpdateOnANewerBinaryDoesNothing(t *testing.T) {
 	bin := autoUpdateEnvFor(t)
 	version = "2.2.0"
@@ -296,10 +309,16 @@ func TestRunAutoUpdateRunsBrew(t *testing.T) {
 			cachePraxisTarget(t, "v2.2.0")
 			var calls []string
 			orig := runBrew
-			runBrew = func(_ io.Writer, _ string, args ...string) error {
+			runBrew = func(w io.Writer, _ string, args ...string) error {
 				calls = append(calls, strings.Join(args, " "))
-				if args[0] == "upgrade" && installs {
-					return os.MkdirAll(filepath.Join(filepath.Dir(filepath.Dir(bin)), "2.2.0"), 0o755)
+				if args[0] == "list" {
+					// A stale 2.2.0 folder must not count: brew names the installed version.
+					v := "2.1.0"
+					if installs {
+						v = "2.2.0"
+					}
+					_, err := io.WriteString(w, "Warning: Calling `postflight` is deprecated! 2.2.0\npraxis "+v+"\n")
+					return err
 				}
 				return nil
 			}
@@ -307,7 +326,7 @@ func TestRunAutoUpdateRunsBrew(t *testing.T) {
 
 			err := runAutoUpdate(io.Discard)
 
-			if strings.Join(calls, "; ") != "update --quiet; upgrade --cask praxis" {
+			if strings.Join(calls, "; ") != "update --quiet; upgrade --cask praxis; list --cask --versions praxis" {
 				t.Errorf("brew calls = %q", calls)
 			}
 			r, _ := readAutoUpdate()
