@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -125,8 +126,10 @@ func AssetForPlatform(r *Release) (binary *Asset, checksums *Asset, err error) {
 	return binary, checksums, nil
 }
 
-// Download fetches the URL into a temp file and returns its path.
-func Download(url string) (string, error) {
+// Download fetches the URL into a temp file in dir, the folder of the binary, so
+// the final rename stays on one file system. When dir is not writable it uses
+// the system temp folder. It returns the file's path.
+func Download(url, dir string) (string, error) {
 	client := &http.Client{Timeout: 5 * time.Minute}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -141,9 +144,11 @@ func Download(url string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download returned %s", resp.Status)
 	}
-	tmp, err := os.CreateTemp("", "praxis-update-*")
+	tmp, err := os.CreateTemp(dir, ".praxis-update-*")
 	if err != nil {
-		return "", err
+		if tmp, err = os.CreateTemp("", "praxis-update-*"); err != nil {
+			return "", err
+		}
 	}
 	if _, err := io.Copy(tmp, resp.Body); err != nil {
 		tmp.Close()
@@ -254,4 +259,52 @@ func AtomicReplace(currentPath, newPath string) error {
 		return fmt.Errorf("rename: %w", err)
 	}
 	return nil
+}
+
+// WriteInPlaceSafe is true on macOS, where an update may write the new binary
+// into the existing file (WriteInPlace). Linux refuses to open a running binary
+// for writing (ETXTBSY). A variable so tests can exercise both paths.
+var WriteInPlaceSafe = runtime.GOOS == "darwin"
+
+// CanReplace reports whether an update can put a new binary at path: by a
+// rename in its folder, or on macOS by a write into the file itself.
+func CanReplace(path string) bool {
+	return Writable(filepath.Dir(path)) || (WriteInPlaceSafe && Writable(path))
+}
+
+// Writable reports whether the user may write to the file or folder at path.
+// It uses access(2) and never opens the file: on Apple silicon, opening a
+// running binary for writing makes macOS kill its next runs.
+func Writable(path string) bool {
+	const wOK = 0x2
+	return syscall.Access(path, wOK) == nil
+}
+
+// OwnedByRoot reports whether user id 0 owns the file at path.
+func OwnedByRoot(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && st.Uid == 0
+}
+
+// WriteInPlace copies src into the existing file dst, which keeps its inode and
+// owner. It opens src first, so a missing src leaves dst as it was.
+func WriteInPlace(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }

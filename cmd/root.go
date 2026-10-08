@@ -140,6 +140,15 @@ func refuseSelection(out io.Writer, asJSON bool, what, hintFmt, name, how, acts 
 
 // Execute runs the root command. Called from main.
 func Execute() {
+	// The temporary praxis of an in-place update does only the update.
+	if len(os.Args) > 1 && os.Args[1] == finishUpdateArg {
+		self, _ := os.Executable()
+		if err := finishUpdate(os.Stdout, self, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			osExit(1)
+		}
+		return
+	}
 	started := time.Now()
 	httpclient.Version, httpclient.Command = version, commandPath(os.Args[1:])
 	// The census must name the profile this command uses, and the background
@@ -195,10 +204,11 @@ func Execute() {
 			quietDailyCheck(time.Now())
 			close(done)
 		}()
+		wait := quietCheckWait()
 		notify = func() {
 			select {
 			case <-done:
-			case <-time.After(updateCheckMaxWait):
+			case <-time.After(wait):
 			}
 		}
 	}

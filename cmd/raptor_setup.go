@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/raptorinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
@@ -215,11 +216,13 @@ func refreshRaptorSkills(out io.Writer, asJSON bool) ([]skillInstallationLite, e
 		if !asJSON {
 			reportRaptorSkills(out, skills, err)
 		}
+		clifeed.RecordRaptorSkillError(err)
 		return skills, err
 	}
 	if !asJSON {
 		reportRaptorSkills(out, nil, err)
 	}
+	clifeed.RecordRaptorSkillError(err)
 	return nil, err
 }
 

@@ -78,7 +78,7 @@ func TestUpdateAlsoUpgradesRaptor(t *testing.T) {
 			withSelfPath(t, self)
 			withFakeRelease(t, &selfupdate.Release{TagName: tc.tag, Assets: []selfupdate.Asset{{Name: "praxis_" + runtime.GOOS + "_" + runtime.GOARCH}}}, nil)
 			origDownload := downloadAsset
-			downloadAsset = func(string) (string, error) {
+			downloadAsset = func(string, string) (string, error) {
 				p := filepath.Join(home, "new-praxis")
 				return p, os.WriteFile(p, []byte("new-praxis"), 0700)
 			}

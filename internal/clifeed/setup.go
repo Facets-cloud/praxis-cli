@@ -2,14 +2,17 @@ package clifeed
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/selfupdate"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
@@ -24,8 +27,55 @@ type setup struct {
 	BinaryPath    string      `json:"binary_path,omitempty"`
 	PathCopies    []pathCopy  `json:"path_copies,omitempty"`
 	Skills        []skillCopy `json:"skills,omitempty"`
+	SkillsError   string      `json:"skills_error,omitempty"`
 	LegacySkills  int         `json:"legacy_skills"`
 	CatalogSkills int         `json:"catalog_skills"`
+}
+
+// raptorSkillErrorFile holds the error of the last failed raptor skill install
+// (~/.praxis/raptor-skill-error). A successful install removes it.
+const raptorSkillErrorFile = "raptor-skill-error"
+
+// RecordRaptorSkillError keeps the error of a raptor skill install for the
+// setup snapshot, or removes the last one when err is nil. Best-effort.
+func RecordRaptorSkillError(err error) {
+	dir, dErr := paths.Dir()
+	if dErr != nil {
+		return
+	}
+	p := filepath.Join(dir, raptorSkillErrorFile)
+	if err == nil {
+		_ = os.Remove(p)
+		return
+	}
+	_ = os.MkdirAll(dir, 0o755)
+	_ = os.WriteFile(p, []byte(err.Error()), 0o644)
+}
+
+func raptorSkillError() string {
+	dir, err := paths.Dir()
+	if err != nil {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(dir, raptorSkillErrorFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// SkillsKey changes when the installed skills change, so the next command
+// sends a new check with a fresh snapshot. A check that a skill command sends
+// at its start would otherwise hold the skills from before that command.
+func SkillsKey() string {
+	home, _ := os.UserHomeDir()
+	skills, legacy, catalog := skillState(home)
+	versions := make([]string, 0, len(skills))
+	for _, k := range skills {
+		versions = append(versions, k.Host+"="+k.Version)
+	}
+	sort.Strings(versions)
+	return fmt.Sprintf("%d/%d/%t/%s", legacy, catalog, raptorSkillError() != "", strings.Join(versions, ","))
 }
 
 type pathCopy struct {
@@ -63,6 +113,7 @@ func collectSetup() *setup {
 	}
 	s.PathCopies = pathCopies(os.Getenv("PATH"), self, home)
 	s.Skills, s.LegacySkills, s.CatalogSkills = skillState(home)
+	s.SkillsError = raptorSkillError()
 	return s
 }
 

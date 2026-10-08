@@ -81,8 +81,9 @@ Homebrew owns this copy, so upgrade it with
 `brew update && brew upgrade --cask praxis`. Keep one install method:
 the script lists a Homebrew praxis if both are on your PATH.
 
-`praxis update` updates a script install in place. Latest release:
-<https://github.com/Facets-cloud/praxis-cli/releases/latest>.
+`praxis update` updates a script install in place. A Homebrew install is
+updated with `brew upgrade --cask praxis`, which `praxis update` runs for you.
+Latest release: <https://github.com/Facets-cloud/praxis-cli/releases/latest>.
 
 ## Set up — one command
 
@@ -276,7 +277,8 @@ praxis refresh-skills [--project] [--json]
    (like `praxis login --local`, minus auth) and install there.
 
 praxis update [--yes] [--json]
-   Self-update binary. --json implies --yes.
+   Update praxis (with brew for a Homebrew install), then raptor.
+   --json implies --yes.
 
 praxis version [--json]   build metadata
 praxis completion <shell> shell completion script (bash/zsh/fish/ps)

@@ -2,9 +2,14 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
@@ -27,6 +32,8 @@ var (
 	parseChecksums     = selfupdate.ParseChecksums
 	atomicReplace      = selfupdate.AtomicReplace
 	selfPath           = os.Executable
+	handOffUpdate      = startUpdateHelper
+	runBrew            = execBrew
 
 	// Freshness-engine seams (see cmd/update_check.go). raptor is a second tool
 	// the same engine tracks; these let tests stub its release + local version.
@@ -55,8 +62,9 @@ Then run 'raptor upgrade', also when praxis is already current, and have the
 new raptor refresh its skill. A missing raptor is installed to ~/.local/bin
 first. --yes and --json also pass --yes to raptor.
 
-Homebrew installs are left to Homebrew: this command refuses them and names
-'brew upgrade --cask praxis', so brew's recorded version stays true.`,
+A Homebrew install is updated with Homebrew ('brew update', then 'brew upgrade
+--cask praxis'), so brew's recorded version stays true. When praxis cannot run
+that brew, it names the command instead.`,
 	// raptor names the same operation `raptor upgrade`, and Homebrew names it
 	// `brew upgrade`. Accept both verbs here so neither habit hits an error.
 	Aliases: []string{"upgrade"},
@@ -105,8 +113,16 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 			return fmt.Errorf("locate self: %w", err)
 		}
 		// Homebrew owns its own tree; writing into it desyncs brew's recorded
-		// version from the file on disk. Refuse and name the right command.
-		if _, ok := selfupdate.HomebrewCask(myPath); ok {
+		// version from the file on disk, so brew does the update. Without a brew
+		// that can do it, name the right command.
+		caskDir, isBrew := selfupdate.HomebrewCask(myPath)
+		brew, token := "", ""
+		if isBrew {
+			brew, token = brewFor(caskDir)
+		} else if !selfupdate.CanReplace(myPath) {
+			return notReplaceableError(myPath)
+		}
+		if isBrew && brew == "" {
 			if asJSON {
 				return finishToolUpdate(out, asJSON, autoYes, map[string]any{
 					"updated":  false,
@@ -127,8 +143,12 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 		if !asJSON {
 			fmt.Fprintf(out, "Update available: %s → %s\n", current, latest)
 			fmt.Fprintf(out, "  release: %s\n", rel.HTMLURL)
-			fmt.Fprintf(out, "  asset:   %s\n", binAsset.Name)
-			fmt.Fprintf(out, "  target:  %s\n", myPath)
+			if isBrew {
+				fmt.Fprintf(out, "  with:    %s upgrade --cask %s\n", brew, token)
+			} else {
+				fmt.Fprintf(out, "  asset:   %s\n", binAsset.Name)
+				fmt.Fprintf(out, "  target:  %s\n", myPath)
+			}
 		}
 
 		if !autoYes {
@@ -138,6 +158,10 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 				fmt.Fprintln(out, "Aborted.")
 				return nil
 			}
+		}
+
+		if isBrew {
+			return brewUpdate(out, asJSON, brew, token, current, latest)
 		}
 
 		var expected string
@@ -157,7 +181,7 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 		if !asJSON {
 			fmt.Fprintln(out, "Downloading…")
 		}
-		tmpPath, err := downloadAsset(binAsset.BrowserDownloadURL)
+		tmpPath, err := downloadAsset(binAsset.BrowserDownloadURL, filepath.Dir(myPath))
 		if err != nil {
 			return fmt.Errorf("download: %w", err)
 		}
@@ -178,32 +202,164 @@ Homebrew installs are left to Homebrew: this command refuses them and names
 			fmt.Fprintln(out, "Installing…")
 		}
 		if err := atomicReplace(myPath, tmpPath); err != nil {
-			return fmt.Errorf("install: %w", err)
-		}
-
-		// No skill refresh here: this process still holds the old skill text.
-		// The new binary rewrites the praxis skill on its next run
-		// (maybeRefreshEmbeddedSkills).
-
-		// The binary just moved for anyone whose hooks were wired from a
-		// version-stamped path; re-point them so the update does not leave a
-		// hook pointing at a directory that no longer exists.
-		repaired, repairWarn := repairPraxisHooks()
-
-		if asJSON {
-			payload := map[string]any{
-				"updated":      true,
-				"from_version": current,
-				"to_version":   latest,
+			if !selfupdate.WriteInPlaceSafe || !selfupdate.Writable(myPath) {
+				return fmt.Errorf("install: %w", err)
 			}
-			return finishToolUpdate(out, asJSON, true, payload)
+			// Returns only on failure: the helper finishes the update.
+			return handOffUpdate(tmpPath, myPath, current, latest, asJSON)
 		}
-
-		fmt.Fprintf(out, "✓ Updated to %s.\n", latest)
-		printHookRepair(out, asJSON, repaired, repairWarn)
-		fmt.Fprintln(out, "  The praxis skill updates on the next praxis command. For catalog changes, run `praxis refresh-skills`.")
-		return finishToolUpdate(out, asJSON, true, nil)
+		return afterUpdate(out, asJSON, current, latest)
 	},
+}
+
+// afterUpdate reports a replaced binary and runs the raptor step.
+func afterUpdate(out io.Writer, asJSON bool, from, to string) error {
+	// No skill refresh here: this process still holds the old skill text.
+	// The new binary rewrites the praxis skill on its next run
+	// (maybeRefreshEmbeddedSkills).
+
+	// The binary just moved for anyone whose hooks were wired from a
+	// version-stamped path; re-point them so the update does not leave a
+	// hook pointing at a directory that no longer exists.
+	repaired, repairWarn := repairPraxisHooks()
+
+	if asJSON {
+		payload := map[string]any{
+			"updated":      true,
+			"from_version": from,
+			"to_version":   to,
+		}
+		return finishToolUpdate(out, asJSON, true, payload)
+	}
+
+	fmt.Fprintf(out, "✓ Updated to %s.\n", to)
+	printHookRepair(out, asJSON, repaired, repairWarn)
+	fmt.Fprintln(out, "  The praxis skill updates on the next praxis command. For catalog changes, run `praxis refresh-skills`.")
+	return finishToolUpdate(out, asJSON, true, nil)
+}
+
+// notReplaceableError tells the user why praxis cannot replace its own file and
+// how to fix it.
+func notReplaceableError(path string) error {
+	reason := "you cannot write to this file or to its folder"
+	switch {
+	case selfupdate.OwnedByRoot(path):
+		reason = "root owns this file, and you cannot write to its folder"
+	case !selfupdate.WriteInPlaceSafe && selfupdate.Writable(path):
+		reason = "you cannot write to its folder, and on this system praxis cannot change its own file while it runs"
+	}
+	return fmt.Errorf(`praxis cannot update %s: %s.
+Do one of these:
+  - Run: sudo praxis update
+  - Remove this copy (sudo rm %s), then install praxis again in ~/.local/bin. You can update a copy there without sudo`,
+		path, reason, path)
+}
+
+// finishUpdateArg is the first argument of the temporary praxis that
+// startUpdateHelper starts. Execute sends it to finishUpdate before anything
+// else.
+const (
+	finishUpdateArg     = "__finish-update"
+	updateHelperPrefix  = "praxis-upgrade-helper-"
+	updateHelperArgsLen = 5 // download, binary, from, to, "json" or "text"
+)
+
+// startUpdateHelper copies the running praxis to a temporary file and execs it,
+// so the copy writes the download into the binary (finishUpdate) while no
+// process runs from the binary. On Apple silicon, a binary that writes its own
+// file has its next runs killed by macOS for about 40 seconds. The process keeps
+// its PID. It returns only on failure.
+func startUpdateHelper(tmpPath, target, from, to string, asJSON bool) error {
+	helper, err := os.CreateTemp("", updateHelperPrefix+"*")
+	if err != nil {
+		return fmt.Errorf("install: %w", err)
+	}
+	self, err := os.Open(target)
+	if err == nil {
+		_, err = io.Copy(helper, self)
+		self.Close()
+	}
+	if cerr := helper.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(helper.Name(), 0o755)
+	}
+	format := "text"
+	if asJSON {
+		format = "json"
+	}
+	if err == nil {
+		err = syscall.Exec(helper.Name(), []string{helper.Name(), finishUpdateArg, tmpPath, target, from, to, format}, os.Environ())
+	}
+	os.Remove(helper.Name())
+	return fmt.Errorf("install: %w", err)
+}
+
+// finishUpdate runs in the temporary praxis that startUpdateHelper starts. It
+// writes the download into the binary, removes the download and itself, and
+// finishes the update. self is a copy of the old praxis, so a failed write puts
+// the old binary back. It acts only as a helper file with its arguments.
+func finishUpdate(out io.Writer, self string, args []string) error {
+	if len(args) != updateHelperArgsLen || !strings.HasPrefix(filepath.Base(self), updateHelperPrefix) {
+		return fmt.Errorf("%s is for praxis update only", finishUpdateArg)
+	}
+	defer os.Remove(self)
+	defer os.Remove(args[0])
+	if err := selfupdate.WriteInPlace(args[0], args[1]); err != nil {
+		if rerr := selfupdate.WriteInPlace(self, args[1]); rerr != nil {
+			return fmt.Errorf("install: %w; restoring the old binary also failed: %w", err, rerr)
+		}
+		return fmt.Errorf("install: %w", err)
+	}
+	return afterUpdate(out, args[4] == "json", args[2], args[3])
+}
+
+// brewFor returns the brew of the Homebrew prefix that staged caskDir
+// (<prefix>/Caskroom/<token>/<version>) and the cask token. It returns "" when
+// that brew is missing or the user cannot write to the cask's folder.
+func brewFor(caskDir string) (brew, token string) {
+	tokenDir := filepath.Dir(caskDir)
+	brew = filepath.Join(filepath.Dir(filepath.Dir(tokenDir)), "bin", "brew")
+	if info, err := os.Stat(brew); err != nil || info.Mode()&0o111 == 0 || !selfupdate.Writable(tokenDir) {
+		return "", ""
+	}
+	return brew, filepath.Base(tokenDir)
+}
+
+// brewUpdate updates a Homebrew install with brew itself, so brew's recorded
+// version stays true, then runs the raptor step. A JSON caller gets brew's
+// output only when brew fails.
+func brewUpdate(out io.Writer, asJSON bool, brew, token, from, to string) error {
+	var log bytes.Buffer
+	w := out
+	if asJSON {
+		w = &log
+	}
+	for _, args := range [][]string{{"update", "--quiet"}, {"upgrade", "--cask", token}} {
+		if err := runBrew(w, brew, args...); err != nil {
+			return fmt.Errorf("brew %s: %w\n%s", strings.Join(args, " "), err, log.String())
+		}
+	}
+	if asJSON {
+		return finishToolUpdate(out, asJSON, true, map[string]any{
+			"updated":      true,
+			"from_version": from,
+			"to_version":   to,
+			"via":          "homebrew",
+		})
+	}
+	fmt.Fprintf(out, "✓ Updated with Homebrew (%s).\n", token)
+	fmt.Fprintln(out, "  The praxis skill updates on the next praxis command. For catalog changes, run `praxis refresh-skills`.")
+	return finishToolUpdate(out, asJSON, true, nil)
+}
+
+// execBrew runs brew without its own auto-update, cleanup and hints.
+func execBrew(w io.Writer, brew string, args ...string) error {
+	c := exec.Command(brew, args...)
+	c.Env = append(os.Environ(), "HOMEBREW_NO_AUTO_UPDATE=1", "HOMEBREW_NO_INSTALL_CLEANUP=1", "HOMEBREW_NO_ENV_HINTS=1")
+	c.Stdout, c.Stderr = w, w
+	return c.Run()
 }
 
 // latestPraxisRelease returns the release praxis must move to: from the

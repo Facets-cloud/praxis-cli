@@ -288,11 +288,15 @@ func TestDownload_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	path, err := Download(srv.URL)
+	dir := t.TempDir()
+	path, err := Download(srv.URL, dir)
 	if err != nil {
 		t.Fatalf("Download err = %v", err)
 	}
 	defer os.Remove(path)
+	if filepath.Dir(path) != dir {
+		t.Errorf("downloaded to %q, want the binary's folder %q", path, dir)
+	}
 
 	got, err := os.ReadFile(path)
 	if err != nil {
@@ -309,7 +313,7 @@ func TestDownload_404(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := Download(srv.URL); err == nil {
+	if _, err := Download(srv.URL, t.TempDir()); err == nil {
 		t.Fatal("expected error on 404, got nil")
 	}
 }
@@ -474,5 +478,101 @@ func TestHomebrewCask(t *testing.T) {
 				t.Fatalf("dir = %q, want %q", dir, filepath.Dir(tc.in))
 			}
 		})
+	}
+}
+
+// A folder the user cannot write sends the download to the system temp folder.
+func TestDownload_FallsBackToTheTempFolder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("x"))
+	}))
+	defer srv.Close()
+	path, err := Download(srv.URL, filepath.Join(t.TempDir(), "missing"))
+	if err != nil {
+		t.Fatalf("Download err = %v", err)
+	}
+	defer os.Remove(path)
+	if !strings.HasPrefix(filepath.Base(path), "praxis-update-") {
+		t.Errorf("path = %q, want the system temp file", path)
+	}
+}
+
+func TestCanReplace(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file modes")
+	}
+	orig := WriteInPlaceSafe
+	t.Cleanup(func() { WriteInPlaceSafe = orig })
+	tests := []struct {
+		name        string
+		dirMode     os.FileMode
+		fileMode    os.FileMode
+		inPlaceSafe bool
+		want        bool
+	}{
+		{"writable folder", 0o755, 0o555, false, true},
+		{"macOS, writable file only", 0o555, 0o755, true, true},
+		{"Linux, writable file only", 0o555, 0o755, false, false},
+		{"nothing writable", 0o555, 0o555, true, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			WriteInPlaceSafe = tc.inPlaceSafe
+			dir := t.TempDir()
+			p := filepath.Join(dir, "praxis")
+			if err := os.WriteFile(p, []byte("x"), tc.fileMode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dir, tc.dirMode); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+			if got := CanReplace(p); got != tc.want {
+				t.Errorf("CanReplace = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+// WriteInPlace keeps the inode, and a missing source leaves the file as it was.
+func TestWriteInPlace(t *testing.T) {
+	dir := t.TempDir()
+	dst, src := filepath.Join(dir, "praxis"), filepath.Join(dir, "new")
+	if err := os.WriteFile(dst, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(dst)
+	if err := WriteInPlace(filepath.Join(dir, "missing"), dst); err == nil {
+		t.Fatal("want an error for a missing source")
+	}
+	if got, _ := os.ReadFile(dst); string(got) != "old" {
+		t.Fatalf("a missing source changed the file to %q", got)
+	}
+	if err := os.WriteFile(src, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteInPlace(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.Stat(dst)
+	got, _ := os.ReadFile(dst)
+	if string(got) != "new" || !os.SameFile(before, after) {
+		t.Errorf("content %q, same file %t", got, os.SameFile(before, after))
+	}
+}
+
+func TestOwnedByRoot(t *testing.T) {
+	if !OwnedByRoot("/bin/sh") {
+		t.Skip("/bin/sh is not owned by root here")
+	}
+	p := filepath.Join(t.TempDir(), "x")
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if os.Geteuid() != 0 && OwnedByRoot(p) {
+		t.Error("a file the user made is not owned by root")
+	}
+	if OwnedByRoot(filepath.Join(t.TempDir(), "missing")) {
+		t.Error("a missing file is not owned by root")
 	}
 }
