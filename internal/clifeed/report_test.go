@@ -260,3 +260,20 @@ func TestFlushRotatesKeepsAndDrops(t *testing.T) {
 		t.Fatalf("queue = %v", names)
 	}
 }
+
+// Windows' clock can repeat a value; queued reports must still all survive.
+func TestQueueReportKeepsEveryReportWhenTheClockRepeats(t *testing.T) {
+	home := isolate(t)
+	orig := queueNow
+	fixed := time.Unix(0, 1791469498900175200)
+	queueNow = func() time.Time { return fixed }
+	t.Cleanup(func() { queueNow = orig })
+	for i := 0; i < 4; i++ {
+		if err := QueueReport(NewReport("queued "+strconv.Itoa(i)), "praxis"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := countFiles(t, filepath.Join(home, reportQueueDir)); n != 4 {
+		t.Fatalf("%d queued files, want 4", n)
+	}
+}
