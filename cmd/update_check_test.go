@@ -718,3 +718,25 @@ func TestQuietCheckWait(t *testing.T) {
 		t.Errorf("in CI: %v, want 0", got)
 	}
 }
+
+// The Execute box covers praxis only: raptor prints its own notice and
+// upgrades itself, so praxis neither shows a raptor box nor runs raptor.
+func TestCollectStaleNagsHasNoRaptorBox(t *testing.T) {
+	fakeHome(t)
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+	origV, origRV, origF := version, raptorLocalVersion, fetchRaptorTag
+	t.Cleanup(func() { version, raptorLocalVersion, fetchRaptorTag = origV, origRV, origF })
+	raptorLocalVersion = func() (string, bool) { t.Error("praxis ran raptor --version"); return "0.1.0", true }
+	fetchRaptorTag = func() (string, error) { t.Error("praxis fetched raptor's release"); return "v0.2.0", nil }
+	withFakeRelease(t, &selfupdate.Release{TagName: "v9.9.9"}, nil)
+
+	version = "9.9.9"
+	if nags := collectStaleNags(); len(nags) != 0 {
+		t.Errorf("current praxis: nags = %+v", nags)
+	}
+	version = "2.1.0"
+	nags := collectStaleNags()
+	if len(nags) != 1 || nags[0].Freshness.Tool != "praxis" || !strings.Contains(nags[0].Action, "praxis update") {
+		t.Errorf("nags = %+v", nags)
+	}
+}
