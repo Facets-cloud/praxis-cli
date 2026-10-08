@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/claudehooks"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
@@ -308,8 +309,14 @@ func maybeRefreshEmbeddedSkills(args []string) {
 	_, _ = retireReplacedGlobals(replacementAt)
 }
 
-// setupVersionFile holds the praxis version whose setup last ran.
-const setupVersionFile = "setup-version"
+// setupVersionFile holds the praxis version whose setup last succeeded. The
+// claim file lets one process start setup; a failed setup leaves it, so the
+// next start waits setupRetryAfter.
+const (
+	setupVersionFile = "setup-version"
+	setupClaimFile   = "setup.claim"
+	setupRetryAfter  = time.Hour
+)
 
 var (
 	startSetup      = startBackgroundSetup
@@ -336,10 +343,34 @@ func maybeStartSetup(args []string) {
 	if b, err := os.ReadFile(filepath.Join(dir, setupVersionFile)); err == nil && strings.TrimSpace(string(b)) == version {
 		return
 	}
-	// Mark before the setup ends, so parallel commands start it only once.
-	if startSetup(dir) == nil {
-		markSetupVersion()
+	claim := filepath.Join(dir, setupClaimFile)
+	if !claimSetup(claim, time.Now()) {
+		return
 	}
+	if startSetup(dir) != nil {
+		_ = os.Remove(claim)
+	}
+}
+
+// claimSetup creates the claim file exclusively, so parallel commands start
+// setup once. A claim older than setupRetryAfter is taken over.
+func claimSetup(path string, now time.Time) bool {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false
+	}
+	for range 2 {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			_ = f.Close()
+			return true
+		}
+		info, err := os.Stat(path)
+		if err != nil || now.Sub(info.ModTime()) < setupRetryAfter {
+			return false
+		}
+		_ = os.Remove(path)
+	}
+	return false
 }
 
 // startBackgroundSetup runs `praxis setup --json` in its own session, with its
@@ -366,10 +397,12 @@ func startBackgroundSetup(dir string) error {
 	return c.Process.Release()
 }
 
-// markSetupVersion records that this version ran setup (best-effort).
+// markSetupVersion records that this version's setup succeeded and releases
+// the claim (best-effort).
 func markSetupVersion() {
 	if dir, err := paths.Dir(); err == nil {
 		_ = os.MkdirAll(dir, 0o755)
 		_ = os.WriteFile(filepath.Join(dir, setupVersionFile), []byte(version+"\n"), 0o644)
+		_ = os.Remove(filepath.Join(dir, setupClaimFile))
 	}
 }

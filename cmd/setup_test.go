@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/claudehooks"
 )
@@ -295,30 +296,35 @@ func TestMaybeRefreshEmbeddedSkills(t *testing.T) {
 	}
 }
 
-// Setup starts once per release version, outside CI, for ordinary commands.
+// Setup starts once per release version, outside CI, for ordinary commands,
+// and only from the process that takes the claim.
 func TestMaybeStartSetup(t *testing.T) {
 	tests := []struct {
 		name     string
 		version  string
 		args     []string
 		ci       string
-		marker   string // "" = no setup-version file
+		marker   string        // "" = no setup-version file
+		claimAge time.Duration // 0 = no claim file
 		startErr error
 		want     bool
 	}{
-		{"fresh install", "2.1.0", []string{"status"}, "", "", nil, true},
-		{"after an upgrade", "2.1.0", []string{"mcp", "k8s_cli"}, "", "2.0.2", nil, true},
-		{"bare praxis", "2.1.0", nil, "", "2.0.2", nil, true},
-		{"already ran", "2.1.0", []string{"status"}, "", "2.1.0", nil, false},
-		{"dev build", "dev", []string{"status"}, "", "", nil, false},
-		{"describe build", "2.1.0-3-gabc1234", []string{"status"}, "", "", nil, false},
-		{"CI", "2.1.0", []string{"status"}, "true", "", nil, false},
-		{"prompt hook", "2.1.0", []string{"hook", "user-prompt-submit"}, "", "", nil, false},
-		{"ig hook", "2.1.0", []string{"ig", "hook"}, "", "", nil, false},
-		{"login runs raptor itself", "2.1.0", []string{"login"}, "", "", nil, false},
-		{"update", "2.1.0", []string{"update"}, "", "", nil, false},
-		{"setup itself", "2.1.0", []string{"setup"}, "", "", nil, false},
-		{"start fails", "2.1.0", []string{"status"}, "", "2.0.2", os.ErrPermission, true},
+		{"fresh install", "2.1.0", []string{"status"}, "", "", 0, nil, true},
+		{"after an upgrade", "2.1.0", []string{"mcp", "k8s_cli"}, "", "2.0.2", 0, nil, true},
+		{"bare praxis", "2.1.0", nil, "", "2.0.2", 0, nil, true},
+		{"already ran", "2.1.0", []string{"status"}, "", "2.1.0", 0, nil, false},
+		{"another process started it", "2.1.0", []string{"status"}, "", "2.0.2", time.Minute, nil, false},
+		{"failed setup, retry later", "2.1.0", []string{"status"}, "", "2.0.2", 59 * time.Minute, nil, false},
+		{"failed setup, retry now", "2.1.0", []string{"status"}, "", "2.0.2", 2 * time.Hour, nil, true},
+		{"dev build", "dev", []string{"status"}, "", "", 0, nil, false},
+		{"describe build", "2.1.0-3-gabc1234", []string{"status"}, "", "", 0, nil, false},
+		{"CI", "2.1.0", []string{"status"}, "true", "", 0, nil, false},
+		{"prompt hook", "2.1.0", []string{"hook", "user-prompt-submit"}, "", "", 0, nil, false},
+		{"ig hook", "2.1.0", []string{"ig", "hook"}, "", "", 0, nil, false},
+		{"login runs raptor itself", "2.1.0", []string{"login"}, "", "", 0, nil, false},
+		{"update", "2.1.0", []string{"update"}, "", "", 0, nil, false},
+		{"setup itself", "2.1.0", []string{"setup"}, "", "", 0, nil, false},
+		{"start fails", "2.1.0", []string{"status"}, "", "2.0.2", 0, os.ErrPermission, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -328,12 +334,22 @@ func TestMaybeStartSetup(t *testing.T) {
 				t.Setenv(k, "")
 			}
 			t.Setenv("CI", tc.ci)
-			marker := filepath.Join(home, ".praxis", setupVersionFile)
+			dir := filepath.Join(home, ".praxis")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			marker, claim := filepath.Join(dir, setupVersionFile), filepath.Join(dir, setupClaimFile)
 			if tc.marker != "" {
-				if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
+				if err := os.WriteFile(marker, []byte(tc.marker+"\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(marker, []byte(tc.marker+"\n"), 0o644); err != nil {
+			}
+			if tc.claimAge > 0 {
+				if err := os.WriteFile(claim, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				old := time.Now().Add(-tc.claimAge)
+				if err := os.Chtimes(claim, old, old); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -348,14 +364,23 @@ func TestMaybeStartSetup(t *testing.T) {
 			if (starts == 1) != tc.want {
 				t.Fatalf("starts = %d, want started %t", starts, tc.want)
 			}
+			// Only the setup process records the version.
 			b, _ := os.ReadFile(marker)
-			got := strings.TrimSpace(string(b))
-			wantMarker := tc.marker
-			if tc.want && tc.startErr == nil {
-				wantMarker = tc.version
+			if got := strings.TrimSpace(string(b)); got != tc.marker {
+				t.Errorf("setup-version = %q, want %q", got, tc.marker)
 			}
-			if got != wantMarker {
-				t.Errorf("setup-version = %q, want %q", got, wantMarker)
+			info, err := os.Stat(claim)
+			switch {
+			case tc.want && tc.startErr == nil:
+				if err != nil || time.Since(info.ModTime()) > time.Minute {
+					t.Errorf("want a fresh claim, got %v", err)
+				}
+			case tc.want:
+				if err == nil {
+					t.Error("a failed start must release the claim")
+				}
+			case tc.claimAge == 0 && err == nil:
+				t.Error("a skipped command must not take the claim")
 			}
 		})
 	}
@@ -381,10 +406,13 @@ func TestStartBackgroundSetup(t *testing.T) {
 	}
 }
 
-// A setup run records its version, so the next command does not start it again.
+// A successful setup records its version and releases the claim.
 func TestSetupRecordsVersion(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	if !claimSetup(filepath.Join(home, ".praxis", setupClaimFile), time.Now()) {
+		t.Fatal("claim")
+	}
 	origV := version
 	version = "2.1.0"
 	t.Cleanup(func() { version = origV })
@@ -398,5 +426,8 @@ func TestSetupRecordsVersion(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(home, ".praxis", setupVersionFile))
 	if err != nil || strings.TrimSpace(string(b)) != "2.1.0" {
 		t.Errorf("setup-version = %q, %v; want 2.1.0", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".praxis", setupClaimFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("claim after a successful setup: %v, want removed", err)
 	}
 }
