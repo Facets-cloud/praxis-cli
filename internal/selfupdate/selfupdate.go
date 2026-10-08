@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -246,7 +245,8 @@ func HomebrewCask(path string) (string, bool) {
 // AtomicReplace replaces the binary at currentPath with the file at newPath.
 // On Linux/macOS, os.Rename is atomic and safe to use against a running
 // executable: the kernel maps exec'd images, so the on-disk file can be
-// replaced without disturbing the running process.
+// replaced without disturbing the running process. Windows cannot replace a
+// running .exe, so replaceFile first renames it aside (see replace_windows.go).
 func AtomicReplace(currentPath, newPath string) error {
 	if info, err := os.Stat(currentPath); err == nil {
 		if err := os.Chmod(newPath, info.Mode()); err != nil {
@@ -255,7 +255,7 @@ func AtomicReplace(currentPath, newPath string) error {
 	} else if err := os.Chmod(newPath, 0755); err != nil {
 		return fmt.Errorf("chmod new binary: %w", err)
 	}
-	if err := os.Rename(newPath, currentPath); err != nil {
+	if err := replaceFile(newPath, currentPath); err != nil {
 		return fmt.Errorf("rename: %w", err)
 	}
 	return nil
@@ -270,24 +270,6 @@ var WriteInPlaceSafe = runtime.GOOS == "darwin"
 // rename in its folder, or on macOS by a write into the file itself.
 func CanReplace(path string) bool {
 	return Writable(filepath.Dir(path)) || (WriteInPlaceSafe && Writable(path))
-}
-
-// Writable reports whether the user may write to the file or folder at path.
-// It uses access(2) and never opens the file: on Apple silicon, opening a
-// running binary for writing makes macOS kill its next runs.
-func Writable(path string) bool {
-	const wOK = 0x2
-	return syscall.Access(path, wOK) == nil
-}
-
-// OwnedByRoot reports whether user id 0 owns the file at path.
-func OwnedByRoot(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	return ok && st.Uid == 0
 }
 
 // WriteInPlace copies src into the existing file dst, which keeps its inode and

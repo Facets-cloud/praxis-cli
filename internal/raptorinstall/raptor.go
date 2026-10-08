@@ -34,14 +34,14 @@ func ensure(client *http.Client, endpoint, goos, goarch string) (Result, error) 
 	} else if errors.Is(err, exec.ErrDot) {
 		return Result{}, err
 	}
-	if (goos != "darwin" && goos != "linux") || (goarch != "amd64" && goarch != "arm64") {
+	if (goos != "darwin" && goos != "linux" && goos != "windows") || (goarch != "amd64" && goarch != "arm64") {
 		return Result{}, fmt.Errorf("raptor has no supported binary for %s/%s", goos, goarch)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return Result{}, err
 	}
-	dest := filepath.Join(home, ".local", "bin", "raptor")
+	dest := filepath.Join(home, ".local", "bin", "raptor"+exeSuffix(goos))
 	if _, err := os.Lstat(dest); !os.IsNotExist(err) {
 		return Result{}, fmt.Errorf("preserving existing non-executable Raptor path %s; repair it explicitly", dest)
 	}
@@ -61,7 +61,7 @@ func ensure(client *http.Client, endpoint, goos, goarch string) (Result, error) 
 	if err != nil {
 		return Result{}, fmt.Errorf("raptor release metadata: %w", err)
 	}
-	name := "raptor-" + goos + "-" + goarch
+	name := "raptor-" + goos + "-" + goarch + exeSuffix(goos)
 	for _, asset := range release.Assets {
 		if asset.Name != name {
 			continue
@@ -148,4 +148,12 @@ func Find() (string, error) {
 		return "", err
 	}
 	return exec.LookPath(filepath.Join(home, ".local", "bin", "raptor"))
+}
+
+// exeSuffix is ".exe" for a Windows binary.
+func exeSuffix(goos string) string {
+	if goos == "windows" {
+		return ".exe"
+	}
+	return ""
 }

@@ -2,8 +2,8 @@ version: 2
 
 # Praxis CLI release config.
 #
-# Produces RAW BINARIES (not tarballs) for darwin/linux × amd64/arm64,
-# named `praxis_<os>_<arch>`. The `praxis update` self-updater downloads
+# Produces RAW BINARIES (not tarballs) for darwin/linux/windows × amd64/arm64,
+# named `praxis_<os>_<arch>` (`.exe` on Windows). The `praxis update` self-updater downloads
 # these directly and verifies them against checksums.txt.
 
 project_name: praxis
@@ -21,6 +21,7 @@ builds:
     goos:
       - darwin
       - linux
+      - windows
     goarch:
       - amd64
       - arm64

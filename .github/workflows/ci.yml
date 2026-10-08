@@ -46,6 +46,21 @@ jobs:
           GOTOOLCHAIN: auto
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+  # Windows has its own file lock, rename and update code (*_windows.go), so the
+  # tests run there too.
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: true
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...
+
   goreleaser-check:
     runs-on: ubuntu-latest
     steps:

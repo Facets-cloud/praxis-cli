@@ -1,3 +1,8 @@
+//go:build !windows
+
+// Unix only: this test holds the lock with flock(2) from outside the package.
+// skillinstall's lock_test.go covers the Windows lock (LockFileEx).
+
 package agentinstall
 
 import (

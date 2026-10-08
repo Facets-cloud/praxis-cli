@@ -113,7 +113,7 @@ func TestEnsureUnsupportedAndMalformedRelease(t *testing.T) {
 		name, goos, body, want string
 		status                 int
 	}{
-		{"unsupported", "windows", `{}`, "supported", 200},
+		{"unsupported", "freebsd", `{}`, "supported", 200},
 		{"malformed", "linux", `{`, "metadata", 200},
 		{"missing-asset", "linux", `{"assets":[]}`, "no asset", 200},
 		{"metadata-unavailable", "linux", `{}`, "HTTP 403", 403},
@@ -181,5 +181,13 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestExeSuffix(t *testing.T) {
+	for goos, want := range map[string]string{"windows": ".exe", "darwin": "", "linux": ""} {
+		if got := exeSuffix(goos); got != want {
+			t.Errorf("exeSuffix(%q) = %q, want %q", goos, got, want)
+		}
 	}
 }

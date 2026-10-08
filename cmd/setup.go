@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/claudehooks"
@@ -390,7 +389,7 @@ func startBackgroundSetup(dir string) error {
 	defer log.Close()
 	c := exec.Command(self, "setup", "--json")
 	c.Stdout, c.Stderr = log, log
-	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	detach(c)
 	if err := c.Start(); err != nil {
 		return err
 	}

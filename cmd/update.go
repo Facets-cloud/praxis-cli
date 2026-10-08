@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
@@ -290,7 +289,7 @@ func startUpdateHelper(tmpPath, target, from, to string, asJSON bool) error {
 		format = "json"
 	}
 	if err == nil {
-		err = syscall.Exec(helper.Name(), []string{helper.Name(), finishUpdateArg, tmpPath, target, from, to, format}, os.Environ())
+		err = execHelper(helper.Name(), []string{helper.Name(), finishUpdateArg, tmpPath, target, from, to, format})
 	}
 	os.Remove(helper.Name())
 	return fmt.Errorf("install: %w", err)

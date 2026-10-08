@@ -605,3 +605,8 @@ func TestBrewUpdate_TextOutput(t *testing.T) {
 		}
 	}
 }
+
+// The start-up clean-up never fails a command, on any platform.
+func TestCleanupOldBinariesIsSafe(t *testing.T) {
+	cleanupOldBinaries()
+}

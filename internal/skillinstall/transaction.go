@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
@@ -61,10 +60,11 @@ func withSkillLock(fn func() error) error {
 		return err
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	unlock, err := lockFile(f)
+	if err != nil {
 		return fmt.Errorf("lock skills: %w", err)
 	}
-	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+	defer unlock()
 	return fn()
 }
 
