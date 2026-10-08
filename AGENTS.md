@@ -354,8 +354,10 @@ Override at build time: `make build VERSION=v0.5.0-dev`.
 ## Distribution
 
 Released via Homebrew (`Facets-cloud/homebrew-tap`) and direct GitHub
-Releases binary download. `praxis update` self-updates against GitHub
-Releases.
+Releases binary download. The install script
+(`curl -fsSL https://cross.facetsapp.cloud/cli/install.sh | sh -s -- praxis`,
+served by cross-control-plane) puts the binary in `~/.local/bin`.
+`praxis update` self-updates against GitHub Releases.
 
 ## Shipping a change (merge → release → upgrade → test)
 

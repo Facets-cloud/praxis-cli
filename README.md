@@ -58,23 +58,32 @@ Each capability is one or more functions on a server-side MCP. Run
 
 ## Install
 
-**macOS** (Homebrew cask):
+**Linux, or macOS without Homebrew** — the install script:
+
+```bash
+curl -fsSL https://cross.facetsapp.cloud/cli/install.sh | sh -s -- praxis
+```
+
+It downloads the release for your platform, checks its SHA-256, and
+puts it in `~/.local/bin`. It does not use sudo, so a later
+`praxis update` needs no sudo either. If `~/.local/bin` is not on your
+PATH, the script adds one line to your shell profile; open a new
+terminal after it. Set `FACETS_INSTALL_DIR` to install into another
+folder, or `FACETS_NO_MODIFY_PATH=1` to leave your profile alone.
+
+**macOS with Homebrew** (cask):
 
 ```bash
 brew install --cask Facets-cloud/tap/praxis
 ```
 
-**Linux** — download the binary directly (Homebrew on Linux does not
-support casks):
+Homebrew owns this copy, so upgrade it with
+`brew update && brew upgrade --cask praxis`. Keep one install method:
+the script lists a Homebrew praxis if both are on your PATH.
 
-```bash
-curl -fsSL -o praxis \
-  https://github.com/Facets-cloud/praxis-cli/releases/latest/download/praxis_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-chmod +x praxis && sudo mv praxis /usr/local/bin/
-```
-
-Once installed, `praxis update` updates praxis on both platforms. A Homebrew
-install is updated with `brew upgrade --cask praxis`, which praxis runs for you. Latest release: <https://github.com/Facets-cloud/praxis-cli/releases/latest>.
+`praxis update` updates a script install in place. A Homebrew install is
+updated with `brew upgrade --cask praxis`, which `praxis update` runs for you.
+Latest release: <https://github.com/Facets-cloud/praxis-cli/releases/latest>.
 
 ## Set up — one command
 
