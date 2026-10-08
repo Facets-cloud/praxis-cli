@@ -211,3 +211,18 @@ func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+func TestSetupCarriesTheAutoUpgradeState(t *testing.T) {
+	isolate(t)
+	orig := AutoUpgradeState
+	t.Cleanup(func() { AutoUpgradeState = orig })
+
+	AutoUpgradeState = nil
+	if got := collectSetup().AutoUpgrade; got != nil {
+		t.Errorf("auto_upgrade without a reporter = %+v", got)
+	}
+	AutoUpgradeState = func() *AutoUpgrade { return &AutoUpgrade{Mode: "off", OffReason: "ci"} }
+	if got := collectSetup().AutoUpgrade; got == nil || got.Mode != "off" || got.OffReason != "ci" {
+		t.Errorf("auto_upgrade = %+v", got)
+	}
+}

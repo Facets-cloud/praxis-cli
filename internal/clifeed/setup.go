@@ -23,14 +23,29 @@ import (
 // raptor, praxis sends no profile list: the check carries only the active
 // profile.
 type setup struct {
-	InstallMethod string      `json:"install_method,omitempty"`
-	BinaryPath    string      `json:"binary_path,omitempty"`
-	PathCopies    []pathCopy  `json:"path_copies,omitempty"`
-	Skills        []skillCopy `json:"skills,omitempty"`
-	SkillsError   string      `json:"skills_error,omitempty"`
-	LegacySkills  int         `json:"legacy_skills"`
-	CatalogSkills int         `json:"catalog_skills"`
+	InstallMethod string       `json:"install_method,omitempty"`
+	BinaryPath    string       `json:"binary_path,omitempty"`
+	PathCopies    []pathCopy   `json:"path_copies,omitempty"`
+	Skills        []skillCopy  `json:"skills,omitempty"`
+	SkillsError   string       `json:"skills_error,omitempty"`
+	LegacySkills  int          `json:"legacy_skills"`
+	CatalogSkills int          `json:"catalog_skills"`
+	AutoUpgrade   *AutoUpgrade `json:"auto_upgrade,omitempty"`
 }
+
+// AutoUpgrade is how this install updates itself (mode "rename", "brew" or
+// "off") and the result of its last attempt.
+type AutoUpgrade struct {
+	Mode      string `json:"mode"`
+	OffReason string `json:"off_reason,omitempty"`
+	Target    string `json:"target,omitempty"`
+	Result    string `json:"result,omitempty"`
+	Error     string `json:"error,omitempty"`
+	At        string `json:"at,omitempty"`
+}
+
+// AutoUpgradeState reports the automatic update for the snapshot; cmd sets it.
+var AutoUpgradeState func() *AutoUpgrade
 
 // raptorSkillErrorFile holds the error of the last failed raptor skill install
 // (~/.praxis/raptor-skill-error). A successful install removes it.
@@ -114,6 +129,9 @@ func collectSetup() *setup {
 	s.PathCopies = pathCopies(os.Getenv("PATH"), self, home)
 	s.Skills, s.LegacySkills, s.CatalogSkills = skillState(home)
 	s.SkillsError = raptorSkillError()
+	if AutoUpgradeState != nil {
+		s.AutoUpgrade = AutoUpgradeState()
+	}
 	return s
 }
 

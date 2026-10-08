@@ -72,9 +72,9 @@ type request struct {
 // containerMarkers are files that a container runtime creates.
 var containerMarkers = []string{"/.dockerenv", "/run/.containerenv"}
 
-// inContainer reports whether praxis runs in a container: a Docker or Podman
+// InContainer reports whether praxis runs in a container: a Docker or Podman
 // marker file, or a Kubernetes pod.
-func inContainer() bool {
+func InContainer() bool {
 	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
 		return true
 	}
@@ -178,7 +178,7 @@ func check() (response, error) {
 // ID, the active profile, and the setup snapshot. Each part is best-effort; a
 // missing one is left out.
 func census() request {
-	req := request{InstallID: InstallID(), Setup: collectSetup(), Container: inContainer()}
+	req := request{InstallID: InstallID(), Setup: collectSetup(), Container: InContainer()}
 	req.InstallAgeSeconds = installAgeSeconds()
 	req.CPURL, req.User = Identity()
 	return req

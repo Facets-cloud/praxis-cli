@@ -440,16 +440,15 @@ func checkToolsBounded(now time.Time, mode freshMode) []Freshness {
 	return out
 }
 
-// collectStaleNags returns the stale tools (concurrent, bounded) with their
-// upgrade instruction — the Execute-time TTY nag source.
+// collectStaleNags returns praxis's nag when praxis is behind — the
+// Execute-time TTY nag source. raptor prints its own notice and upgrades
+// itself, so praxis shows no raptor box.
 func collectStaleNags() []staleNag {
-	var out []staleNag
-	for _, f := range checkToolsBounded(time.Now(), freshCachedOrFetch) {
-		if f.Stale {
-			out = append(out, staleNag{Freshness: f, Action: nagActionForTool(f.Tool)})
-		}
+	spec := praxisSpec()
+	if f := checkTool(spec, time.Now(), freshCachedOrFetch); f.Stale {
+		return []staleNag{{Freshness: f, Action: nagAction(spec)}}
 	}
-	return out
+	return nil
 }
 
 // specByName looks up a tool's spec by name.

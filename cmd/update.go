@@ -164,18 +164,9 @@ that brew, it names the command instead.`,
 			return brewUpdate(out, asJSON, brew, token, current, latest)
 		}
 
-		var expected string
-		if sumAsset != nil {
-			body, err := fetchTextBody(sumAsset.BrowserDownloadURL)
-			if err != nil {
-				return fmt.Errorf("fetch checksums: %w", err)
-			}
-			expected, err = parseChecksums(body, binAsset.Name)
-			if err != nil {
-				return err
-			}
-		} else if d, ok := strings.CutPrefix(binAsset.Digest, "sha256:"); ok {
-			expected = d
+		expected, err := expectedChecksum(binAsset, sumAsset)
+		if err != nil {
+			return err
 		}
 
 		if !asJSON {
@@ -210,6 +201,22 @@ that brew, it names the command instead.`,
 		}
 		return afterUpdate(out, asJSON, current, latest)
 	},
+}
+
+// expectedChecksum is the SHA-256 of binAsset: from the release's checksums
+// file, else from the asset's digest. It is "" when the release has neither.
+func expectedChecksum(binAsset, sumAsset *selfupdate.Asset) (string, error) {
+	if sumAsset != nil {
+		body, err := fetchTextBody(sumAsset.BrowserDownloadURL)
+		if err != nil {
+			return "", fmt.Errorf("fetch checksums: %w", err)
+		}
+		return parseChecksums(body, binAsset.Name)
+	}
+	if d, ok := strings.CutPrefix(binAsset.Digest, "sha256:"); ok {
+		return d, nil
+	}
+	return "", nil
 }
 
 // afterUpdate reports a replaced binary and runs the raptor step.
