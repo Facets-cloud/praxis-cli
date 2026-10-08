@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
@@ -29,6 +30,16 @@ const updateCheckInterval = 24 * time.Hour
 // pure non-blocking) is what lets the notice + cache write actually land for
 // fast local commands, whose work finishes long before a network fetch could.
 const updateCheckMaxWait = 3 * time.Second
+
+// quietCheckWait is how long a quiet run waits for its check after the
+// command. In CI it is zero: the check only races the command and never delays
+// a pipeline.
+func quietCheckWait() time.Duration {
+	if httpclient.CIName() != "" {
+		return 0
+	}
+	return updateCheckMaxWait
+}
 
 // updateCheckRetryDelay pauses between the two live-fetch attempts. A var (not
 // a const) so tests can zero it out and not sleep.
@@ -47,27 +58,28 @@ type toolCacheEntry struct {
 	Version string `json:"version,omitempty"`
 	CPURL   string `json:"cp_url,omitempty"`
 	User    string `json:"user,omitempty"`
+	Skills  string `json:"skills,omitempty"` // clifeed.SkillsKey
 }
 
 // censusKeyFor is the census key of this invocation for a tool's entry: the
-// praxis version and its CP and user for praxis, and nothing for raptor, whose
-// census raptor sends itself.
+// praxis version, its CP and user, and its skill state for praxis, and nothing
+// for raptor, whose census raptor sends itself.
 func censusKeyFor(tool string) toolCacheEntry {
 	if tool != "praxis" {
 		return toolCacheEntry{}
 	}
 	cpURL, user := clifeed.Identity()
-	return toolCacheEntry{Version: strings.TrimPrefix(version, "v"), CPURL: cpURL, User: user}
+	return toolCacheEntry{Version: strings.TrimPrefix(version, "v"), CPURL: cpURL, User: user, Skills: clifeed.SkillsKey()}
 }
 
 // sameKey reports whether entry e was written for census key k.
 func (e toolCacheEntry) sameKey(k toolCacheEntry) bool {
-	return e.Version == k.Version && e.CPURL == k.CPURL && e.User == k.User
+	return e.Version == k.Version && e.CPURL == k.CPURL && e.User == k.User && e.Skills == k.Skills
 }
 
 // keyed returns e stamped with census key k.
 func (e toolCacheEntry) keyed(k toolCacheEntry) toolCacheEntry {
-	e.Version, e.CPURL, e.User = k.Version, k.CPURL, k.User
+	e.Version, e.CPURL, e.User, e.Skills = k.Version, k.CPURL, k.User, k.Skills
 	return e
 }
 
@@ -508,7 +520,9 @@ func skipUpdateCheck(args []string) bool {
 			continue // a flag (or its value) before the command — keep scanning
 		default:
 			// First positional token is the command name.
-			return a == "update" || a == "version" || a == "completion"
+			// setup runs in the background, started by a command that sends the
+			// check itself.
+			return a == "update" || a == "version" || a == "completion" || a == "setup"
 		}
 	}
 	return false

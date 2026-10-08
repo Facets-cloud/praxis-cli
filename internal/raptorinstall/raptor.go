@@ -131,7 +131,7 @@ func get(client *http.Client, url string) (*http.Response, error) {
 func resultFor(path string, installed bool) Result {
 	result := Result{Path: path, Installed: installed}
 	if _, err := exec.LookPath("raptor"); err != nil {
-		result.PathWarning = "Add " + filepath.Dir(path) + " to PATH to run raptor from your shell; Praxis can use the installed absolute path."
+		result.PathWarning = "To run raptor from your shell, add this line to your shell profile, then open a new terminal: export PATH=\"" + filepath.Dir(path) + ":$PATH\". Praxis can use the full path without it."
 	}
 	return result
 }

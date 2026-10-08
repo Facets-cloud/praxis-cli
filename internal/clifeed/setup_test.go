@@ -2,6 +2,7 @@ package clifeed
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -140,5 +141,46 @@ func TestCheckCarriesTheSetupButNoProfileList(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "t0k") {
 		t.Error("the token left the machine")
+	}
+}
+
+// A failed raptor skill install reaches the snapshot until an install succeeds,
+// and it changes the skills key so the census hears of it.
+func TestRaptorSkillErrorReachesTheSnapshot(t *testing.T) {
+	home := isolate(t)
+	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return home, nil }))
+	before := SkillsKey()
+
+	RecordRaptorSkillError(errors.New("raptor install skill: exit status 137"))
+	if got := collectSetup().SkillsError; got != "raptor install skill: exit status 137" {
+		t.Errorf("skills_error = %q", got)
+	}
+	if SkillsKey() == before {
+		t.Error("the skills key did not change after a failed install")
+	}
+
+	RecordRaptorSkillError(nil)
+	if got := collectSetup().SkillsError; got != "" {
+		t.Errorf("skills_error after a good install = %q, want empty", got)
+	}
+	if SkillsKey() != before {
+		t.Error("the skills key did not come back after a good install")
+	}
+}
+
+// The skills key follows the receipt, so a skill change sends a new check.
+func TestSkillsKeyFollowsTheReceipt(t *testing.T) {
+	home := isolate(t)
+	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return home, nil }))
+	empty := SkillsKey()
+	if err := os.MkdirAll(filepath.Join(home, ".praxis"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	receipt := `{"skills": [{"skill_name": "praxis-cloud-operations", "harness": "claude-code", "path": "x", "source": "catalog"}]}`
+	if err := os.WriteFile(filepath.Join(home, ".praxis", "installed.json"), []byte(receipt), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if SkillsKey() == empty {
+		t.Error("the skills key did not change with the receipt")
 	}
 }
