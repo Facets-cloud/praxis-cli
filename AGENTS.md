@@ -6,11 +6,13 @@ Project-specific overrides for the global `~/.claude/CLAUDE.md`.
 ## Project overview
 
 Single-binary Go CLI (`praxis`) that exposes Praxis cloud capabilities to
-any local AI host (Claude Code, Cursor, Gemini CLI). The CLI is a thin
-HTTPS client to a Praxis cloud deployment — it does not run an agent
-loop locally. Skills are sourced (fetched + nomenclature-translated) into
-the user's AI host; MCP tools execute server-side under org-managed
-credentials. See [README.md](README.md) for the user-facing story.
+the local AI hosts Claude Code, Codex, Gemini CLI and Antigravity
+(`internal/harness`). The CLI is a thin HTTPS client to a Praxis cloud
+deployment — it does not run an agent loop locally. The `praxis` skill is
+embedded in the binary; org catalog skills are fetched and installed as
+`praxis-*`; raptor installs its own `raptor` skill. MCP tools execute
+server-side under org-managed credentials. See [README.md](README.md) for the
+user-facing story.
 
 ## Design principle — single-profile users first
 
@@ -75,48 +77,43 @@ Unit test coverage is required.
 
 ## Project structure
 
+`main.go` calls `cmd.Execute()`. `cmd/` holds the cobra tree, one file per
+verb (implemented commands only). `internal/` holds the logic, unit-tested.
+The packages to know before touching login, skills or updates:
+
 ```
-main.go               entrypoint — calls cmd.Execute()
-cmd/                  cobra command tree (implemented commands only, no
-                       stubs)
-  root.go             root cmd, version vars (ldflags-injected)
-  version.go          `praxis version`
-  update.go           `praxis update` (self-update via GitHub Releases)
-  completion.go       `praxis completion {bash|zsh|fish|powershell}`
-  logout.go           `praxis logout` (removes the active profile from whichever file holds it)
-  duty.go             `praxis duty *` (Agent Schedule runs/findings/reports)
-  hook.go             `praxis hook user-prompt-submit` (hidden) — the AI-host
-                       prompt hook that nudges toward a matching praxis skill
-internal/             pure logic, unit-tested
-  paths/              Praxis filesystem locations. Two roots: the HOME root
-                       (~/.praxis, holds the API-key file + update cache)
-                       and a discovered PROJECT root (<repo>/.praxis) that
-                       becomes ActiveRoot for the receipt/snapshot/skills.
-  duties/             REST client for Agent Schedules (duties): runs,
-                       findings, artifacts — mirrors internal/memory
-  credentials/        ONE store, two files: ~/.facets/credentials (raptor's,
-                       control-plane PATs, shared with raptor, located by
-                       raptor's cwd-upward walk) and ~/.praxis/credentials
-                       (Praxis API keys + loopback PATs). Load merges, facets
-                       wins; Put routes by credential type. See facets.go.
-  raptorstate/        which section a BARE raptor command would use here
-                       (FACETS_PROFILE → [default] → sole), so `status` can
-                       tell the host when to prefix FACETS_PROFILE
-  selfupdate/         GitHub Releases fetch, checksum, atomic replace
-  claudehooks/        merges praxis's hooks into each AI host's hook config.
-                       ONE JSON merge engine; the `Hosts()` table holds the
-                       per-host differences (file path, event key, timeout
-                       UNIT). The prompt-hook nudge logic is in cmd/hook.go.
-Makefile              build (with ldflags), install, test, lint, clean
-.goreleaser.yml       release config — raw binaries × 4 arches + brew tap
-.github/workflows/    ci.yml (every push), release.yml (on tag)
+paths/          HOME root (~/.praxis) and the discovered PROJECT root
+                (<repo>/.praxis); ActiveRoot decides where receipt,
+                snapshot and skills live
+credentials/    ONE store, two files: ~/.facets/credentials (raptor's,
+                control-plane PATs) and ~/.praxis/credentials (Praxis API
+                keys + loopback PATs). Load merges, facets wins; Put routes
+                by credential type. See facets.go.
+harness/        detected AI hosts and their skill/agent folders
+skillinstall/   embedded `praxis` skill tree + transactional skill installs,
+                receipt (installed.json), backups
+skillcatalog/   org catalog fetch; replaced.go lists the global skills that
+                the praxis/raptor skills replace
+render/         ExecutionPreamble for catalog skills
+agentinstall/   custom-agent files (Claude Code, Gemini CLI only)
+claudehooks/    merges praxis's hooks into each host's hook config; the
+                Hosts() table holds the per-host differences
+selfupdate/     release fetch, checksum, replace, Homebrew detection
+clifeed/        central feed (cross-control-plane): update target + census
+raptorinstall/  installs a missing raptor; raptorstate/ which section a bare
+                raptor would use
 ```
+
+`Makefile` (build, install, test, fmt, vet, lint, check, clean),
+`.goreleaser.yml` (darwin/linux/windows × amd64/arm64 + Homebrew cask),
+`.github/workflows/` (`ci.yml` on push to main and on PRs, `release.yml` on
+tag).
 
 **Don't add stub commands.** A cobra command that prints "not yet
 implemented" is worse than no command — it lies to users and to
 `--help`. Skills install automatically as part of
-`login`/`profiles use`/`refresh-skills`. Skills are
-fetched from the server, name-prefixed (`praxis-*`), and have the
+`login`/`profiles use`/`refresh-skills`. Org catalog skills
+are fetched from the server, name-prefixed (`praxis-*`), and have the
 `render.ExecutionPreamble` inserted after their frontmatter so any
 in-process MCP reference (`run_cloud_cli(...)`) is rewritten to a
 `praxis mcp <mcp> <fn> --arg …` shell-out — see
@@ -156,8 +153,8 @@ Invariants to preserve when touching this area:
   `credentials.SetGetwdForTest`, wired in every test main so no test reads
   the developer's live file). Consequence: inside a pinned tree, `-p X`
   only loads X if the tree's file has it (or X is an API key).
-- **A profile lives in exactly one file.** `credentials.Put` routes an https
-  PAT to the facets file and everything else to the praxis file, and drops
+- **A profile lives in exactly one file.** `credentials.Put` routes a
+  non-loopback http(s) PAT to the facets file and everything else to the praxis file, and drops
   the same name from the other HOME file (never a tree's). A name in both
   would make praxis and raptor disagree. `MigrateLegacyPATs` moves PATs an
   older praxis kept in the praxis file.
@@ -222,7 +219,7 @@ Invariants to preserve when touching this area:
   a subcommand: cobra lets the local flag shadow the inherited one, so
   `praxis login -p x` and `praxis -p x login` would land in different
   variables and one of them would be silently ignored. Commands read it via
-  `activeOrAuthExit` (memory/duty/ig/agents) or by passing `rootProfile` to
+  `activeOrAuthExit` (memory/duty/ig) or by passing `rootProfile` to
   `credentials.ResolveActive`. Tests MUST reset `rootProfile` — it's package
   state shared by every command (`resetLoginFlags`, `resetIgFlags`,
   `setRootProfile` all do).
@@ -244,17 +241,13 @@ Invariants to preserve when touching this area:
 - **A guard and its action MUST be one decision.** Resolve the target once and
   have the action use that same name; never let the action re-resolve through
   `ResolveActive*`, or the two disagree about "which profile?" and the action's
-  answer wins. This shipped as a destructive bug: the guard compared one
-  answer while `logout` deleted another, so `-p default
-  logout` under `PRAXIS_PROFILE=acme` passed the check and deleted **acme**.
-  Two defenses, keep both — `refusedExplicitProfile` checks the flag and the
+  answer wins (`-p default logout` under `PRAXIS_PROFILE=acme` must never
+  delete acme). Two defenses, keep both — `refusedExplicitProfile` checks the flag and the
   environment INDEPENDENTLY (not the flag-wins winner, which a matching `-p`
   satisfies while the env still diverges), and the action reuses the approved
   name (`target` in logout, `ResolveActive(acts)` in refresh-skills).
-- **Divergence-only refusal made previously-unreachable states reachable.**
-  The blanket refusal masked every guard/action mismatch behind it. When
-  loosening a guard, audit what the action does with a selection the guard now
-  admits — the bug arrives with the fix, not before it.
+- **When loosening a guard, audit what the action does with a selection the
+  guard now admits.**
 - **Multi-profile guidance is gated on the profile count.** The single-profile
   customer gets no precedence chain, no machine-global warnings and no
   refusal table in `profiles use` output (`switchSummary.MultiProfile`, from
@@ -324,7 +317,8 @@ a detached `praxis __auto-update`, when the daily check cached a newer release.
 It runs brew for a Homebrew install and otherwise only renames: it never writes
 in place, because agents run praxis in parallel and the Apple silicon kill hits
 every run of the file. It is off for dev builds, CI, containers, root, an
-unwritable folder and `PRAXIS_NO_AUTO_UPGRADE`. One claim file
+unwritable folder, a Homebrew cask with no usable brew, and
+`PRAXIS_NO_AUTO_UPGRADE` or `PRAXIS_NO_UPDATE_CHECK`. One claim file
 (`claimSetup`) and a version check in the detached praxis keep parallel runs to
 one update. Tests must never start it for real: `TestMain` stubs
 `startAutoUpdate`, because the test binary would run as `praxis __auto-update`.
@@ -332,8 +326,7 @@ one update. Tests must never start it for real: `TestMain` stubs
 ## Windows
 
 praxis ships for Windows (amd64, arm64). The `test-windows` CI job must stay
-green. These rules come from the first Windows port (October 2026); each one
-was a real bug.
+green.
 
 - **Home folder:** use `paths.Home()`. Never call `os.UserHomeDir()` or read
   `$HOME` directly: on Windows Go reads `USERPROFILE`. raptor uses the same
@@ -369,11 +362,13 @@ was a real bug.
 make build              # builds ./praxis with version stamp from git
 ./praxis --help
 make test               # go test -race ./...
-make lint               # gofmt + vet + test
+make lint               # golangci-lint (pinned version)
+make check              # fmt (rewrites files) + vet + lint + test
 go test -cover ./...    # coverage report
 ```
 
-Version is stamped via `-ldflags -X cmd.version=...` (see Makefile).
+Version is stamped via
+`-ldflags -X github.com/Facets-cloud/praxis-cli/cmd.version=...` (see Makefile).
 Override at build time: `make build VERSION=v0.5.0-dev`.
 
 ## Adding a new command
@@ -388,50 +383,47 @@ Override at build time: `make build VERSION=v0.5.0-dev`.
    the cobra command: use `cmd.SetOut(&buf)` and call `RunE` directly
    (see Testing above).
 
-## Adding a new internal package
+## Raptor and setup
 
-1. Create `internal/<name>/<name>.go`.
-2. Create `internal/<name>/<name>_test.go` in the same commit.
-3. Tests must cover the package's exported API and the main failure
-   paths.
+`login`, `refresh-skills`, `profiles use`, `update` and the hidden `praxis setup`
+(started in the background once per version, `cmd/setup.go`) install a missing
+raptor to `~/.local/bin` and run one `raptor install skill -o json --agent …`
+(`cmd/raptor_setup.go`). The host map is claude-code→claude,
+codex/gemini-cli→agents, antigravity→antigravity, so raptor writes the same
+folder as `harness.SkillDir`. A raptor whose `install skill --help` lacks the
+shared layout is reported as too old.
 
 ## Distribution
 
-Released via Homebrew (`Facets-cloud/homebrew-tap`) and direct GitHub
-Releases binary download. The install script
-(`curl -fsSL https://cross.facetsapp.cloud/cli/install.sh | sh -s -- praxis`,
-served by cross-control-plane) puts the binary in `~/.local/bin`.
-`praxis update` self-updates against GitHub Releases.
+Install scripts served by cross-control-plane put the binary in
+`~/.local/bin` (`install.sh`) or `%USERPROFILE%\.local\bin` (`install.ps1`).
+macOS can also use the Homebrew cask (`Facets-cloud/homebrew-tap`).
+`praxis update` takes its target from the central feed (`clifeed`, GitHub API
+as the fallback), runs brew for a cask install, then upgrades raptor.
 
-## Shipping a change (merge → release → upgrade → test)
+## Shipping a change (merge → release → test)
 
-The end-to-end runbook for getting a merged change into the locally
-installed binary. Releases are **tag-driven**: pushing a `v*.*.*` tag
+Releases are **tag-driven**: pushing a `v*.*.*` tag
 fires `.github/workflows/release.yml`, which runs goreleaser to publish
 the GitHub Release and bump the Homebrew cask in `facets-cloud/tap`.
 There is no `make release` target.
 
 1. **Wait for review + CI, then merge the PR.** Let CodeRabbit finish
-   its pass and address its findings; the `build` and `goreleaser-check`
-   checks must be green. Squash-merge to `main`.
+   its pass and address its findings; the `build`, `test-windows` and
+   `goreleaser-check` checks must be green. Squash-merge to `main`.
 2. **Tag the new version on `main`:**
    ```bash
    git checkout main && git pull
-   git tag vX.Y.Z          # minor bump for a feature, patch for a fix
+   git tag -a vX.Y.Z -m "vX.Y.Z: <summary>"   # minor for a feature, patch for a fix
    git push origin vX.Y.Z
    ```
-   (Current scheme: semver, e.g. `v0.12.0` → `v0.13.0` for a feature.)
+   (Semver, e.g. `v2.1.0` → `v2.2.0` for a feature.)
 3. **Watch the release CI** (`gh run watch` / `gh run list --workflow
    release.yml`). goreleaser publishes the GitHub Release and pushes the
    updated cask to the tap. Needs the `HOMEBREW_TAP_TOKEN` secret.
-4. **Upgrade locally** once the cask lands:
-   ```bash
-   brew update && brew upgrade --cask praxis
-   ```
-   (Installed at `/opt/homebrew/bin/praxis` from cask `facets-cloud/tap`.)
-5. **Test in local** — run `praxis version` to confirm the new version,
-   then exercise the shipped change against the real CLI (read-only
-   commands are safe to run live).
+4. **Test the release.** The feed picks it up within about ten minutes;
+   then `praxis update` (or the automatic update) installs it. Run
+   `praxis version`, then exercise the change with read-only commands.
 
 ## License
 

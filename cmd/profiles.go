@@ -56,8 +56,9 @@ type profilesOutput struct {
 var profilesCmd = &cobra.Command{
 	Use:   "profiles",
 	Short: "List all profiles and their login state",
-	Long: `List every profile in ~/.praxis/credentials with its URL, username,
-active-profile marker, and login state.
+	Long: `List every profile in ~/.facets/credentials (control-plane PATs, shared
+with raptor) and ~/.praxis/credentials (Praxis API keys) with its URL,
+username, active-profile marker, and login state.
 
 By default this is a LOCAL-ONLY snapshot (no network calls): a profile is
 "logged in" when it has a stored token. Pass --refresh to additionally hit
