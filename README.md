@@ -104,8 +104,8 @@ Login is idempotent; re-run it at any time. It:
 
 A control-plane PAT is saved to `~/.facets/credentials`, raptor's store,
 under the praxis profile name. So `raptor` works with no second login, and a
-`raptor login` is already a praxis login. A Praxis API key goes to
-`~/.praxis/credentials`.
+`raptor login` is already a praxis login. A Praxis API key, or a PAT for a
+loopback (local dev) control plane, goes to `~/.praxis/credentials`.
 
 ```bash
 praxis login --url https://<account-id>.console.facets.cloud   # first time
@@ -264,7 +264,7 @@ Things to know:
 
 ```text
 ~/.facets/credentials        control-plane PATs, shared with raptor (0600)
-~/.praxis/credentials        Praxis API keys only (0600)
+~/.praxis/credentials        Praxis API keys and loopback (local dev) PATs (0600)
 ~/.praxis/installed.json     receipt of every skill and agent file praxis wrote
 ~/.praxis/mcp-tools.json     MCP snapshot
 ~/.praxis/backups/           copies of skills praxis replaced after you changed them
