@@ -31,13 +31,19 @@ from the system configuration, such as Git Credential Manager (the Git for
 Windows default) or osxkeychain. Without it, git also asks them, and they
 store the short-lived token.
 
-Scope the helper to the specific hosts as shown. An unscoped
-'credential.helper' is invoked by git for every host, and this helper only
-mints for the brokered hosts (github.com / GitHub Enterprise Cloud,
-gitlab.com, bitbucket.org) — it emits nothing for other hosts so git falls
-through. Don't combine with a caching/storing helper (e.g.
-'credential.helper store') for these hosts: it would persist the ephemeral
-token to disk, defeating the design.
+For a GitHub Enterprise Server on your own domain, scope the helper to that
+host too (replace github.acme.com with yours):
+
+  git config --global credential.https://github.acme.com.helper "!praxis git-credential"
+  git config --global credential.https://github.acme.com.useHttpPath true
+
+Scope the helper to the specific hosts as shown — the per-host scope is what
+tells git to invoke praxis only for those hosts. github.com / GitHub
+Enterprise Cloud, gitlab.com and bitbucket.org always mint a brokered token;
+a GitHub Enterprise Server host mints the org's stored enterprise credential
+when one exists, and emits nothing otherwise so git falls through. Don't
+combine with a caching/storing helper (e.g. 'credential.helper store') for
+these hosts: it would persist the token to disk, defeating the design.
 
 'useHttpPath' is what makes git send the repository path (e.g.
 owner/repo.git); without it git sends only the host, so the mint request
@@ -71,13 +77,18 @@ func resolveGateway() (string, map[string]string, error) {
 	return active.Profile.URL, active.Profile.Auth(), nil
 }
 
-// isBrokeredHost reports whether a brokered token may be handed to host.
+// isBrokeredHost reports whether host is one we ALWAYS broker — github.com and
+// GitHub Enterprise Cloud, plus gitlab.com / bitbucket.org. For these a failed
+// mint is surfaced to the user (a real misconfiguration), so git shows why the
+// push was refused instead of silently falling back to a password prompt.
 //
-// git invokes a credential helper for whatever host it is talking to. If the
-// helper is configured unscoped (`credential.helper` rather than
-// `credential.https://<host>.helper`), a push to any other host would
-// otherwise receive one of our tokens. Fail closed on anything unrecognized;
-// the GitLab/Bitbucket entries are exact matches only (no subdomain logic —
+// A custom host (a GitHub Enterprise Server we can't recognize up front) is
+// still attempted — the server vends the org's enterprise credential when it
+// has one — but a failure there falls through silently, so an unscoped helper
+// never breaks a push to a host we don't broker. The server, not this
+// allowlist, is what prevents a token reaching the wrong host: it vends only to
+// @facets.cloud callers and only when a stored PAT matches the exact host.
+// The GitLab/Bitbucket entries are exact matches (no subdomain logic —
 // mirrors the server's _OAUTH_HOSTS allowlist).
 func isBrokeredHost(host string) bool {
 	h := strings.ToLower(strings.TrimSpace(host))
@@ -109,13 +120,29 @@ func runGitCredential(out io.Writer, in io.Reader, op string, gw func() (string,
 
 	attrs := parseCredentialInput(in)
 
-	// Never mint for a host that isn't brokered, or over plaintext. Emitting
-	// nothing and exiting 0 is git's protocol for "this helper has no
-	// credentials" — git then falls through to the next helper.
-	if attrs["protocol"] != "https" || !isBrokeredHost(attrs["host"]) {
+	// Only https, and only a real host. Emitting nothing and exiting 0 is git's
+	// protocol for "this helper has no credentials" — git falls through.
+	if attrs["protocol"] != "https" || attrs["host"] == "" {
 		return nil
 	}
 
+	err := mintAndEmit(out, attrs, gw)
+	if err != nil && isBrokeredHost(attrs["host"]) {
+		// A host we always broker failing to mint is a real misconfiguration —
+		// surface it so the user sees why the push was refused.
+		return err
+	}
+	// A custom host (a GitHub Enterprise Server we only broker when the org has a
+	// matching enterprise PAT) that didn't mint falls through silently, so an
+	// unscoped helper never breaks a push to a host we don't broker.
+	return nil
+}
+
+// mintAndEmit asks the gateway to mint a credential for the requested host and,
+// on success, writes git's credential-helper reply to out. It returns an error
+// without writing anything when the gateway can't mint one; the caller decides
+// whether that error is surfaced or swallowed (see runGitCredential).
+func mintAndEmit(out io.Writer, attrs map[string]string, gw func() (string, map[string]string, error)) error {
 	body, _ := json.Marshal(map[string]string{
 		"host": attrs["host"],
 		"path": attrs["path"],

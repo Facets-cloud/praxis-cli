@@ -73,14 +73,10 @@ func TestGitCredentialGet_ParsesHostAndPath(t *testing.T) {
 	}
 }
 
-// A helper configured unscoped (`credential.helper` rather than
-// `credential.https://github.com.helper`) is invoked by git for EVERY host.
-// Verified with a real `git ls-remote https://gitlab.com/...`, which feeds the
-// helper `host=gitlab.com`. Minting there would hand a GitHub token to a third
-// party, so non-GitHub hosts must never reach the gateway.
-// assertSilentFallThrough runs `get` with the given credential input and
-// requires the helper to emit nothing, error nothing, and never reach the
-// gateway — git's protocol for "this helper has no credentials".
+// assertSilentFallThrough runs `get` with an input that must short-circuit
+// BEFORE any gateway call — a non-https protocol or an empty host — and requires
+// the helper to emit nothing, error nothing, and never reach the gateway (git's
+// protocol for "this helper has no credentials").
 func assertSilentFallThrough(t *testing.T, protocol, host string) {
 	t.Helper()
 	orig := callMCP
@@ -105,18 +101,92 @@ func assertSilentFallThrough(t *testing.T, protocol, host string) {
 	}
 }
 
-func TestGitCredentialGet_RefusesNonBrokeredHosts(t *testing.T) {
-	// "*.evil.test" are the suffix/impostor traps (gitlab/bitbucket entries
-	// are exact-match only); "" is a missing host.
+func TestGitCredentialGet_EmptyHostShortCircuits(t *testing.T) {
+	// A missing host never reaches the gateway.
+	assertSilentFallThrough(t, "https", "")
+}
+
+// assertRefusalFallsThrough mints against a gateway that vends nothing (the
+// server's answer for a host with no matching enterprise PAT, or a non-facets
+// caller) and requires the helper to emit nothing and NOT error — git then
+// falls through. The gateway IS reached: we can't know a custom GitHub
+// Enterprise Server host up front, so the server, not a client allowlist, is
+// what refuses to hand a token to the wrong host.
+func assertRefusalFallsThrough(t *testing.T, host string) {
+	t.Helper()
+	orig := callMCP
+	defer func() { callMCP = orig }()
+	callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+		return []byte(`{"isError":true,"content":[{"type":"text","text":"no credential for host"}]}`), 200, nil
+	}
+	var out bytes.Buffer
+	in := strings.NewReader("protocol=https\nhost=" + host + "\n\n")
+	if err := runGitCredential(&out, in, "get",
+		func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil }); err != nil {
+		t.Fatalf("a non-brokered host must fall through silently, got err %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("must emit no credential, got %q", out.String())
+	}
+}
+
+func TestGitCredentialGet_NonBrokeredHostFallsThrough(t *testing.T) {
+	// Impostor/suffix traps (gitlab/bitbucket are exact-match brokered hosts).
+	// Each now reaches the gateway, is refused, and falls through — no token.
 	for _, host := range []string{
 		"evil.example.com",
 		"github.com.evil.test",
 		"gitlab.com.evil.test",
 		"bitbucket.org.evil.test",
-		"sub.gitlab.com", // no subdomain logic for OAuth hosts
-		"",
+		"sub.gitlab.com",
 	} {
-		t.Run(host, func(t *testing.T) { assertSilentFallThrough(t, "https", host) })
+		t.Run(host, func(t *testing.T) { assertRefusalFallsThrough(t, host) })
+	}
+}
+
+func TestGitCredentialGet_EnterpriseServerHostMints(t *testing.T) {
+	// A custom GitHub Enterprise Server host the server CAN vend for: the
+	// helper forwards the host and emits the returned enterprise credential.
+	orig := callMCP
+	defer func() { callMCP = orig }()
+	var sentBody []byte
+	callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+		sentBody = body
+		env := `{"content":[{"type":"text","text":"{\"username\":\"x-access-token\",\"password\":\"ghp_ent\"}"}]}`
+		return []byte(env), 200, nil
+	}
+	var out bytes.Buffer
+	in := strings.NewReader("protocol=https\nhost=github.acme.com\npath=team/repo\n\n")
+	if err := runGitCredential(&out, in, "get",
+		func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil }); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !strings.Contains(out.String(), "host=github.acme.com\n") ||
+		!strings.Contains(out.String(), "password=ghp_ent\n") {
+		t.Fatalf("expected enterprise credential for the custom host, got %q", out.String())
+	}
+	if !strings.Contains(string(sentBody), `"host":"github.acme.com"`) {
+		t.Fatalf("custom host must be forwarded to the gateway, got %s", sentBody)
+	}
+}
+
+func TestGitCredentialGet_BrokeredHostSurfacesError(t *testing.T) {
+	// A host we ALWAYS broker that fails to mint must surface the error, not
+	// fall through — otherwise git silently prompts for a password and hides why.
+	orig := callMCP
+	defer func() { callMCP = orig }()
+	callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+		return []byte(`{"isError":true,"content":[{"type":"text","text":"boom"}]}`), 200, nil
+	}
+	var out bytes.Buffer
+	in := strings.NewReader("protocol=https\nhost=github.com\n\n")
+	err := runGitCredential(&out, in, "get",
+		func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil })
+	if err == nil {
+		t.Fatal("a brokered host that fails to mint must return an error, not fall through")
+	}
+	if out.Len() != 0 {
+		t.Fatalf("no partial output on error, got %q", out.String())
 	}
 }
 
