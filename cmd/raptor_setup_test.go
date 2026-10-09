@@ -263,20 +263,40 @@ func TestSetupInstallsRaptorButFirstRunDoesNot(t *testing.T) {
 	}
 }
 
-// skillRaptor is a fake raptor that acts like `raptor install skill`: it
-// writes <base>/.<agent>/skills/raptor/SKILL.md, where base is --path or
-// HOME, and appends its arguments to the returned log. failAgent fails.
+// skillRaptor is a fake raptor that acts like `raptor install skill -o json`:
+// it writes raptor/SKILL.md into the folder of each --agent under HOME, prints
+// raptor's JSON report and appends its install arguments to the returned log.
+// failAgent fails. version "OLD" answers --help without the shared host
+// layout; "FAIL" does not answer --help.
 func skillRaptor(t *testing.T, version, failAgent string) (bin, log string) {
 	t.Helper()
 	dir := t.TempDir()
 	bin, log = filepath.Join(dir, "raptor"), filepath.Join(dir, "calls")
 	script := `#!/bin/sh
-if [ "$1" = --version ]; then [ '` + version + `' = FAIL ] && exit 1; echo "raptor version ` + version + `"; exit 0; fi
+if [ "$1" = --version ]; then echo "raptor version ` + version + `"; exit 0; fi
+if [ "$3" = --help ]; then
+  [ '` + version + `' = FAIL ] && exit 1
+  [ '` + version + `' = OLD ] && { echo "Install locations: ~/.<agent>/skills/raptor/SKILL.md"; exit 0; }
+  echo "  ~/.gemini/config/skills   when ~/.gemini exists (Antigravity)"; exit 0
+fi
 echo "$*" >> '` + log + `'
-agent=$4; base=$HOME
-[ "$5" = --path ] && base=$6
-[ "$agent" = '` + failAgent + `' ] && { echo "boom for $agent" >&2; exit 3; }
-mkdir -p "$base/.$agent/skills/raptor" && echo raptor > "$base/.$agent/skills/raptor/SKILL.md"
+shift 4
+out=""; code=0
+while [ $# -gt 0 ]; do
+  agent=$2; shift 2
+  case $agent in
+    claude) d="$HOME/.claude/skills" ;;
+    agents) d="$HOME/.agents/skills" ;;
+    antigravity) d="$HOME/.gemini/config/skills" ;;
+  esac
+  err=""
+  if [ "$agent" = '` + failAgent + `' ]; then err="boom for $agent"; code=1
+  else mkdir -p "$d/raptor" && echo raptor > "$d/raptor/SKILL.md"; fi
+  [ -n "$out" ] && out="$out,"
+  out="$out{\"host\":\"$agent\",\"dir\":\"$d\",\"error\":\"$err\"}"
+done
+echo "{\"results\":[$out]}"
+exit $code
 `
 	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
 		t.Fatal(err)
@@ -308,40 +328,28 @@ func TestInstallRaptorSkills(t *testing.T) {
 			{Name: "antigravity", SkillDir: filepath.Join(home, ".gemini", "config", "skills")},
 		}
 	}
+	every := []string{"install skill -o json --agent claude --agent agents --agent antigravity"}
 	tests := []struct {
 		name, version, fail string
-		sharedRaptor        bool
 		wantCalls           []string
 		wantPaths           []string
 		wantErr             string
 	}{
-		{name: "every raptor agent, antigravity skipped", version: "0.1.121",
-			wantCalls: []string{"install skill --agent claude", "install skill --agent codex", "install skill --agent gemini"},
-			wantPaths: []string{".claude/skills/raptor/SKILL.md", ".codex/skills/raptor/SKILL.md", ".gemini/skills/raptor/SKILL.md"}},
-		{name: "shared root already has raptor", version: "0.1.121", sharedRaptor: true,
-			wantCalls: []string{"install skill --agent claude"},
-			wantPaths: []string{".claude/skills/raptor/SKILL.md"}},
-		{name: "development build may install", version: "0.development",
-			wantCalls: []string{"install skill --agent claude", "install skill --agent codex", "install skill --agent gemini"},
-			wantPaths: []string{".claude/skills/raptor/SKILL.md", ".codex/skills/raptor/SKILL.md", ".gemini/skills/raptor/SKILL.md"}},
-		{name: "raptor too old", version: "0.1.100", wantErr: "raptor 0.1.100 is too old"},
-		{name: "raptor does not answer --version", version: "FAIL", wantErr: "did not answer --version"},
-		{name: "one agent fails, the others install", version: "0.1.121", fail: "codex",
-			wantCalls: []string{"install skill --agent claude", "install skill --agent codex", "install skill --agent gemini"},
-			wantPaths: []string{".claude/skills/raptor/SKILL.md", ".gemini/skills/raptor/SKILL.md"},
-			wantErr:   "raptor skill for codex"},
+		{name: "every host in one call, shared folder once", version: "0.1.130",
+			wantCalls: every,
+			wantPaths: []string{".claude/skills/raptor/SKILL.md", ".agents/skills/raptor/SKILL.md", ".agents/skills/raptor/SKILL.md", ".gemini/config/skills/raptor/SKILL.md"}},
+		{name: "raptor too old for the shared layout", version: "OLD", wantErr: "too old"},
+		{name: "raptor does not answer --help", version: "FAIL", wantErr: "did not answer"},
+		{name: "one host fails, the others install", version: "0.1.130", fail: "agents",
+			wantCalls: every,
+			wantPaths: []string{".claude/skills/raptor/SKILL.md", ".gemini/config/skills/raptor/SKILL.md"},
+			wantErr:   "raptor skill for agents: boom for agents"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 			bin, log := skillRaptor(t, tc.version, tc.fail)
-			if tc.sharedRaptor {
-				mustMkdir(t, filepath.Join(home, ".agents", "skills", "raptor"))
-				if err := os.WriteFile(filepath.Join(home, ".agents", "skills", "raptor", "SKILL.md"), []byte("x"), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
 
 			got, err := runInstallRaptorSkills(bin, user(home))
 			if tc.wantErr == "" && err != nil {
@@ -356,7 +364,7 @@ func TestInstallRaptorSkills(t *testing.T) {
 			var paths []string
 			for _, in := range got {
 				rel, _ := filepath.Rel(home, in.Path)
-				paths = append(paths, rel)
+				paths = append(paths, filepath.ToSlash(rel))
 				if _, err := os.Stat(in.Path); err != nil {
 					t.Errorf("reported %s but it is not on disk", in.Path)
 				}
@@ -391,20 +399,15 @@ func TestLoginInstallsRaptorSkill(t *testing.T) {
 			if tc.project {
 				pinProjectRoot(t, home)
 			}
-			bin, log := skillRaptor(t, "0.1.121", fail)
+			bin, log := skillRaptor(t, "0.1.130", fail)
 			origEnsure, origDetect, origFetch, origAgents := ensureRaptorBinary, detectHarnesses, fetchCatalog, fetchAgents
 			ensureRaptorBinary = func() (raptorinstall.Result, error) { return raptorinstall.Result{Path: bin}, nil }
-			// Codex already reads a raptor skill from the user-level shared root,
-			// so only Claude may get one, also in project scope.
+			// The raptor skill goes to the user-level folders, also in project scope.
 			detectHarnesses = func() []harness.Harness {
 				return []harness.Harness{
 					{Name: "claude-code", SkillDir: filepath.Join(home, ".claude", "skills")},
 					{Name: "codex", SkillDir: filepath.Join(home, ".agents", "skills")},
 				}
-			}
-			mustMkdir(t, filepath.Join(home, ".agents", "skills", "raptor"))
-			if err := os.WriteFile(filepath.Join(home, ".agents", "skills", "raptor", "SKILL.md"), []byte("x"), 0600); err != nil {
-				t.Fatal(err)
 			}
 			fetchCatalog = func(string, map[string]string, ...string) ([]skillcatalog.Skill, error) { return nil, nil }
 			fetchAgents = func(string, map[string]string) ([]agentcatalog.Agent, error) { return nil, nil }
@@ -416,15 +419,15 @@ func TestLoginInstallsRaptorSkill(t *testing.T) {
 			if state.projectScoped != tc.project {
 				t.Fatalf("projectScoped = %t, want %t", state.projectScoped, tc.project)
 			}
-			if c := calls(t, log); len(c) != 1 || c[0] != "install skill --agent claude" {
+			if c := calls(t, log); len(c) != 1 || c[0] != "install skill -o json --agent claude --agent agents" {
 				t.Errorf("raptor calls = %q", c)
 			}
 			payload := setupPayload("p", "u", "https://cp.invalid", "", false, state)
 			skills, _ := payload["raptor_skills"].([]skillInstallationLite)
-			if fail == "" && (len(skills) != 1 || skills[0].Path != filepath.Join(home, ".claude", "skills", "raptor", "SKILL.md") || state.raptorWarning != "") {
+			if fail == "" && (len(skills) != 2 || skills[0].Path != filepath.Join(home, ".claude", "skills", "raptor", "SKILL.md") || state.raptorWarning != "") {
 				t.Errorf("raptor_skills = %+v, warning = %q", skills, state.raptorWarning)
 			}
-			if fail != "" && (len(skills) != 0 || !strings.Contains(state.raptorWarning, "boom for claude")) {
+			if fail != "" && (len(skills) != 1 || skills[0].Harness != "codex" || !strings.Contains(state.raptorWarning, "boom for claude")) {
 				t.Errorf("raptor_skills = %+v, warning = %q", skills, state.raptorWarning)
 			}
 			if state.snapshotPath == "" {
@@ -443,7 +446,7 @@ func TestSetupInstallsRaptorSkill(t *testing.T) {
 	t.Setenv("HOME", home)
 	setRootProfile(t, "")
 	mustMkdir(t, filepath.Join(home, ".claude"))
-	bin, log := skillRaptor(t, "0.1.121", "")
+	bin, log := skillRaptor(t, "0.1.130", "")
 	orig, origDetect := ensureRaptorBinary, detectHarnesses
 	ensureRaptorBinary = func() (raptorinstall.Result, error) { return raptorinstall.Result{Path: bin}, nil }
 	detectHarnesses = func() []harness.Harness {
@@ -619,15 +622,20 @@ func TestRaptorSkillEverywhere(t *testing.T) {
 		t.Error("no raptor skill anywhere reported as everywhere")
 	}
 	put(claude.SkillDir)
+	put(filepath.Join(home, ".codex", "skills")) // an older raptor's folder: codex does not read it
 	if raptorSkillEverywhere([]harness.Harness{claude, codex}) {
-		t.Error("codex has no raptor skill, yet everywhere")
+		t.Error("codex has no raptor skill in its own folder, yet everywhere")
 	}
-	put(filepath.Join(home, ".codex", "skills")) // raptor's own folder for codex
+	put(codex.SkillDir)
+	if raptorSkillEverywhere([]harness.Harness{claude, codex, anti}) {
+		t.Error("antigravity has no raptor skill, yet everywhere")
+	}
+	put(anti.SkillDir)
 	if !raptorSkillEverywhere([]harness.Harness{claude, codex, anti}) {
-		t.Error("claude and codex have it; antigravity must not count")
+		t.Error("every host has it, yet not everywhere")
 	}
-	if raptorSkillEverywhere([]harness.Harness{anti}) {
-		t.Error("no raptor-supported host at all must be false")
+	if raptorSkillEverywhere(nil) {
+		t.Error("no host at all must be false")
 	}
 }
 

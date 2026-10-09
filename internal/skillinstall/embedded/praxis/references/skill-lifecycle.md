@@ -57,18 +57,19 @@ fallback. An organization or personal skill with the same name always stays.
 
 ## The raptor skill
 
-Login, `refresh-skills`, `profiles use` and `setup` run
-`raptor install skill --agent <claude|codex|gemini>` for each detected host.
-They also install a missing raptor to `~/.local/bin`. Raptor writes
-`~/.<agent>/skills/raptor` and records the path in
-`~/.facets/last-skills-upgrade`. After a raptor upgrade, the next ordinary raptor
-command rewrites every recorded path. `praxis setup` and `praxis update` upgrade
-raptor and refresh its skill at once.
+Login, `refresh-skills`, `profiles use` and `setup` run one
+`raptor install skill --agent …` for the detected hosts. They also install a
+missing raptor to `~/.local/bin`. Raptor writes the same folders that praxis
+uses: `~/.claude/skills`, `~/.agents/skills` (Codex and Gemini CLI) and
+`~/.gemini/config/skills` (Antigravity). It records each file it wrote in
+`~/.facets/raptor-skills.json`. After a raptor upgrade, the next ordinary raptor
+command refreshes every recorded folder and keeps files that the user changed.
+`praxis setup` and `praxis update` upgrade raptor and refresh its skill at once.
 
-- A Codex or Gemini host that already reads `~/.agents/skills/raptor` is skipped,
-  so it never sees two raptor skills.
-- Antigravity has no raptor skill.
-- Raptor older than 0.1.107 cannot install its skill; run `praxis update`.
+- A raptor that predates this layout cannot install its skill; run
+  `praxis update`.
+- Raptor moves copies that older raptors wrote to `~/.codex/skills` or
+  `~/.gemini/skills` to `~/.facets/skills-backup/` once.
 
 ## How installs are protected
 
@@ -84,7 +85,7 @@ is never replaced or written through; the install fails instead.
 
 - `praxis status --json` shows `skills_installed` and `agents_installed`.
 - `praxis list-skills --json` lists the receipt.
-- `raptor --version` and `~/.facets/last-skills-upgrade` show the raptor side.
+- `raptor --version` and `~/.facets/raptor-skills.json` show the raptor side.
 
 A running host can keep the old skill text until it reloads its skills. Run
 `praxis refresh-skills` only to repair, not to inspect. Restore a changed skill

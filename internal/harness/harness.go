@@ -13,8 +13,10 @@
 // Google Antigravity roots its config under ~/.gemini too, but reads
 // skills from ~/.gemini/config/skills (its config root, marked by
 // ~/.gemini/config/.migrated) — distinct from Gemini CLI's dirs, so no
-// conflict. The two are detected by distinct signals so a bare ~/.gemini
-// does not misattribute one for the other.
+// conflict. Like the skoop and raptor CLIs, praxis treats any ~/.gemini as
+// a possible Antigravity install: a standard Antigravity.app install has no
+// binary on PATH and no other stable marker, and a skill in
+// ~/.gemini/config/skills does no harm to a Gemini-CLI-only user.
 //
 // Cursor is intentionally NOT included: it has no user-scope skills
 // directory (only project-scope under .cursor/skills/), so it requires
@@ -151,9 +153,9 @@ func detectAntigravity(home string) Harness {
 		AgentDir: filepath.Join(home, ".gemini", "config", "agents"),
 	}
 	// Detect via the Antigravity binaries (CLI `agy`, IDE `antigravity-ide`)
-	// or its app-data dirs. Deliberately NOT keyed off a bare ~/.gemini —
-	// that is shared with Gemini CLI; the antigravity-ide subdir / app-data
-	// dir disambiguates so the two hosts are never conflated.
+	// or ~/.gemini, the same rule as skoop and raptor. Gemini CLI shares
+	// ~/.gemini, so both hosts are detected there; they read different
+	// skill folders, so neither sees a duplicate.
 	for _, bin := range []string{"agy", "antigravity-ide"} {
 		if p, err := exec.LookPath(bin); err == nil {
 			h.Detected = true
@@ -162,10 +164,10 @@ func detectAntigravity(home string) Harness {
 		}
 	}
 	for _, dir := range []string{
-		filepath.Join(home, ".gemini", "antigravity-ide"),
+		filepath.Join(home, ".gemini"),
 		filepath.Join(home, ".antigravity-ide"),
 	} {
-		if _, err := os.Stat(dir); err == nil {
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
 			h.Detected = true
 		}
 	}
