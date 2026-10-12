@@ -38,6 +38,9 @@ Discover deployed functions with `praxis mcp --json`; invoke them as
 `praxis mcp <namespace> <function>`. A cached manifest is a hint, not proof of
 current availability. Use `--help` for installed syntax and the references for
 meaning. Tool availability never implies permission to execute a mutation.
+Omit the executable inside a gateway command: `cloud_cli` takes
+`rds describe-db-instances`, not `aws rds ...`; `k8s_cli` takes `get pods`, not
+`kubectl get pods`.
 
 Use local `raptor` and its **raptor skill** for Facets operations, never a
 guessed `praxis mcp raptor` wrapper. Read that skill's task route before selecting
