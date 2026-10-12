@@ -3,7 +3,7 @@
 Use `cloud_cli` for organization-managed AWS/GCP/Azure discovery. First discover
 `list_cloud_integrations`, then select the integration's name, provider and
 account/project identity. A region default is not evidence all regions were
-visited. Name the account and requested region on each call.
+visited. Name the account on each call, and the region on each regional call.
 
 ```bash
 praxis mcp cloud_cli list_cloud_integrations --json
@@ -11,6 +11,15 @@ praxis mcp cloud_cli run_cloud_cli --json \
   --arg integration_name=ACCOUNT --arg region=REGION \
   --arg command='rds describe-db-instances --output json'
 ```
+
+The `region` arg works differently for each provider:
+
+- AWS: it sets `AWS_DEFAULT_REGION`. Global services such as IAM ignore it.
+- GCP: it adds `--region=REGION` to the gcloud command. Omit it for global
+  commands (`iam`, `projects`) and for zonal commands (`compute instances
+  list` takes `--zones`). If the command has no `--region` flag, the response
+  has `region: null` and a note.
+- Azure: the gateway ignores it. Use the command's own location filter.
 
 Provider prefix is omitted: `ec2 describe-instances`, `compute instances list`,
 `network vnet list`, not `aws ...`, `gcloud ...`, `az ...`. The gateway selects
