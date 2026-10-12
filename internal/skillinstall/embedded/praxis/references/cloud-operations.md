@@ -17,9 +17,8 @@ The `region` arg works differently for each provider:
 - AWS: it sets `AWS_DEFAULT_REGION`. Global services such as IAM ignore it.
 - GCP: it adds `--region=REGION` to the gcloud command. Omit it for global
   commands (`iam`, `projects`) and for zonal commands (`compute instances
-  list` takes `--zones`). An older gateway fails on these commands with
-  `unrecognized arguments: --region`. A newer gateway runs the command again
-  without the flag, and returns `region: null` and a note.
+  list` takes `--zones`). If the command has no `--region` flag, the response
+  has `region: null` and a note.
 - Azure: the gateway ignores it. Use the command's own location filter.
 
 Provider prefix is omitted: `ec2 describe-instances`, `compute instances list`,
