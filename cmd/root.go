@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,8 +15,10 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
+	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/selfupdate"
+	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"github.com/spf13/cobra"
 )
 
@@ -52,7 +56,7 @@ func init() {
 	// Persistent, so it works in both positions an AI host might emit it:
 	// `praxis --profile acme mcp ...` and `praxis mcp ... --profile acme`.
 	rootCmd.PersistentFlags().StringVarP(&rootProfile, "profile", "p", "",
-		"credentials profile to use for this invocation (overrides $"+credentials.EnvProfile+"; default: the active profile)")
+		"credentials profile to use (default: the folder pin, then [default] or the only profile)")
 
 }
 
@@ -69,9 +73,144 @@ func explicitProfile() (string, string) {
 	return "", ""
 }
 
+// profileNoteShown keeps the profile notes to one set per process.
+var profileNoteShown bool
+
+// noteProfileChoice prints, to stderr and once per process, what a machine
+// with several profiles needs to know about the profile a command resolved:
+// an agent command that selected none got the machine default, and a profile
+// whose org is not the one whose skills are installed here. Both are silent on
+// a single-profile machine.
+func noteProfileChoice(active credentials.Active) {
+	if profileNoteShown || !active.Loaded {
+		return
+	}
+	profileNoteShown = true
+	for _, line := range []string{implicitProfileNote(active, httpclient.AgentHost()), orgSkillsNote(active)} {
+		if line != "" {
+			fmt.Fprintln(os.Stderr, line)
+		}
+	}
+}
+
+// implicitProfileNote is the agent guard: an AI host that selected no profile
+// on a machine with more than one identity got the machine default, which is
+// a guess.
+func implicitProfileNote(active credentials.Active, host string) string {
+	if host == "" || (active.Source != credentials.SourceDefault && active.Source != credentials.SourceSole) {
+		return ""
+	}
+	if store, err := credentials.Load(); err != nil || credentials.Identities(store) < 2 {
+		return ""
+	}
+	return fmt.Sprintf("praxis: using profile %q (%s); pass --profile NAME to choose another", active.Name, active.Profile.URL)
+}
+
+// orgSkillsNote reports a profile from another org than the org skills
+// installed here: the skill text the host reads is not this profile's. The
+// fix depends on what selected the profile.
+func orgSkillsNote(active credentials.Active) string {
+	org, ok := installedOrg()
+	if !ok || raptorstate.MatchesHost(org.URL, active.Profile.URL) {
+		return ""
+	}
+	store, _ := credentials.Load()
+	name := sectionName(store, active.Name, active.Profile.URL)
+	var fix string
+	switch active.Source {
+	case credentials.SourceDefault, credentials.SourceSole:
+		fix = "Run `praxis refresh-skills` to install its skills."
+	case credentials.SourcePin:
+		fix = fmt.Sprintf("Run `praxis refresh-skills` in %s to install its skills there.",
+			filepath.Dir(filepath.Dir(active.PinPath)))
+	default:
+		fix = fmt.Sprintf("To install its skills, pin a folder to it (`praxis profiles pin %[1]s`, then "+
+			"`praxis refresh-skills` there), or make it the machine default (`praxis profiles set-default %[1]s`).", name)
+	}
+	return fmt.Sprintf("praxis: the org skills installed here are for profile %q (%s), not %q (%s). %s",
+		sectionName(store, org.Profile, org.URL), org.URL, name, active.Profile.URL, fix)
+}
+
+// sectionName names a profile for a person: [default] on control plane url by
+// the section it copies, else another section on that control plane, else as
+// is.
+func sectionName(store map[string]credentials.Profile, name, url string) string {
+	if name != credentials.DefaultProfileName {
+		return name
+	}
+	for _, n := range credentials.SameAs(store, name) {
+		if raptorstate.MatchesHost(store[n].URL, url) {
+			return n
+		}
+	}
+	names := make([]string, 0, len(store))
+	for n := range store {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if n != name && raptorstate.MatchesHost(store[n].URL, url) {
+			return n
+		}
+	}
+	return name
+}
+
+// installedOrg is the org whose skills an AI host sees here: the active root's,
+// else — in a project tree with no org of its own — the user-level one.
+func installedOrg() (skillinstall.InstalledOrg, bool) {
+	root, err := paths.ActiveRoot()
+	if err != nil {
+		return skillinstall.InstalledOrg{}, false
+	}
+	if org, ok := skillinstall.OrgAt(root); ok {
+		return org, true
+	}
+	home, err := paths.Dir()
+	if err != nil || home == root {
+		return skillinstall.InstalledOrg{}, false
+	}
+	return skillinstall.OrgAt(home)
+}
+
+// noCredentials explains a resolved profile with no token: what selected it,
+// and the profiles that exist.
+func noCredentials(active credentials.Active) (string, string) {
+	msg := fmt.Sprintf("no credentials for profile %q", active.Name)
+	if active.PinPath != "" {
+		msg += " (pinned by " + active.PinPath + ")"
+	}
+	hint := "run `praxis login` (or `praxis login --profile " + active.Name + "`)"
+	if names, err := credentials.List(); err == nil && len(names) > 0 {
+		hint += "; or pass --profile NAME, one of: " + strings.Join(names, ", ")
+	}
+	return msg, hint
+}
+
+// raptorPinWarning warns, when the raptor on PATH predates folder pins, that
+// raptor commands in a pinned folder still use [default]. "" otherwise.
+func raptorPinWarning() string {
+	path, supported, installed := raptorstate.PinSupport()
+	if !installed || supported {
+		return ""
+	}
+	return fmt.Sprintf("raptor at %s does not follow folder pins: raptor commands in this folder use [default], "+
+		"not the pin, until you upgrade it (`raptor upgrade`, or `sudo raptor upgrade` when root owns the file)", path)
+}
+
+// envConflictNote says which variable wins when PRAXIS_PROFILE and
+// FACETS_PROFILE name different profiles, or "". raptor follows the same order.
+func envConflictNote() string {
+	p, f := strings.TrimSpace(os.Getenv(credentials.EnvProfile)), strings.TrimSpace(os.Getenv(credentials.FacetsEnvProfile))
+	if p == "" || f == "" || p == f {
+		return ""
+	}
+	return fmt.Sprintf("praxis: %s=%s and %s=%s differ; using %s", credentials.EnvProfile, p, credentials.FacetsEnvProfile, f, p)
+}
+
 // refusedProfileFlag refuses a diverging -p/--profile only, leaving
 // $PRAXIS_PROFILE alone. Use it where the environment is a legitimate ambient
-// session setting but the flag would be ambiguous: `profiles use` names its
+// session setting but the flag would be ambiguous: `profiles set-default` names its
 // target positionally, so a flag naming a DIFFERENT profile beside it is two
 // answers to one question, whereas an exported variable is just the session the
 // user is working in.
@@ -107,7 +246,7 @@ func refusedProfileFlag(out io.Writer, asJSON bool, what, hintFmt, acts string) 
 // profile the user had not named.
 func refusedExplicitProfile(out io.Writer, asJSON bool, what, hintFmt, acts string) bool {
 	// A selection whose credentials equal the active section is the same
-	// deployment under another name — [default] after `profiles use X` — and
+	// deployment under another name — [default] after `profiles set-default X` — and
 	// is not a redirect.
 	if rootProfile != "" && !credentials.SameCreds(rootProfile, acts) {
 		return refuseSelection(out, asJSON, what, hintFmt, rootProfile, "--profile", acts)
@@ -184,6 +323,9 @@ func Execute() {
 	// Once per version, run setup in the background: the hook repair, raptor
 	// and its skill. The Homebrew cask no longer runs it.
 	maybeStartSetup(os.Args[1:])
+	if note := envConflictNote(); note != "" {
+		fmt.Fprintln(os.Stderr, note)
+	}
 	// Control-plane PATs an older praxis kept in ~/.praxis/credentials move to
 	// raptor's file, the shared store; its active-profile pointer becomes the
 	// [default] section. Silent and best-effort.
@@ -204,7 +346,7 @@ func Execute() {
 		// A pre-v1.11 per-directory pointer no longer pins anything; say so once
 		// per run to a human, so a repo that used to be local mode is not a mystery.
 		if p, profile, ok := paths.LegacyProjectPointer(); ok {
-			fmt.Fprintf(os.Stderr, "Note: %s is an old per-directory pointer and is ignored. To pin this tree again run `praxis profiles use %s --local`, or delete that file.\n", p, profile)
+			fmt.Fprintf(os.Stderr, "Note: %s is an old per-directory pointer and is ignored. To pin this tree again run `praxis profiles pin %s`, or delete that file.\n", p, profile)
 		}
 	}
 	// Fire a background check for a newer release. For an interactive human

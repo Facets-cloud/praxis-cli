@@ -28,6 +28,9 @@ func Session() string { return session }
 // that sets CI), and empty outside CI.
 func CIName() string { return ciName(os.Getenv) }
 
+// AgentHost is the AI host that runs this process; empty means a person.
+func AgentHost() string { return agentHost(os.Getenv) }
+
 // CIEnvVars lists every environment variable that marks a CI run, so a test
 // can clear them all.
 func CIEnvVars() []string {

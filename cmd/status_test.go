@@ -27,9 +27,7 @@ func TestStatusCmd_LocalMode_ReportsProjectRootAndSource(t *testing.T) {
 	isolateRaptorEnv(t)
 	seedPAT(t, "acme", "https://acme.test", "tok")
 	repo := repoUnderHome(t, home)
-	if err := credentials.SetDefaultLocal("acme", repo); err != nil {
-		t.Fatal(err)
-	}
+	seedLegacyTree(t, repo, "acme")
 	inDir(t, repo)
 
 	var buf bytes.Buffer
@@ -42,6 +40,35 @@ func TestStatusCmd_LocalMode_ReportsProjectRootAndSource(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("status in local mode missing %q\nfull: %s", want, out)
 		}
+	}
+}
+
+func TestStatusCmd_PinnedFolder_ReportsThePin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	resetStatusFlags()
+
+	isolateRaptorEnv(t)
+	seedPAT(t, "default", "https://root.test", "tr")
+	seedPAT(t, "acme", "https://acme.test", "tok")
+	repo := repoUnderHome(t, home)
+	if err := credentials.WritePin(repo, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	inDir(t, repo)
+
+	var buf bytes.Buffer
+	statusCmd.SetOut(&buf)
+	if err := statusCmd.RunE(statusCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	got := decodeMap(t, buf.String())
+	if got["profile"] != "acme" || got["profile_source"] != "pin" || got["pin_path"] != credentials.PinPathIn(repo) {
+		t.Errorf("status = %v, want acme from the pin", got)
+	}
+	// raptor follows the pin too, so no prefix is needed.
+	if r, _ := got["raptor"].(map[string]any); r["prefix_required"] != false {
+		t.Errorf("raptor block = %v, want no prefix in a pinned folder", r)
 	}
 }
 

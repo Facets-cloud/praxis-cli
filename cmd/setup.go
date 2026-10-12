@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -73,6 +75,9 @@ installs only the skill, offline.
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(setupJSON, false, out)
+		// Setup installs user-level skills, so its receipt is the home one,
+		// whatever folder started it.
+		defer pinRootToHome()()
 		repaired, repairWarn := repairPraxisHooks()
 		printHookRepair(out, asJSON, repaired, repairWarn)
 		raptor, raptorErr := prepareRaptor(out, asJSON)
@@ -88,6 +93,7 @@ installs only the skill, offline.
 		if err != nil {
 			return err
 		}
+		refreshProjectSkills()
 		var raptorSkills []skillInstallationLite
 		if raptor.Path != "" {
 			var skillErr error
@@ -389,6 +395,11 @@ func startBackgroundSetup(dir string) error {
 	defer log.Close()
 	c := exec.Command(self, "setup", "--json")
 	c.Stdout, c.Stderr = log, log
+	// Not the caller's folder: inside a project tree that would make the
+	// project receipt the active one.
+	if home, herr := paths.Home(); herr == nil {
+		c.Dir = home
+	}
 	detach(c)
 	if err := c.Start(); err != nil {
 		return err
@@ -403,5 +414,65 @@ func markSetupVersion() {
 		_ = os.MkdirAll(dir, 0o755)
 		_ = os.WriteFile(filepath.Join(dir, setupVersionFile), []byte(version+"\n"), 0o644)
 		_ = os.Remove(filepath.Join(dir, setupClaimFile))
+	}
+}
+
+// projectList is the registry of project trees with a project-scoped install
+// (~/.praxis/projects.json).
+type projectList struct {
+	Projects []string `json:"projects"`
+}
+
+func loadProjects() (string, projectList) {
+	var l projectList
+	path, err := paths.Projects()
+	if err != nil {
+		return "", l
+	}
+	if data, rerr := os.ReadFile(path); rerr == nil {
+		_ = json.Unmarshal(data, &l)
+	}
+	return path, l
+}
+
+func saveProjects(path string, l projectList) {
+	if data, err := json.MarshalIndent(l, "", "  "); err == nil {
+		_ = os.MkdirAll(filepath.Dir(path), 0o700)
+		_ = os.WriteFile(path, data, 0o600)
+	}
+}
+
+// recordProject adds dir (a folder holding .praxis) to the registry, so a
+// later upgrade refreshes the praxis skill installed there. Best-effort.
+func recordProject(dir string) {
+	path, l := loadProjects()
+	if path == "" || slices.Contains(l.Projects, dir) {
+		return
+	}
+	l.Projects = append(l.Projects, dir)
+	saveProjects(path, l)
+}
+
+// refreshProjectSkills brings the praxis skill in every recorded project tree
+// to this binary's text — the same refresh a command run inside that tree
+// does — and drops trees whose receipt is gone. Best-effort.
+func refreshProjectSkills() {
+	path, l := loadProjects()
+	if path == "" || len(l.Projects) == 0 {
+		return
+	}
+	keep := l.Projects[:0:0]
+	for _, dir := range l.Projects {
+		root := filepath.Join(dir, ".praxis")
+		if _, err := os.Stat(filepath.Join(root, "installed.json")); err != nil {
+			continue
+		}
+		keep = append(keep, dir)
+		restore := paths.OverrideActiveRoot(root)
+		_, _ = skillinstall.RefreshIfStale()
+		restore()
+	}
+	if len(keep) != len(l.Projects) {
+		saveProjects(path, projectList{Projects: keep})
 	}
 }

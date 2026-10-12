@@ -60,13 +60,17 @@ current staleness.`,
 		}
 		// Surface project (local) mode so AI hosts and users can see that
 		// skills/receipt are scoped to this directory tree, not global. A tree
-		// is local mode exactly when it has its own .facets/credentials.
+		// is local mode when it has a pin (.facets/profile) or a legacy
+		// .facets/credentials.
 		projectRoot := ""
 		if root, ok, _ := paths.ProjectRoot(); ok {
 			projectRoot = root
 			state["project_root"] = root
 		}
-		// After `profiles use X`, [default] is a copy of X: say so.
+		if active.PinPath != "" {
+			state["pin_path"] = active.PinPath
+		}
+		// After `profiles set-default X`, [default] is a copy of X: say so.
 		if store, serr := credentials.Load(); serr == nil {
 			if same := credentials.SameAs(store, active.Name); len(same) > 0 {
 				state["same_as"] = same
@@ -139,7 +143,11 @@ current staleness.`,
 			return render.JSON(out, state)
 		}
 
-		fmt.Fprintf(out, "profile:    %s (source: %s)\n", active.Name, active.Source)
+		if active.PinPath != "" {
+			fmt.Fprintf(out, "profile:    %s (source: pin %s)\n", active.Name, active.PinPath)
+		} else {
+			fmt.Fprintf(out, "profile:    %s (source: %s)\n", active.Name, active.Source)
+		}
 		if projectRoot != "" {
 			fmt.Fprintf(out, "local mode: %s\n", projectRoot)
 		}
@@ -265,6 +273,13 @@ func raptorStatusBlockFor(st raptorstate.State, active credentials.Active, goos,
 	if st.Source != "" {
 		block["source"] = string(st.Source)
 	}
+	if st.Installed {
+		_, supported, _ := raptorstate.PinSupport()
+		block["pin_support"] = supported
+	}
+	if st.IgnoredPin != "" {
+		block["ignored_pin"] = st.IgnoredPin
+	}
 	if st.Found {
 		block["control_plane_url"] = st.ControlPlaneURL
 		if st.Username != "" {
@@ -322,6 +337,9 @@ func raptorStatusLine(st raptorstate.State, active credentials.Active) string {
 			st.Profile, st.Source, st.ControlPlaneURL, match)
 		if sharedProfile(active) && prefixRequired(st, active) {
 			line += fmt.Sprintf("; use FACETS_PROFILE=%s for this praxis profile", active.Name)
+		}
+		if st.IgnoredPin != "" {
+			line += "; this raptor ignores the folder pin " + st.IgnoredPin + " — upgrade raptor"
 		}
 		return line
 	case sharedProfile(active):

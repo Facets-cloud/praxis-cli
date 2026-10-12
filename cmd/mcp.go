@@ -71,12 +71,11 @@ Examples:
 			return err
 		}
 		if !active.Loaded || active.Profile.Token == "" {
-			render.PrintError(out, asJSON,
-				fmt.Sprintf("no credentials for profile %q", active.Name),
-				"run `praxis login` (or `praxis login --profile "+active.Name+"`)",
-				exitcode.Auth)
+			msg, hint := noCredentials(active)
+			render.PrintError(out, asJSON, msg, hint, exitcode.Auth)
 			os.Exit(exitcode.Auth)
 		}
+		noteProfileChoice(active)
 
 		// No args → list manifest.
 		if len(args) == 0 {

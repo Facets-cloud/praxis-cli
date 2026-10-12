@@ -33,6 +33,9 @@ For live Praxis work, check `praxis status --json`: selected profile, URL,
 authentication and installed capabilities. Do not read credential files into
 the transcript. Existing context may already establish the target; ask only
 for missing scope that changes the work. Read-only repository work needs no login.
+With more than one profile on the machine, pass `--profile NAME` on every praxis
+and raptor command (or work in a folder pinned to it); never switch profiles with
+`login` or `profiles set-default` during a task.
 
 Discover deployed functions with `praxis mcp --json`; invoke them as
 `praxis mcp <namespace> <function>`. A cached manifest is a hint, not proof of

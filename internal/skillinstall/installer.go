@@ -49,6 +49,40 @@ type AgentInstallation struct {
 type Receipt struct {
 	Skills []Installation      `json:"skills"`
 	Agents []AgentInstallation `json:"agents,omitempty"`
+	// Org is the profile whose org catalog is installed in this root. Older
+	// receipts have none.
+	Org *InstalledOrg `json:"org,omitempty"`
+}
+
+// InstalledOrg names a profile and its deployment URL.
+type InstalledOrg struct {
+	Profile string `json:"profile"`
+	URL     string `json:"url"`
+}
+
+// SetOrg records that the active root now holds profile's org catalog.
+func SetOrg(profile, url string) error {
+	return withSkillLock(func() error {
+		r, err := loadReceipt()
+		if err != nil {
+			return err
+		}
+		r.Org = &InstalledOrg{Profile: profile, URL: url}
+		return saveReceipt(r)
+	})
+}
+
+// OrgAt returns the org recorded in the receipt under root (a .praxis folder).
+func OrgAt(root string) (InstalledOrg, bool) {
+	data, err := os.ReadFile(filepath.Join(root, "installed.json"))
+	if err != nil {
+		return InstalledOrg{}, false
+	}
+	var r Receipt
+	if json.Unmarshal(data, &r) != nil || r.Org == nil {
+		return InstalledOrg{}, false
+	}
+	return *r.Org, true
 }
 
 // Install writes the named skill into every detected harness's user-level
@@ -410,6 +444,11 @@ func refreshWhere(match func(Installation) (bool, error)) (refreshed []Installat
 		if err != nil {
 			return err
 		}
+		if repairForeignEntries(&receipt) {
+			if err := saveReceipt(receipt); err != nil {
+				return err
+			}
+		}
 		var names []string
 		hosts := map[string][]harness.Harness{}
 		for _, e := range receipt.Skills {
@@ -449,6 +488,57 @@ func refreshWhere(match func(Installation) (bool, error)) (refreshed []Installat
 		return errors.Join(errs...)
 	})
 	return
+}
+
+// repairForeignEntries fixes a project receipt that an older praxis damaged by
+// recording a user-level install in it (a background setup that ran inside the
+// project). An embedded-skill entry whose path is outside the project points
+// at the project's own copy when that exists (with no digest, so the next
+// refresh rewrites it), and is dropped otherwise. The home receipt is never
+// changed. Reports whether the receipt changed.
+func repairForeignEntries(r *Receipt) bool {
+	root, err := paths.ActiveRoot()
+	if err != nil {
+		return false
+	}
+	if homeRoot, herr := paths.Dir(); herr != nil || root == homeRoot {
+		return false
+	}
+	base := filepath.Dir(root)
+	home, _ := paths.Home()
+	have := map[string]bool{}
+	for _, e := range r.Skills {
+		if under(base, e.Path) {
+			have[e.SkillName+"\x00"+e.Harness] = true
+		}
+	}
+	changed := false
+	kept := r.Skills[:0]
+	for _, e := range r.Skills {
+		if !IsMetaSkill(e.SkillName) || under(base, e.Path) {
+			kept = append(kept, e)
+			continue
+		}
+		changed = true
+		rel, rerr := filepath.Rel(home, e.Path)
+		if home == "" || rerr != nil || !filepath.IsLocal(rel) || have[e.SkillName+"\x00"+e.Harness] {
+			continue
+		}
+		if _, serr := os.Stat(filepath.Join(base, rel)); serr != nil {
+			continue
+		}
+		e.Path, e.Digest = filepath.Join(base, rel), ""
+		have[e.SkillName+"\x00"+e.Harness] = true
+		kept = append(kept, e)
+	}
+	r.Skills = kept
+	return changed
+}
+
+// under reports whether path is inside dir.
+func under(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && filepath.IsLocal(rel)
 }
 
 // embeddedWrite is the package write for a skill embedded in this binary.

@@ -12,6 +12,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/raptorinstall"
+	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 )
 
 // $PRAXIS_PROFILE now outranks both on-disk pointers, so a developer with it
@@ -36,6 +37,9 @@ func TestMain(m *testing.M) {
 	// through the developer's real home. Start it at the (faked) HOME instead so
 	// no test reads a live ~/.facets/credentials.
 	restore := credentials.SetGetwdForTest(func() (string, error) { return os.Getenv("HOME"), nil })
+	// The developer's raptor must not decide a test: assume one that follows
+	// pins. Tests of the probe put a fake raptor on PATH.
+	restorePins := raptorstate.SetPinProbeForTest(func(string) bool { return true })
 	// Login, setup and update install and upgrade raptor over the network.
 	// Tests that exercise that path swap the real functions back in.
 	ensureRaptorBinary = func() (raptorinstall.Result, error) { return raptorinstall.Result{}, nil }
@@ -43,6 +47,7 @@ func TestMain(m *testing.M) {
 	// A real start would run the test binary as `praxis __auto-update`.
 	startAutoUpdate = func(string, string) error { return errors.New("no automatic update in tests") }
 	code := m.Run()
+	restorePins()
 	restore()
 	_ = os.RemoveAll(home)
 	os.Exit(code)
@@ -218,16 +223,16 @@ func TestRootProfileFlag_RefusedWhereItCannotBeHonored(t *testing.T) {
 				return refreshSkillsCmd.RunE(refreshSkillsCmd, nil)
 			},
 			wantWhat: "refresh-skills",
-			wantHint: "profiles use acme",
+			wantHint: "profiles pin acme",
 		},
 		{
-			name: "profiles use",
+			name: "profiles set-default",
 			run: func(t *testing.T, out *bytes.Buffer) error {
-				profilesUseCmd.SetOut(out)
-				t.Cleanup(func() { profilesUseCmd.SetOut(nil) })
-				return profilesUseCmd.RunE(profilesUseCmd, []string{"other"})
+				profilesSetDefaultCmd.SetOut(out)
+				t.Cleanup(func() { profilesSetDefaultCmd.SetOut(nil) })
+				return profilesSetDefaultCmd.RunE(profilesSetDefaultCmd, []string{"other"})
 			},
-			wantWhat: "profiles use",
+			wantWhat: "profiles set-default",
 			wantHint: "as the argument",
 		},
 	}
@@ -235,7 +240,7 @@ func TestRootProfileFlag_RefusedWhereItCannotBeHonored(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
-			resetProfilesUseFlags(t)
+			resetSetDefaultFlags(t)
 			seedProfile(t, "default", "https://d.test", "td")
 			seedProfile(t, "acme", "https://acme.test", "ta")
 			seedProfile(t, "other", "https://other.test", "tо")
@@ -362,14 +367,14 @@ func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
 		},
 		{
 			// refresh-skills installs into the ACTIVE ROOT, so inside a pinned
-			// tree the profile it acts on is the tree's [default] — a copy of
-			// the pinned profile. Naming that profile is not a divergence.
+			// folder the profile it acts on is the pinned one. Naming that
+			// profile is not a divergence.
 			name: "refresh-skills names the project-pinned profile",
 			setup: func(t *testing.T) string {
 				seedPAT(t, "default", "https://d.test", "td")
 				seedPAT(t, "pinned", "https://pinned.test", "tp")
 				repo := repoUnderHome(t, os.Getenv("HOME"))
-				if err := credentials.SetDefaultLocal("pinned", repo); err != nil {
+				if err := credentials.WritePin(repo, "pinned"); err != nil {
 					t.Fatal(err)
 				}
 				inDir(t, repo)
@@ -391,7 +396,7 @@ func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
 		},
 		{
 			// One answer given twice is not two answers.
-			name: "profiles use with -p naming the same target",
+			name: "profiles set-default with -p naming the same target",
 			setup: func(t *testing.T) string {
 				seedProfile(t, "default", "https://d.test", "td")
 				seedProfile(t, "acme", "https://acme.test", "ta")
@@ -399,9 +404,9 @@ func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
 				return "acme"
 			},
 			run: func(t *testing.T, out *bytes.Buffer) error {
-				profilesUseCmd.SetOut(out)
-				t.Cleanup(func() { profilesUseCmd.SetOut(nil) })
-				return profilesUseCmd.RunE(profilesUseCmd, []string{"acme"})
+				profilesSetDefaultCmd.SetOut(out)
+				t.Cleanup(func() { profilesSetDefaultCmd.SetOut(nil) })
+				return profilesSetDefaultCmd.RunE(profilesSetDefaultCmd, []string{"acme"})
 			},
 			verify: func(t *testing.T, call *postAuthCall) {
 				if got := onDiskActiveURL(t); got != "https://acme.test" {
@@ -417,7 +422,7 @@ func TestProfileSelection_AllowedWhenItNamesTheProfileActedOn(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
-			resetProfilesUseFlags(t)
+			resetSetDefaultFlags(t)
 			call := stubPostAuthCapture(t)
 			code := stubOsExit(t)
 
@@ -708,13 +713,12 @@ func TestEnvProfile_RefusedByActiveProfileMutators(t *testing.T) {
 	}
 }
 
-// `profiles use` must NOT refuse the env var: naming a target positionally
-// while this session is scoped elsewhere is a legitimate "change the default
-// for everyone else". It does have to say the switch won't apply HERE, or the
-// command looks like a no-op.
-func TestProfilesUse_EnvShadowsTheSwitchButIsAllowed(t *testing.T) {
+// set-default must NOT refuse the env var: naming a target positionally while
+// this session is scoped elsewhere is a legitimate "change the default for
+// everyone else". It does have to say the change won't apply HERE.
+func TestProfilesSetDefault_EnvShadowsTheChangeButIsAllowed(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	resetProfilesUseFlags(t)
+	resetSetDefaultFlags(t)
 	seedProfile(t, "default", "https://d.test", "td")
 	seedProfile(t, "acme", "https://acme.test", "ta")
 	seedProfile(t, "scoped", "https://scoped.test", "ts")
@@ -722,72 +726,46 @@ func TestProfilesUse_EnvShadowsTheSwitchButIsAllowed(t *testing.T) {
 	okAuthMe(t, "u@x")
 	stubPostAuthCapture(t)
 
-	out, err := runProfilesUse(t, "acme")
+	out, err := runSetDefault(t, "acme")
 	if err != nil {
-		t.Fatalf("profiles use should be allowed with the env var set: %v", err)
+		t.Fatalf("set-default should be allowed with the env var set: %v", err)
 	}
 	got := decodeMap(t, out)
 	if got["profile"] != "acme" {
 		t.Errorf("profile = %v, want acme", got["profile"])
 	}
-	if got["shadowed_by_env"] != credentials.EnvProfile+"=scoped" {
-		t.Errorf("shadowed_by_env = %v, want %s=scoped", got["shadowed_by_env"], credentials.EnvProfile)
-	}
-	if got["effective_profile"] != "scoped" {
-		t.Errorf("effective_profile = %v, want scoped — this session still uses the env profile", got["effective_profile"])
+	if got["effective_profile"] != "scoped (env)" {
+		t.Errorf("effective_profile = %v, want scoped (env) — this session still uses the env profile", got["effective_profile"])
 	}
 }
 
-// A global switch changes every session on the machine and replaces the org
-// skills on disk. The output must say so, or a user running several agent
-// sessions has no way to know they just disrupted the others.
-func TestProfilesUse_GlobalSwitchAnnouncesMachineWideScope(t *testing.T) {
+// The machine-wide warning is gated on the profile count: a single-profile
+// machine has no other session to disturb, but the re-sync still happens.
+func TestProfilesSetDefault_MachineWideNoteOnlyWithSeveralProfiles(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	resetProfilesUseFlags(t)
-	seedProfile(t, "default", "https://d.test", "td")
-	seedProfile(t, "acme", "https://acme.test", "ta")
-	okAuthMe(t, "u@x")
-	stubPostAuthCapture(t)
-
-	out, err := runProfilesUse(t, "acme")
-	if err != nil {
-		t.Fatal(err)
-	}
-	note := fmt.Sprint(decodeMap(t, out)["scope_note"])
-	for _, want := range []string{"machine-global", credentials.EnvProfile + "=acme"} {
-		if !strings.Contains(note, want) {
-			t.Errorf("scope_note = %q, want it to mention %q", note, want)
-		}
-	}
-}
-
-// … and must NOT say so when there is only one profile. Nothing was disrupted:
-// every session resolved to this profile before the command and still does. The
-// note would be a warning about a hazard the user cannot have, and it teaches
-// PRAXIS_PROFILE — whose only effect on a one-profile machine is to name the
-// same profile a second time.
-func TestProfilesUse_SingleProfileReSyncOmitsMachineWideScope(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	resetProfilesUseFlags(t)
+	resetSetDefaultFlags(t)
 	seedProfile(t, "default", "https://d.test", "td")
 	okAuthMe(t, "u@x")
 	call := stubPostAuthCapture(t)
 
-	out, err := runProfilesUse(t, "default")
+	out, err := runSetDefault(t, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := decodeMap(t, out)
-	if _, present := got["scope_note"]; present {
-		t.Errorf("scope_note = %v on a single-profile machine; there is no other session to disturb", got["scope_note"])
+	if got := decodeMap(t, out); got["scope_note"] != nil || got["profile"] != "default" {
+		t.Errorf("single profile: payload = %v; want no scope_note", got)
 	}
-	// The re-sync itself still has to happen — gating the note must not gate the
-	// work.
 	if call.count != 1 {
 		t.Errorf("postAuthSetup ran %d times, want 1", call.count)
 	}
-	if got["profile"] != "default" {
-		t.Errorf("profile = %v, want default", got["profile"])
+
+	seedProfile(t, "acme", "https://acme.test", "ta")
+	out, err = runSetDefault(t, "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if note := fmt.Sprint(decodeMap(t, out)["scope_note"]); !strings.Contains(note, "machine-global") {
+		t.Errorf("scope_note = %q, want the machine-global warning", note)
 	}
 }
 
@@ -877,9 +855,7 @@ func TestRootProfileFlag_OutranksTreeDefault(t *testing.T) {
 	seedPAT(t, "pinned", "https://pinned.test", "tp")
 	seedPAT(t, "override", "https://override.test", "to")
 	repo := repoUnderHome(t, home)
-	if err := credentials.SetDefaultLocal("pinned", repo); err != nil {
-		t.Fatal(err)
-	}
+	seedLegacyTree(t, repo, "pinned")
 	if err := credentials.PutLocal("override", credentials.FacetsProfile("https://override.test", "u@x", "to"), repo); err != nil {
 		t.Fatal(err)
 	}

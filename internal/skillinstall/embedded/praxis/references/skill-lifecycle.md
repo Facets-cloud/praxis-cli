@@ -22,15 +22,15 @@ get their skills from the server; this package is for local CLI hosts.
 | Antigravity | `~/.gemini/config/skills` |
 
 A project-scoped login (`praxis login --local`, `praxis refresh-skills --project`)
-puts the praxis and organization skills under the repo instead. The raptor skill
-always goes to the user level.
+pins the repo (`<repo>/.facets/profile`) and puts the praxis and organization
+skills under the repo instead. The raptor skill always goes to the user level.
 
 ## When the praxis skill is installed
 
 - The first run of any praxis command, once and offline. It is skipped for
   `mcp`, `ig`, `git-credential`, `setup`, `version`, `update` and `completion`.
 - `praxis setup`. Homebrew runs it on install and on every upgrade.
-- `praxis login`, `praxis refresh-skills` and `praxis profiles use`.
+- `praxis login`, `praxis refresh-skills` and `praxis profiles set-default`.
 - Any other praxis command, when the installed praxis skill was written by a
   different praxis binary (after a brew upgrade, `praxis update` or a manual
   install). The command first rewrites the skill, silently. A skill you edited
@@ -38,14 +38,18 @@ always goes to the user level.
   at install. It is skipped for development builds and for `login`, `logout`,
   `refresh-skills`, `profiles`, `setup`, `update`, `hook`, `git-credential`,
   `version` and `completion`.
+- `praxis setup` after an upgrade also refreshes the praxis skill in every repo
+  that had a project-scoped install (`~/.praxis/projects.json`).
 
 Each install also removes the embedded skills this package replaced:
 `praxis-getting-started`, `praxis-memory`, `praxis-onboarding` and `use-ig`.
 
 ## When organization skills change
 
-Login, `refresh-skills` and `profiles use` fetch the selected organization's
-skills and agent files. A failed fetch leaves the installed ones in place. A
+Org skills follow the profile in effect where they are installed: `[default]`
+at the user level, the pin in a pinned repo. A bare login, `profiles set-default`
+and `refresh-skills` fetch that organization's skills and agent files; a login
+with `--profile` for another profile does not. A failed fetch leaves the installed ones in place. A
 successful fetch replaces the previous profile's `praxis-<name>` skills.
 `praxis logout` removes them, the agent files and the hooks. It keeps `praxis`.
 
@@ -57,7 +61,7 @@ fallback. An organization or personal skill with the same name always stays.
 
 ## The raptor skill
 
-Login, `refresh-skills`, `profiles use` and `setup` run one
+Login, `refresh-skills`, `profiles set-default` and `setup` run one
 `raptor install skill --agent …` for the detected hosts. They also install a
 missing raptor to `~/.local/bin`. Raptor writes the same folders that praxis
 uses: `~/.claude/skills`, `~/.agents/skills` (Codex and Gemini CLI) and

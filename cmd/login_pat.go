@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -203,19 +204,20 @@ func promptLoginURL(asJSON bool) string {
 	return normalizeBaseURL(u)
 }
 
-// pickProfile decides the profile for a login that named none, on a machine
-// with more than one. A bare global login keeps "default" (the documented
-// convention); returns "" for that and for single-profile machines. It steps
-// in for --local, and for a --url whose host is not default's control plane:
-// both would otherwise commit a directory or overwrite default on a guess.
+// pickProfile decides the profile for a login that named none. A bare global
+// login keeps "default" (the documented convention); returns "" for that. It
+// steps in for --local on a machine with more than one profile, for a global
+// login with several profiles and no [default], and — on any machine — for a
+// --url whose host is not default's control plane: each would otherwise pin a
+// directory or overwrite [default] on a guess.
 //
 // On a terminal it lists the store and asks — a number, an existing name, or
 // a NEW name (which then goes through the URL and PAT prompts). Without a
 // terminal, or with --json, it exits 2 with the list and a -p hint.
 func pickProfile(out io.Writer, asJSON, local bool, flagURL string) (string, error) {
-	// A global login writes the home store, and a pin copies a home section
-	// into the tree, so the choice is always among the home profiles — never
-	// the tree's, which a run from inside a local tree would otherwise see.
+	// A global login writes the home store, so the choice is always among the
+	// home profiles — never the tree's, which a run from inside a local tree
+	// would otherwise see.
 	store, err := credentials.LoadHome()
 	if err != nil {
 		return "", nil //nolint:nilerr // deliberate: cannot load home store, skip profile picking
@@ -223,23 +225,31 @@ func pickProfile(out io.Writer, asJSON, local bool, flagURL string) (string, err
 	// Identical credentials under two names — [acme] and its [default] copy —
 	// are one deployment, not a choice to make.
 	names := credentials.Distinct(store)
-	if len(names) < 2 {
+	def, hasDefault := store[credentials.DefaultProfileName]
+	// A bare login that would point [default] at another control plane.
+	redirect := !local && hasDefault && flagURL != "" && !raptorstate.MatchesHost(flagURL, def.URL)
+	if !redirect && (len(names) < 2 || (hasDefault && !local)) {
 		return "", nil
 	}
-	// A bare login means [default]; with one, or with a --url on its host,
-	// there is nothing to guess. Without one every login creates it.
-	if def, ok := store[credentials.DefaultProfileName]; ok && !local {
-		if flagURL == "" || raptorstate.MatchesHost(flagURL, def.URL) {
-			return "", nil
+	suggest := credentials.DefaultProfileName
+	if redirect {
+		if label := hostLabel(flagURL); label != "" {
+			suggest = label
 		}
 	}
 	if asJSON || !stdinIsTTY() {
 		msg := fmt.Sprintf("%d profiles exist; say which one with -p", len(names))
-		render.PrintError(out, asJSON, msg,
-			"pass -p <name> (one of: "+strings.Join(names, ", ")+") or -p <new-name> --url <control-plane> to create one",
-			exitcode.Usage)
+		hint := "pass -p <name> (one of: " + strings.Join(names, ", ") + ") or -p <new-name> --url <control-plane> to create one"
+		if redirect {
+			msg = fmt.Sprintf("[default] is %s, not %s; a login does not replace it on a guess", def.URL, flagURL)
+			hint = fmt.Sprintf("pass -p %s to add this control plane as its own profile, or -p default to replace [default]", suggest)
+		}
+		render.PrintError(out, asJSON, msg, hint, exitcode.Usage)
 		osExit(exitcode.Usage)
 		return "", fmt.Errorf("%s", msg)
+	}
+	if redirect {
+		fmt.Fprintf(os.Stderr, "[default] is %s; this login is for %s.\n", def.URL, flagURL)
 	}
 	fmt.Fprintln(os.Stderr, "Profiles:")
 	for i, n := range names {
@@ -253,10 +263,10 @@ func pickProfile(out io.Writer, asJSON, local bool, flagURL string) (string, err
 	if local {
 		verb = "pin here"
 	}
-	answer := prompt(fmt.Sprintf("Profile to %s [%s] (number, name, or a new name): ", verb, credentials.DefaultProfileName), readLine)
+	answer := prompt(fmt.Sprintf("Profile to %s [%s] (number, name, or a new name): ", verb, suggest), readLine)
 	switch {
 	case answer == "":
-		return credentials.DefaultProfileName, nil
+		return suggest, nil
 	case isIndex(answer, len(names)):
 		i, _ := strconv.Atoi(answer)
 		return names[i-1], nil
@@ -275,6 +285,20 @@ func pickProfile(out io.Writer, asJSON, local bool, flagURL string) (string, err
 		return "", err
 	}
 	return answer, nil
+}
+
+// hostLabel is the first DNS label of a URL's host when it is a valid profile
+// name ("acme" for https://acme.console.facets.cloud), else "".
+func hostLabel(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	label := strings.Split(u.Hostname(), ".")[0]
+	if credentials.ValidateProfileName(label) != nil || label == credentials.DefaultProfileName {
+		return ""
+	}
+	return label
 }
 
 // isIndex reports whether s is a 1-based position in a list of n.

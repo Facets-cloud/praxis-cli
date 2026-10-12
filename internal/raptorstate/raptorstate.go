@@ -7,17 +7,24 @@
 //
 //  1. env override — CONTROL_PLANE_URL set (FACETS_USERNAME/FACETS_TOKEN
 //     optional with FACETS_HEADERS)
-//  2. FACETS_PROFILE env var
-//  3. the [default] section
-//  4. the sole profile, when exactly one exists
-//  5. none — raptor itself would error
+//  2. PRAXIS_PROFILE, then FACETS_PROFILE
+//  3. the folder pin (.facets/profile), when this raptor follows pins
+//     (PinSupport); an older raptor ignores the pin and falls through
+//  4. the [default] section
+//  5. the sole profile, when exactly one exists
+//  6. none — raptor itself would error
 package raptorstate
 
 import (
+	"context"
+	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 )
@@ -28,7 +35,8 @@ type Source string
 
 const (
 	SourceEnv        Source = "env"         // CONTROL_PLANE_URL override
-	SourceEnvProfile Source = "env-profile" // FACETS_PROFILE
+	SourceEnvProfile Source = "env-profile" // PRAXIS_PROFILE or FACETS_PROFILE
+	SourcePin        Source = "pin"         // .facets/profile
 	SourceDefault    Source = "default"     // [default] section
 	SourceSole       Source = "sole"        // the only profile in the file
 )
@@ -44,6 +52,8 @@ type State struct {
 	Source          Source
 	ControlPlaneURL string
 	Username        string
+	// IgnoredPin is a pin in effect here that this raptor does not follow.
+	IgnoredPin string
 }
 
 // lookPath is a seam over exec.LookPath so tests control "is raptor
@@ -89,11 +99,13 @@ func resolve(profiles map[string]credentials.Profile) State {
 		return st
 	}
 
-	// 2. FACETS_PROFILE. A name that doesn't exist is still reported (raptor
-	// itself would error on it).
-	if name := os.Getenv("FACETS_PROFILE"); name != "" {
+	// 2-3. The environment, then the folder pin. A name that doesn't exist is
+	// still reported (raptor itself would error on it).
+	name, src, ignored := selected()
+	st.IgnoredPin = ignored
+	if name != "" {
 		st.Profile = name
-		st.Source = SourceEnvProfile
+		st.Source = src
 		if p, ok := profiles[name]; ok {
 			st.Found = true
 			st.ControlPlaneURL = p.URL
@@ -126,6 +138,80 @@ func resolve(profiles map[string]credentials.Profile) State {
 
 	// 5. Nothing resolved — zero or multiple profiles without a selector.
 	return st
+}
+
+// selected is the profile the environment or a folder pin names, if any. A pin
+// this raptor does not follow is returned as ignored instead.
+func selected() (string, Source, string) {
+	for _, v := range []string{credentials.EnvProfile, credentials.FacetsEnvProfile} {
+		if name := strings.TrimSpace(os.Getenv(v)); name != "" {
+			return name, SourceEnvProfile, ""
+		}
+	}
+	name, path, ok := credentials.FindPin()
+	if !ok {
+		return "", "", ""
+	}
+	if _, supported, installed := PinSupport(); installed && !supported {
+		return "", "", path
+	}
+	return name, SourcePin, ""
+}
+
+// pinProbe is the probe PinSupport runs; a seam for tests.
+var pinProbe = ProbePins
+
+// ProbePins reports whether the raptor at path follows folder pins. The release
+// that added pins also added `raptor profiles`, so its help exits 0; an older
+// raptor rejects the unknown command. A probe, not a version compare, so a dev
+// build answers for itself.
+func ProbePins(path string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, "profiles", "--help")
+	cmd.Env = append(os.Environ(), "RAPTOR_NO_UPDATE_CHECK=1", "RAPTOR_NO_SKILLS_UPGRADE=1")
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	return cmd.Run() == nil
+}
+
+var (
+	pinMu    sync.Mutex
+	pinCache = map[string]bool{}
+)
+
+// PinSupport reports the raptor on PATH and whether it follows folder pins;
+// installed is false when there is no raptor. The answer is kept per file
+// version for the process, so an upgrade in the same run is probed again.
+func PinSupport() (path string, supported, installed bool) {
+	path, err := lookPath("raptor")
+	if err != nil {
+		return "", false, false
+	}
+	key := path
+	if fi, serr := os.Stat(path); serr == nil {
+		key = fmt.Sprintf("%s|%d|%d", path, fi.ModTime().UnixNano(), fi.Size())
+	}
+	pinMu.Lock()
+	defer pinMu.Unlock()
+	if s, ok := pinCache[key]; ok {
+		return path, s, true
+	}
+	pinCache[key] = pinProbe(path)
+	return path, pinCache[key], true
+}
+
+// SetPinProbeForTest replaces the pin probe and clears the cache until the
+// returned func runs. Test-only.
+func SetPinProbeForTest(fn func(string) bool) func() {
+	pinMu.Lock()
+	prev := pinProbe
+	pinProbe, pinCache = fn, map[string]bool{}
+	pinMu.Unlock()
+	return func() {
+		pinMu.Lock()
+		pinProbe, pinCache = prev, map[string]bool{}
+		pinMu.Unlock()
+	}
 }
 
 // PAT returns the (username, control-plane PAT) pair stored for the named

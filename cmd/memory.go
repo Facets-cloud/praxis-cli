@@ -133,12 +133,11 @@ func activeOrAuthExit(out io.Writer) credentials.Active {
 		os.Exit(exitcode.Error)
 	}
 	if !active.Loaded || active.Profile.Token == "" {
-		render.PrintError(out, true,
-			fmt.Sprintf("no credentials for profile %q", active.Name),
-			"run `praxis login` (or `praxis login --profile "+active.Name+"`)",
-			exitcode.Auth)
+		msg, hint := noCredentials(active)
+		render.PrintError(out, true, msg, hint, exitcode.Auth)
 		os.Exit(exitcode.Auth)
 	}
+	noteProfileChoice(active)
 	return active
 }
 

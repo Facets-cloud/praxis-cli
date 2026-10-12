@@ -456,9 +456,9 @@ func TestSetDefault_FromInsideATree_TargetsHome(t *testing.T) {
 	home := withHome(t)
 	seedFacets(t, homeFacets(t), twoRaptorSections) // default=root, acme
 	repo := filepath.Join(home, "repo")
-	if err := SetDefaultLocal("acme", repo); err != nil {
-		t.Fatal(err)
-	}
+	// A legacy local tree: acme and a [default] copy in the tree's own file.
+	seedFacets(t, FacetsPathIn(repo), "[acme]\ncontrol_plane_url = https://acme.test\nusername = u@x\ntoken = pat-acme\n\n"+
+		"[default]\ncontrol_plane_url = https://acme.test\nusername = u@x\ntoken = pat-acme\n")
 	// A profile only the home store has.
 	if err := Put("zed", FacetsProfile("https://zed.test", "z", "pat-zed")); err != nil {
 		t.Fatal(err)
