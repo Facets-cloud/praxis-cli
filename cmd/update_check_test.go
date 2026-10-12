@@ -38,7 +38,7 @@ func fakeHome(t *testing.T) string {
 // stamped with the current census key, so only its age decides freshness.
 func writeCache(t *testing.T, age time.Duration, latest string) {
 	t.Helper()
-	entry := toolCacheEntry{CheckedAt: time.Now().Add(-age), LatestVersion: latest}.keyed(censusKeyFor("praxis"))
+	entry := toolCacheEntry{}.checked(censusKeyFor("praxis"), time.Now().Add(-age), latest)
 	if err := saveFreshnessCache(freshnessCache{"praxis": entry}); err != nil {
 		t.Fatalf("saveFreshnessCache: %v", err)
 	}
@@ -660,6 +660,61 @@ func TestQuietDailyCheckFollowsTheCensusKey(t *testing.T) {
 	quietDailyCheck(now.Add(6 * time.Minute))
 	if calls != 4 {
 		t.Fatalf("calls=%d after a skill change, want 4", calls)
+	}
+}
+
+// Sessions that alternate between two control planes send one check per CP a
+// day, not one on every change of CP; a day later each key is sent again.
+func TestQuietDailyCheckSendsEachKeyOnceADay(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+	t.Setenv("FACETS_USERNAME", "u@x")
+	t.Setenv("FACETS_TOKEN", "x")
+	clifeed.SetProfileFlag("")
+	origV, origF := version, fetchLatestRelease
+	t.Cleanup(func() { version, fetchLatestRelease = origV, origF })
+	version = "1.0.0"
+	calls := 0
+	fetchLatestRelease = func() (*selfupdate.Release, error) {
+		calls++
+		return &selfupdate.Release{TagName: "v1.2.0"}, nil
+	}
+	now := time.Now()
+	for i := 0; i < 20; i++ {
+		cp := "https://a.test"
+		if i%2 == 1 {
+			cp = "https://b.test"
+		}
+		t.Setenv("CONTROL_PLANE_URL", cp)
+		quietDailyCheck(now.Add(time.Duration(i) * time.Minute))
+	}
+	if calls != 2 {
+		t.Fatalf("calls=%d over 20 alternating runs, want one per CP", calls)
+	}
+	t.Setenv("CONTROL_PLANE_URL", "https://a.test")
+	quietDailyCheck(now.Add(25 * time.Hour))
+	t.Setenv("CONTROL_PLANE_URL", "https://b.test")
+	quietDailyCheck(now.Add(25*time.Hour + time.Minute))
+	if calls != 4 {
+		t.Fatalf("calls=%d a day later, want each CP sent again", calls)
+	}
+	// Keys older than a day are dropped from the cache.
+	quietDailyCheck(now.Add(50 * time.Hour))
+	if c, _ := readFreshnessCache(); len(c["praxis"].Sent) != 1 {
+		t.Errorf("sent keys = %v, want only the latest", c["praxis"].Sent)
+	}
+}
+
+// An entry written before Sent existed still counts for its own key.
+func TestFreshEntryWithoutSent(t *testing.T) {
+	now := time.Now()
+	k := toolCacheEntry{Version: "1.0.0", CPURL: "https://a.test"}
+	old := toolCacheEntry{CheckedAt: now.Add(-time.Hour), Version: "1.0.0", CPURL: "https://a.test"}
+	if !old.fresh(k, now) {
+		t.Error("an old-format entry for the same key must be fresh")
+	}
+	if old.fresh(toolCacheEntry{Version: "1.0.0", CPURL: "https://b.test"}, now) {
+		t.Error("an old-format entry must not answer for another key")
 	}
 }
 
