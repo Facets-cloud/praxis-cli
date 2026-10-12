@@ -52,13 +52,17 @@ type toolCacheEntry struct {
 	CheckedAt     time.Time `json:"checked_at"`
 	LatestVersion string    `json:"latest_version"`
 	// Version, CPURL and User are what praxis's last check told the census (the
-	// raptor entry leaves them empty). When one differs now, the praxis entry is
-	// stale, so the census sees an upgrade at once, and a CI step with
-	// credentials is counted after a first step without.
+	// raptor entry leaves them empty). A key that was not sent in the last day
+	// makes the entry stale, so the census sees an upgrade at once, and a CI
+	// step with credentials is counted after a first step without.
 	Version string `json:"version,omitempty"`
 	CPURL   string `json:"cp_url,omitempty"`
 	User    string `json:"user,omitempty"`
 	Skills  string `json:"skills,omitempty"` // clifeed.SkillsKey
+	// Sent is when each census key was last sent, for the last day. A machine
+	// whose sessions use several profiles then sends one check per key a day,
+	// not one on every change of key.
+	Sent map[string]time.Time `json:"sent,omitempty"`
 }
 
 // censusKeyFor is the census key of this invocation for a tool's entry: the
@@ -72,15 +76,32 @@ func censusKeyFor(tool string) toolCacheEntry {
 	return toolCacheEntry{Version: strings.TrimPrefix(version, "v"), CPURL: cpURL, User: user, Skills: clifeed.SkillsKey()}
 }
 
-// sameKey reports whether entry e was written for census key k.
-func (e toolCacheEntry) sameKey(k toolCacheEntry) bool {
-	return e.Version == k.Version && e.CPURL == k.CPURL && e.User == k.User && e.Skills == k.Skills
+// keyID is census key k as one string.
+func (k toolCacheEntry) keyID() string {
+	return strings.Join([]string{k.Version, k.CPURL, k.User, k.Skills}, "\x00")
 }
 
-// keyed returns e stamped with census key k.
-func (e toolCacheEntry) keyed(k toolCacheEntry) toolCacheEntry {
-	e.Version, e.CPURL, e.User, e.Skills = k.Version, k.CPURL, k.User, k.Skills
-	return e
+// fresh reports whether entry e answers for census key k at now: checked in
+// the last interval, with k sent in that interval too.
+func (e toolCacheEntry) fresh(k toolCacheEntry, now time.Time) bool {
+	sent, ok := e.Sent[k.keyID()]
+	if !ok && e.Version == k.Version && e.CPURL == k.CPURL && e.User == k.User && e.Skills == k.Skills {
+		sent, ok = e.CheckedAt, true // an entry written before Sent existed
+	}
+	return ok && now.Sub(e.CheckedAt) < updateCheckInterval && now.Sub(sent) < updateCheckInterval
+}
+
+// checked returns the entry for a check of key k at now that found tag: k is
+// recorded as sent, and keys older than the interval are dropped.
+func (e toolCacheEntry) checked(k toolCacheEntry, now time.Time, tag string) toolCacheEntry {
+	sent := map[string]time.Time{k.keyID(): now}
+	for id, t := range e.Sent {
+		if id != k.keyID() && now.Sub(t) < updateCheckInterval {
+			sent[id] = t
+		}
+	}
+	return toolCacheEntry{CheckedAt: now, LatestVersion: tag,
+		Version: k.Version, CPURL: k.CPURL, User: k.User, Skills: k.Skills, Sent: sent}
 }
 
 type freshnessCache map[string]toolCacheEntry
@@ -190,19 +211,16 @@ func toolsFreshness(now time.Time, mode freshMode) []Freshness {
 // treats "" as not-stale) instead of re-fetching every run.
 func latestTagFor(spec toolSpec, now time.Time, mode freshMode) string {
 	key := censusKeyFor(spec.Name)
-	if mode != freshLive {
-		if c, err := readFreshnessCache(); err == nil {
-			e, ok := c[spec.Name]
-			if ok && (mode == freshCached || (now.Sub(e.CheckedAt) < updateCheckInterval && e.sameKey(key))) {
-				return e.LatestVersion
-			}
-		}
+	c, _ := readFreshnessCache()
+	e, ok := c[spec.Name]
+	if mode != freshLive && ok && (mode == freshCached || e.fresh(key, now)) {
+		return e.LatestVersion
 	}
 	if mode == freshCached {
 		return "" // status default: local-only, never fetch
 	}
 	tag := fetchTagWithRetry(spec.fetchTag)
-	putCacheEntry(spec.Name, toolCacheEntry{CheckedAt: now, LatestVersion: tag}.keyed(key))
+	putCacheEntry(spec.Name, e.checked(key, now, tag))
 	return tag
 }
 
@@ -599,17 +617,12 @@ func maxInt(vals ...int) int {
 // attempt a day, not one for every command an agent runs.
 func claimDailySlot(tool string, now time.Time) bool {
 	key := censusKeyFor(tool)
-	c, err := readFreshnessCache()
-	if err == nil {
-		if e, ok := c[tool]; ok && now.Sub(e.CheckedAt) < updateCheckInterval && e.sameKey(key) {
-			return false
-		}
+	c, _ := readFreshnessCache()
+	e, ok := c[tool]
+	if ok && e.fresh(key, now) {
+		return false
 	}
-	prev := ""
-	if err == nil {
-		prev = c[tool].LatestVersion
-	}
-	putCacheEntry(tool, toolCacheEntry{CheckedAt: now, LatestVersion: prev}.keyed(key))
+	putCacheEntry(tool, e.checked(key, now, e.LatestVersion))
 	return true
 }
 
