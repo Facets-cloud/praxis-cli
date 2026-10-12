@@ -22,7 +22,7 @@ func TestMain(m *testing.M) {
 // hermetic regardless of the developer's shell.
 func clearRaptorEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"CONTROL_PLANE_URL", "FACETS_USERNAME", "FACETS_TOKEN", "FACETS_PROFILE"} {
+	for _, k := range []string{"CONTROL_PLANE_URL", "FACETS_USERNAME", "FACETS_TOKEN", "FACETS_PROFILE", "PRAXIS_PROFILE"} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}
@@ -86,6 +86,12 @@ func TestResolve_Chain(t *testing.T) {
 			profiles: twoProfiles,
 			env:      map[string]string{"FACETS_PROFILE": "ghost"},
 			want:     State{Found: false, Profile: "ghost", Source: SourceEnvProfile},
+		},
+		{
+			name:     "PRAXIS_PROFILE is read too, and wins over FACETS_PROFILE",
+			profiles: twoProfiles,
+			env:      map[string]string{"PRAXIS_PROFILE": "acme", "FACETS_PROFILE": "default"},
+			want:     State{Found: true, Profile: "acme", Source: SourceEnvProfile, ControlPlaneURL: "https://acme.console.facets.cloud", Username: "anuj@facets.cloud"},
 		},
 		{
 			name:     "default section when nothing else selects",
@@ -236,5 +242,30 @@ func TestMatchesHost(t *testing.T) {
 				t.Errorf("MatchesHost(%q, %q) = %v, want %v", tt.praxisURL, tt.cpURL, got, tt.want)
 			}
 		})
+	}
+}
+
+// A folder pin selects for raptor too: behind the environment, ahead of
+// [default].
+func TestResolve_FolderPin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	clearRaptorEnv(t)
+	stubInstalled(t, true)
+	seedHomeFacets(t, "[default]\ncontrol_plane_url = https://root.test\nusername = u\ntoken = t\n\n[acme]\ncontrol_plane_url = https://acme.test\nusername = u\ntoken = t\n")
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.WritePin(repo, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(credentials.SetGetwdForTest(func() (string, error) { return repo, nil }))
+	if st := Resolve(); st.Profile != "acme" || st.Source != SourcePin || !st.Found {
+		t.Errorf("Resolve in a pinned folder = %+v, want acme from the pin", st)
+	}
+	t.Setenv("FACETS_PROFILE", "default")
+	if st := Resolve(); st.Profile != "default" || st.Source != SourceEnvProfile {
+		t.Errorf("FACETS_PROFILE must beat the pin, got %+v", st)
 	}
 }

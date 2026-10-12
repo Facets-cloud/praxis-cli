@@ -436,6 +436,7 @@ func TestLoginRunE_URLRetargetOpensBrowser(t *testing.T) {
 	resetLoginFlags(t)
 	seedProfile(t, "default", "https://stored.test", "tok")
 	loginURL = "https://other.test" // re-target away from the stored URL
+	rootProfile = "default"         // named: a bare login would ask first
 	browser := stubNoPAT(t)
 	stubPostAuth(t)
 	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {

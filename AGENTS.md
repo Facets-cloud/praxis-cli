@@ -112,23 +112,47 @@ tag).
 **Don't add stub commands.** A cobra command that prints "not yet
 implemented" is worse than no command — it lies to users and to
 `--help`. Skills install automatically as part of
-`login`/`profiles use`/`refresh-skills`. Org catalog skills
+`login`/`profiles set-default`/`refresh-skills`. (The hidden `profiles use`
+answers only with what replaced it: it is a removal notice, not a stub.) Org
+catalog skills
 are fetched from the server, name-prefixed (`praxis-*`), and have the
 `render.ExecutionPreamble` inserted after their frontmatter so any
 in-process MCP reference (`run_cloud_cli(...)`) is rewritten to a
 `praxis mcp <mcp> <fn> --arg …` shell-out — see
 `internal/skillcatalog` and `internal/render/preamble.go`.
 
-## Local mode (per-directory profiles)
+## Profile selection and local mode
 
-`praxis login --profile X --local` pins a profile to the current
-directory tree by writing `<cwd>/.facets/credentials` — raptor's own
-local-mode file — with X's section and a `[default]` copy, and installs
-project-scoped. `profiles use X --local` and `refresh-skills --project`
-do the same for an already-authenticated profile. A tree is local mode
-exactly when that file exists; `paths.ProjectRoot()` discovers it
-git-style (walking up from cwd, **bounded to `$HOME`**) and reports
-`<dir>/.praxis` as the root for the receipt and snapshot.
+**Selecting a profile is a read; nothing writes the store to select.** The
+resolution order (`credentials.ResolveActive`, mirrored by raptor and by
+`raptorstate`): `--profile` flag → raptor's env credential → `$PRAXIS_PROFILE`
+→ `$FACETS_PROFILE` → the folder pin → `[default]` → sole section. An unknown
+explicit profile does NOT fall back — it fails loudly (exit 3) rather than
+silently route to a different org. When both env vars name different profiles,
+`PRAXIS_PROFILE` wins and `Execute` prints one line (`envConflictNote`).
+
+**The pin** is `<dir>/.facets/profile`: a profile NAME, never a token
+(`credentials.WritePin` / `FindPin` / `RemovePin`). `FindPin` walks from cwd to
+the filesystem root and never reads `$HOME/.facets/profile` — the machine default
+is `[default]`. A pin names a control-plane PAT only, because raptor reads only
+those. It resolves in the store the facets walk finds from the same cwd.
+
+**Only two writes move `[default]` to another profile:** `profiles set-default X`
+(copies X over the home `[default]`, keeping an unduplicated old default under
+its host label) and a bare `login` (profile "default"). `pickProfile` makes a
+bare login ask (TTY) or refuse (no TTY) before it points `[default]` at another
+control plane, on any machine. A `login --profile X` writes `[X]` only — and,
+when `[default]` is a copy of X, the copy too, so the two do not split.
+
+Local mode: `praxis login --profile X --local` saves the PAT where the tree reads
+it (`credentials.PutFor`: a legacy tree file at or above cwd, else the home
+store), pins the project tree (`pinHere`), and installs project-scoped.
+`profiles pin X` + `refresh-skills` in that folder does the same in two steps;
+`refresh-skills --project` pins the active profile. In a pinned folder,
+`login --local` with no `-p` re-logs the pinned profile. A tree is local mode
+when it has a pin or a legacy `.facets/credentials` (`paths.isProjectMarker`);
+`paths.ProjectRoot()` discovers it git-style (walking up from cwd, **bounded to
+`$HOME`**) and reports `<dir>/.praxis` as the root for the receipt and snapshot.
 
 The active root (`paths.ActiveRoot()`) decides where the skill receipt
 (`installed.json`), MCP snapshot (`mcp-tools.json`), and installed skills
@@ -136,22 +160,23 @@ live: the discovered project root, else the HOME root.
 
 Invariants to preserve when touching this area:
 
-- **There is no pointer file.** The active profile is the store's
-  `[default]` section, else its sole section (`credentials.onDiskActive`) —
-  raptor's rule, so bare commands of both CLIs always agree.
-  `credentials.SetDefault(X)` copies X over `[default]` in X's file;
-  `SetDefaultLocal(X, dir)` writes the tree's file with X and a `[default]`
-  copy. `MigrateLegacyPointer` (run from `Execute`) retires the pre-v1.11
-  `~/.praxis/config.json`; `paths.LegacyProjectPointer` reports an old
-  `<dir>/.praxis/config.json` so `Execute` can print a one-line hint.
+- **Org skills follow the profile in effect where they are installed:**
+  `[default]` at the user level, the pin in a pinned tree. So only the writes
+  that change one of those re-sync: a bare login or a re-login of the profile
+  `[default]` copies (`followsDefault`), `set-default`, `login --local`, and
+  `refresh-skills`. A global `login --profile X` for another profile saves
+  credentials only (`renderCredentialsOnly`). After each sync, `recordOrg` notes
+  in the receipt whose catalog is installed; `noteProfileChoice` prints one
+  stderr line when a command's profile is from another org than the installed
+  skills, and one when an agent host selected nothing on a multi-profile machine.
 - **The praxis file is always global; the facets file follows raptor.**
   `paths.Credentials()` is pinned to the HOME root; never route it through
   `ActiveRoot()`. A control-plane PAT lives in raptor's file instead, and
-  inside a local tree the store IS the tree's file — raptor reads the first
+  inside a legacy tree the store IS the tree's file — raptor reads the first
   `.facets/credentials` walking up from cwd and ignores the home file when
   it finds one. `credentials.FacetsPath` mirrors that walk (seam:
   `credentials.SetGetwdForTest`, wired in every test main so no test reads
-  the developer's live file). Consequence: inside a pinned tree, `-p X`
+  the developer's live file). Consequence: inside a legacy tree, `-p X`
   only loads X if the tree's file has it (or X is an API key).
 - **A profile lives in exactly one file.** `credentials.Put` routes a
   non-loopback http(s) PAT to the facets file and everything else to the praxis file, and drops
@@ -162,58 +187,32 @@ Invariants to preserve when touching this area:
   with no `--url` takes the URL from section `[X]`, never from raptor's
   `[default]` — that is a second tenant, not the first one again. `default`
   still follows raptor's own resolution (default, else sole profile).
-- **Logout is shared and acts where you are.** Removing a PAT profile
-  removes raptor's section. Every section that holds the same credentials
-  goes with it: the `[default]` copy and the section it came from are one
-  login, and leaving either would resolve it as the sole section again.
-  Inside a local tree `logout` removes the tree's `[default]` and its copies;
-  `logout --all` removes both home files, and the tree's file when run inside
-  a tree. `profiles rm X` refuses an X whose credentials equal the active
-  section's, for the same reason.
+- **Logout is shared and acts where you are.** It removes the profile in effect
+  here (`credentials.OnDiskActiveName`: the pin, else `[default]`/sole), every
+  section that holds the same credentials, and the pin that named it. Inside a
+  legacy tree it removes the tree's sections. `logout --all` removes both home
+  files, and the tree's file when run inside a tree. `profiles rm X` refuses an
+  X whose credentials equal the active section's, for the same reason.
 - **Never pin a directory to a guess.** On a multi-profile machine, `login
-  --local` (or `login --url <host≠default's>`) with no `-p` goes through
-  `pickProfile`: a terminal gets the list and may type a new name; `--json`
-  or no TTY exits 2 with the list. A bare global `login` still means
-  `default`, and single-profile machines never see the picker. Login prints
-  `Profile <name> → <url>` to stderr before any install output.
-- **A bare `.praxis` must stay inert.** Only the credentials file beside it
-  opts a tree in. A committed `.praxis` (receipt, snapshot, old pointer)
-  resolves to the home store *and* keeps receipt/snapshot/skills global.
+  --local` with no `-p` (and no pin) goes through `pickProfile`: a terminal gets
+  the list and may type a new name; `--json` or no TTY exits 2 with the list.
+  Login prints `Profile <name> → <url>` to stderr before any install output.
+- **A bare `.praxis` must stay inert.** Only a pin or a legacy credentials file
+  beside it opts a tree in.
 - **Receipt and install location share one root.** Both derive from
   `ActiveRoot()`, so the unconditional "wipe previous profile" step
   (`UninstallByPrefix`) only ever touches the active root. Callers set the
-  scope up front by pinning via `paths.OverrideActiveRoot` (login --local /
-  `profiles use --local` / refresh --project) or by being in an active local
-  tree; never make a scope decision that diverges receipt from install.
-- **Changing `[default]` and re-installing skills is one operation.** Both
-  callers that change the active profile (`praxis login`, `praxis profiles
-  use`) go through `cmd.activateProfile`, which rewrites `[default]` AND pins
-  the matching `ActiveRoot` in the same step, then run `postAuthSetup`.
-  Never change `[default]` without the re-sync: that's how you get profile A
-  active with profile B's `praxis-*` skills on disk. `profiles use`
-  additionally verifies the stored token via `/auth/me` BEFORE any write,
-  so a dead token or an unreachable server changes nothing (exit 3 / 5).
-- **`login` and `profiles use` (no --local) write the HOME store.** They
-  pin the active root to home (`paths.OverrideActiveRoot(home)`) and copy
-  over the home `[default]`, so being inside a project tree never repins
-  it. A global `profiles use` run inside a local-mode tree reports
-  `shadowed_by_project_root` + `effective_profile`, since the tree's file
-  still wins there.
-- **Active-profile resolution** (`credentials.ResolveActive`): `--profile`
-  flag → raptor's env credential → `$PRAXIS_PROFILE` → `$FACETS_PROFILE` →
-  `[default]` → sole section. An unknown flag/env profile does NOT fall
-  back — an explicit choice must fail loudly (exit 3) rather than silently
-  route to a different org.
-- **`$PRAXIS_PROFILE` is the concurrency-safe scope**
-  (`credentials.EnvProfile`). Both `[default]` and the installed `praxis-*`
-  skills are machine-global, so `profiles use` repoints every other
-  shell/agent session on the box AND rewrites skill files those sessions
-  have already read. The env var lives in the process environment: it
-  writes nothing and is unobservable from another session. It MUST outrank
-  the store, or a pinned repo couldn't be scoped per session. Residual
-  limitation — documented, not fixed: skill FILES still
-  belong to the globally-active profile, so `-p`/env give the right gateway
-  with the active profile's skill text.
+  scope up front by pinning via `paths.OverrideActiveRoot` (`pinHere`,
+  `setGlobalDefault`, `pinRootToHome`) or by being in an active local tree;
+  never make a scope decision that diverges receipt from install.
+- **`set-default` verifies before it writes.** It checks the stored token via
+  `/auth/me` BEFORE any write, so a dead token or an unreachable server changes
+  nothing (exit 3 / 5). It works on the HOME store from any folder, and reports
+  `effective_profile` when a pin or a selection still outranks `[default]` here.
+- **The project registry.** A project-scoped install records its tree in
+  `~/.praxis/projects.json` (`recordProject`); `praxis setup` refreshes the
+  embedded praxis skill in each recorded tree and drops trees whose receipt is
+  gone (`refreshProjectSkills`).
 - **`--profile` is ONE flag on `rootCmd`**, persistent, shorthand `-p`,
   bound to `cmd.rootProfile` (root.go). Never define a local `--profile` on
   a subcommand: cobra lets the local flag shadow the inherited one, so
@@ -226,18 +225,19 @@ Invariants to preserve when touching this area:
 - **A command that can't honor `--profile` must REFUSE it**, never ignore
   it: `refusedProfileFlag` / `refusedExplicitProfile` (root.go) print a usage
   error and exit 2. Today that's `logout` and `refresh-skills` (both rewrite
-  the ACTIVE profile's org skills, so honoring the flag would split
-  `[default]` from skills) and `profiles use` (target is positional). For `logout` the
-  check MUST come before the `--all` branch — `-p X --all` is a
-  contradiction, and ignoring `-p` there wipes every profile for a user who
-  named one.
+  the org skills of the profile in effect, so honoring the flag would split
+  that profile from the skills) and `profiles set-default` / `profiles pin`
+  (target is positional). For `logout` the check MUST come before the `--all`
+  branch — `-p X --all` is a contradiction, and ignoring `-p` there wipes every
+  profile for a user who named one.
 - **Refuse on DIVERGENCE, not on presence.** Both helpers take the profile
   the command acts on and stay silent when the selection names it — or holds
-  the same credentials (`credentials.SameCreds`): after `profiles use acme`,
+  the same credentials (`credentials.SameCreds`): after `set-default acme`,
   `-p acme logout` asks for exactly what a bare `logout` does to the
   `[default]` copy. The comparison target MUST be resolved without the flag
   and the environment, or it compares the selection with itself and never
-  fires — `credentials.OnDiskActiveName()` (the store in effect from cwd).
+  fires — `credentials.OnDiskActiveName()` (the pin, else the store in effect
+  from cwd).
 - **A guard and its action MUST be one decision.** Resolve the target once and
   have the action use that same name; never let the action re-resolve through
   `ResolveActive*`, or the two disagree about "which profile?" and the action's
@@ -249,9 +249,9 @@ Invariants to preserve when touching this area:
 - **When loosening a guard, audit what the action does with a selection the
   guard now admits.**
 - **Multi-profile guidance is gated on the profile count.** The single-profile
-  customer gets no precedence chain, no machine-global warnings and no
-  refusal table in `profiles use` output (`switchSummary.MultiProfile`, from
-  the store the command already loaded). It describes a choice they don't have,
+  customer gets no machine-global warning in `set-default` output and no agent
+  guard line (`credentials.Distinct`, so a `[default]` copy is not a second
+  profile). It describes a choice they don't have,
   and it's what teaches a host to pass `-p` at the only profile there is.
 - Discovery is **home-subtree only** — matches the intended use case and
   keeps tests deterministic under a faked `$HOME`. Tests drive discovery
@@ -385,7 +385,7 @@ Override at build time: `make build VERSION=v0.5.0-dev`.
 
 ## Raptor and setup
 
-`login`, `refresh-skills`, `profiles use`, `update` and the hidden `praxis setup`
+`login`, `refresh-skills`, `profiles set-default`, `update` and the hidden `praxis setup`
 (started in the background once per version, `cmd/setup.go`) install a missing
 raptor to `~/.local/bin` and run one `raptor install skill -o json --agent …`
 (`cmd/raptor_setup.go`). The host map is claude-code→claude,

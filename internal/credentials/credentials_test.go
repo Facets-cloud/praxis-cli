@@ -454,43 +454,6 @@ func TestSetDefault_CopiesSectionSoBothCLIsMove(t *testing.T) {
 	}
 }
 
-func TestSetDefaultLocal_WritesTreeFileWithDefaultCopy(t *testing.T) {
-	home := withHome(t)
-	seedFacets(t, homeFacets(t), twoRaptorSections)
-	if err := Put("key", Profile{URL: "https://key.test", Username: "k", Token: "sk"}); err != nil {
-		t.Fatal(err)
-	}
-	repo := filepath.Join(home, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := SetDefaultLocal("acme", repo); err != nil {
-		t.Fatal(err)
-	}
-	local := loadFacets(FacetsPathIn(repo))
-	if local["acme"].Token != "pat-acme" || local["default"].Token != "pat-acme" || len(local) != 2 {
-		t.Errorf("tree file = %v, want acme and a default copy", local)
-	}
-	// Home file untouched.
-	if h := loadFacets(homeFacets(t)); h["default"].Token != "pat-root" {
-		t.Errorf("home [default] changed: %+v", h["default"])
-	}
-	// Inside the tree both CLIs' store is the tree file, and default resolves.
-	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
-	a, _ := ResolveActive("")
-	if a.Name != "default" || a.Profile.URL != "https://acme.test" {
-		t.Errorf("in-tree ResolveActive = %+v", a)
-	}
-	if names := sortedKeys(mustLoad(t)); strings.Join(names, ",") != "default,acme,key" {
-		t.Errorf("in-tree Load() = %v; the tree file shadows home, API keys stay visible", names)
-	}
-
-	if err := SetDefaultLocal("key", repo); err == nil {
-		t.Error("an API key cannot be pinned to a tree; want error")
-	}
-}
-
 func TestSetDefault_KeepsAnUnduplicatedDefault(t *testing.T) {
 	withHome(t)
 	// A bare first login wrote only [default]; a second, named login must not

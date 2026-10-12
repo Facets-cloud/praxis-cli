@@ -43,6 +43,9 @@ type postAuthState struct {
 	// home) and the install fell back to user-level, so callers report
 	// where files actually landed.
 	projectScoped bool
+	// catalogFetched says the org skill catalog came back, so the skills on
+	// disk now belong to the profile this setup ran for.
+	catalogFetched bool
 }
 
 // skillInstallationLite is the trimmed JSON shape for skill installs in
@@ -120,6 +123,9 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 		}
 	}
 	state.projectScoped = inProject
+	if inProject {
+		recordProject(projectDir)
+	}
 	noHosts := len(hosts) == 0
 	if noHosts && !asJSON {
 		fmt.Fprintln(out, "No supported AI hosts detected on this machine.")
@@ -190,6 +196,7 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 				fmt.Fprintln(out, "Existing org skills left in place. Re-run `praxis login` once the gateway is reachable.")
 			}
 		case len(skills) == 0:
+			state.catalogFetched = true
 			// Empty catalog is a definitive answer — wipe stale entries.
 			// The wipe targets the active root's receipt only (see func doc),
 			// so it's safe in both user and project scope.
@@ -201,6 +208,7 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 				fmt.Fprintln(out, "\nCatalog is empty for this org — nothing to install.")
 			}
 		default:
+			state.catalogFetched = true
 			// Catalog in hand. Now wipe and install. The wipe targets the
 			// active root's receipt only (see func doc), so it's safe in
 			// both user and project scope.

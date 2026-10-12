@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"io"
 	"os"
@@ -453,4 +454,54 @@ func trueBinary(t *testing.T) string {
 		return p
 	}
 	return "/usr/bin/true"
+}
+
+// After an upgrade, setup refreshes the praxis skill in every recorded project
+// tree, and forgets trees whose receipt is gone.
+func TestRefreshProjectSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := filepath.Join(home, "repo")
+	root := filepath.Join(repo, ".praxis")
+	restore := paths.OverrideActiveRoot(root)
+	host := harness.Harness{Name: "claude-code", SkillDir: filepath.Join(repo, ".claude", "skills")}
+	if _, err := skillinstall.Install("praxis", []harness.Harness{host}); err != nil {
+		t.Fatal(err)
+	}
+	restore()
+	// Make the project's copy stale, as an older praxis would have left it.
+	receipt := filepath.Join(root, "installed.json")
+	data, err := os.ReadFile(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r skillinstall.Receipt
+	if err := json.Unmarshal(data, &r); err != nil {
+		t.Fatal(err)
+	}
+	fresh := r.Skills[0].Digest
+	r.Skills[0].Digest = "stale"
+	if data, err = json.Marshal(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(receipt, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{repo, repo, filepath.Join(home, "gone")} {
+		recordProject(p)
+	}
+
+	refreshProjectSkills()
+
+	data, _ = os.ReadFile(receipt)
+	if !strings.Contains(string(data), fresh) || strings.Contains(string(data), `"stale"`) {
+		t.Errorf("project receipt was not refreshed:\n%s", data)
+	}
+	if !strings.HasPrefix(r.Skills[0].Path, repo) {
+		t.Fatalf("the install escaped the project tree: %s", r.Skills[0].Path)
+	}
+	_, l := loadProjects()
+	if strings.Join(l.Projects, ",") != repo {
+		t.Errorf("registry = %v, want only the live tree, once", l.Projects)
+	}
 }

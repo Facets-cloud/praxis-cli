@@ -153,3 +153,17 @@ func TestIdentityTransportForwardsCloseIdleConnections(t *testing.T) {
 	var _ interface{ CloseIdleConnections() } = identityTransport{}
 	New(time.Second).CloseIdleConnections() // must not panic
 }
+
+// AgentHost reads the live environment through the same table.
+func TestAgentHost_ReadsTheEnvironment(t *testing.T) {
+	for _, m := range hostMarkers {
+		t.Setenv(m.env, "")
+	}
+	if got := AgentHost(); got != "" {
+		t.Errorf("AgentHost() = %q with no marker, want empty", got)
+	}
+	t.Setenv("GEMINI_CLI", "1")
+	if got := AgentHost(); got != "gemini-cli" {
+		t.Errorf("AgentHost() = %q, want gemini-cli", got)
+	}
+}

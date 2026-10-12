@@ -7,39 +7,43 @@ Use the known console URL; never infer a customer's URL from its display name.
 
 ## Identity and scope
 
-Current Praxis profile precedence:
+Profile precedence (raptor resolves the same order; its flag is `--profile`
+only, because raptor's `-p` means **project**):
 
 ```text
 --profile / -p
   > complete CONTROL_PLANE_URL + FACETS_USERNAME + FACETS_TOKEN
-  > PRAXIS_PROFILE > FACETS_PROFILE > [default] > sole section
+  > PRAXIS_PROFILE > FACETS_PROFILE
+  > folder pin (nearest <dir>/.facets/profile above cwd, never $HOME's)
+  > [default] > sole section
 ```
 
-Facets control-plane PATs use `.facets/credentials`, shared with Raptor. Praxis
-walks from cwd upward for the first project `.facets/credentials` (only under
-`$HOME`), otherwise uses the home file. Praxis API keys and loopback development credentials use
-the home `.praxis/credentials`. There is no active-profile pointer file in the
-current design. Older installed skills describing `.praxis` pointers are stale.
-If both stores contain the same profile name, the selected Facets store's
-section wins over the Praxis API-key section. Use status to verify identity;
-the name alone does not distinguish the two credentials.
+A selection writes nothing. Only `praxis profiles set-default NAME` and a bare
+`praxis login` change `[default]`, the machine default; a login with
+`--profile` saves credentials only. Never run either to switch profiles during
+a task: other sessions on the machine use `[default]` too.
 
-`praxis profiles use NAME` copies the selected identity over `[default]` and
-refreshes the selected organization's installed catalog. For shared PATs this
-also changes what an unscoped Raptor call uses. `--local` writes project-local
-Facets credentials; a global switch can be shadowed by a project's file.
-Read the switch result's effective scope, not just the requested profile name.
+Facets control-plane PATs live in `~/.facets/credentials`, shared with Raptor.
+A pin holds only a profile name. An older local mode left a token copy in
+`<dir>/.facets/credentials`; both CLIs still read the first such file walking up
+from cwd instead of the home file. Praxis API keys and loopback development
+credentials use the home `.praxis/credentials`. If both stores contain the same
+profile name, the Facets store's section wins. Use status to verify identity;
+`praxis status --json` reports `profile_source` and `pin_path`.
 
-For concurrent work, prefer invocation-local selection, e.g.
-`praxis --profile NAME mcp --json`, rather than changing shared defaults.
-`PRAXIS_PROFILE` selects Praxis only; `FACETS_PROFILE` can select both CLIs,
-subject to each CLI's precedence (the complete environment credential triplet
-still matters). Keep the selected variables on each independent shell call.
-Raptor's `-p` means **project**, not Praxis profile.
+On a machine with more than one profile, pass `--profile NAME` on every praxis
+and raptor command, or work in a folder pinned to the profile
+(`praxis profiles pin NAME`). An exported variable does not survive between
+independent shell calls of an agent host. A command that selected nothing
+prints one stderr line that names the profile it used.
 
-Command identity and installed org-skill context are separate. Selecting another
-profile for one command does not install that org's skills. Check ownership
-before applying customer-specific guidance from a different installed catalog.
+Command identity and installed org-skill context are separate. The user-level
+org skills belong to `[default]`; a pinned folder can hold its own
+(`praxis login --profile NAME --local`, or `praxis refresh-skills` in the pinned
+folder). Selecting another profile for one command does not install that org's
+skills, and praxis prints a stderr line when the two orgs differ. Check
+ownership before applying customer-specific guidance from a different installed
+catalog.
 
 ## Setup when requested or needed
 
@@ -51,7 +55,7 @@ input; do not paste tokens into command arguments or transcripts.
 For a new customer without a console, the access entrypoint is
 [Facets signup](https://www.facets.cloud/signup).
 
-Login, `profiles use` and `refresh-skills` also install a missing Raptor CLI (to
+Login, `profiles set-default` and `refresh-skills` also install a missing Raptor CLI (to
 `~/.local/bin`) and run `raptor install skill`, so Raptor installs and maintains
 its own skill. Check `raptor_binary`, `raptor_skills`, `raptor_warning` and
 `snapshot_warning` in JSON: successful authentication does not prove both

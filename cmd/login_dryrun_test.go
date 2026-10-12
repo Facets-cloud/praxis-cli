@@ -167,65 +167,52 @@ func TestLoginDryRun_TokenAndReachabilityMatrix(t *testing.T) {
 	}
 }
 
-func TestLoginDryRun_ProfileSwitchSkillsEffect(t *testing.T) {
-	isolateHome(t)
-	resetLoginFlags(t)
-	t.Cleanup(func() { loginDryRun = false })
-	seedProfile(t, "default", "https://stored.test", "tok")
-	seedProfile(t, "acme", "https://acme.test", "tok2")
-	stubNoPAT(t)
-	stubPostAuth(t)
-	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
-		return &authMeResponse{Email: "u@x"}, nil
-	})
+// A named login never moves the machine default, so the dry run must not
+// predict a switch: it saves credentials and leaves the org skills alone —
+// with or without an env var naming the profile.
+func TestLoginDryRun_NamedLoginLeavesTheDefaultAlone(t *testing.T) {
+	for _, env := range []string{"", "acme"} {
+		isolateHome(t)
+		resetLoginFlags(t)
+		t.Cleanup(func() { loginDryRun = false })
+		seedProfile(t, "default", "https://stored.test", "tok")
+		seedProfile(t, "acme", "https://acme.test", "tok2")
+		stubNoPAT(t)
+		stubPostAuth(t)
+		stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
+			return &authMeResponse{Email: "u@x"}, nil
+		})
+		t.Setenv(credentials.EnvProfile, env)
 
-	rootProfile = "acme"
-	report := runDryRunJSON(t)
-	effect, _ := report["skills_effect"].(string)
-	if effect == "" || report["active_profile"] != "default" {
-		t.Fatalf("unexpected report: %v", report)
-	}
-	for _, want := range []string{`"default"`, `"acme"`, "wiped"} {
-		if !strings.Contains(effect, want) {
-			t.Errorf("skills_effect %q missing %q", effect, want)
+		rootProfile = "acme"
+		report := runDryRunJSON(t)
+		effect, _ := report["skills_effect"].(string)
+		if report["active_profile"] != "default" || !strings.Contains(effect, "credentials only") {
+			t.Errorf("env %q: active_profile %v, skills_effect %q; want default kept and credentials only", env, report["active_profile"], effect)
 		}
 	}
 }
 
-// "Whose skills are on disk" is a question about POINTERS. $PRAXIS_PROFILE
-// routes commands; it installs nothing. Resolving the dry run's baseline
-// through it meant `PRAXIS_PROFILE=acme praxis login --profile acme --dry-run`
-// reported "no profile switch" for a login that was about to move the pointer
-// off default and wipe default's org skills — the exact prediction --dry-run
-// exists to make, inverted, on the safe-probe path.
-func TestLoginDryRun_EnvDoesNotHideAPendingProfileSwitch(t *testing.T) {
+// The other skill effects: a bare login re-syncs [default]; a --local login
+// installs into the pinned folder; a re-login of the profile [default] copies
+// re-syncs it too.
+func TestDryRunSkillsEffect(t *testing.T) {
 	isolateHome(t)
-	resetLoginFlags(t)
-	t.Cleanup(func() { loginDryRun = false })
 	seedProfile(t, "default", "https://stored.test", "tok")
 	seedProfile(t, "acme", "https://acme.test", "tok2")
-	stubNoPAT(t)
-	stubPostAuth(t)
-	stubAuthMe(t, func(_ string, _ map[string]string) (*authMeResponse, error) {
-		return &authMeResponse{Email: "u@x"}, nil
-	})
-
-	// The session is scoped to acme, but the pointer — and the installed
-	// catalog — still belong to default.
-	t.Setenv(credentials.EnvProfile, "acme")
-	rootProfile = "acme"
-
-	report := runDryRunJSON(t)
-	if report["active_profile"] != "default" {
-		t.Fatalf("active_profile = %v, want default — the env var owns no skills", report["active_profile"])
-	}
-	effect, _ := report["skills_effect"].(string)
-	if strings.Contains(effect, "no profile switch") {
-		t.Errorf("skills_effect %q claims no switch; login will move the pointer and wipe default's skills", effect)
-	}
-	for _, want := range []string{`"default"`, `"acme"`, "wiped"} {
-		if !strings.Contains(effect, want) {
-			t.Errorf("skills_effect %q missing %q", effect, want)
+	seedProfile(t, "copied", "https://stored.test", "tok")
+	for _, tc := range []struct {
+		name, active string
+		local        bool
+		want         string
+	}{
+		{"default", "default", false, "no profile switch"},
+		{"copied", "default", false, "no profile switch"},
+		{"acme", "default", true, "pinned to \"acme\""},
+		{"acme", "default", false, "credentials only"},
+	} {
+		if got := dryRunSkillsEffect(tc.name, tc.active, tc.local); !strings.Contains(got, tc.want) {
+			t.Errorf("dryRunSkillsEffect(%s, local=%v) = %q, want %q", tc.name, tc.local, got, tc.want)
 		}
 	}
 }

@@ -94,7 +94,9 @@ Login is idempotent; re-run it at any time. It:
    - `--token` saves an existing Praxis API key instead. Login never creates
      a new Praxis API key.
 4. **Replaces the org skills** of the previous profile with this profile's
-   catalog (`praxis-<name>`), and does the same for custom agents.
+   catalog (`praxis-<name>`), and does the same for custom agents. A login
+   with `--profile` for a profile that is not the machine default skips this
+   step and steps 5 and 6 (see "Profiles").
 5. **Writes the MCP snapshot** `~/.praxis/mcp-tools.json`, so your AI can
    find gateway functions without a network call.
 6. **Wires hooks:** in Claude Code, the ig session and directory hooks and a
@@ -128,16 +130,17 @@ praxis login [--url U] [--token T] [--local] [--dry-run] [--force]
    Set up or refresh this profile (see "Set up"). --dry-run reports what
    login would do and exits (0 = report complete, 5 = server unreachable).
    --force skips the stored token. --local pins the profile to the current
-   directory tree (see "Local mode").
+   folder (see "Local mode").
 
 praxis refresh-skills [--project]
    Re-sync skills, agents and the MCP snapshot without re-authenticating.
-   Installs at user level; inside a local-mode tree it scopes to that tree.
-   --project pins the current directory to the active profile and installs
-   there.
+   Installs at user level; inside a pinned folder it installs into that
+   folder. --project pins the current folder to the active profile and
+   installs there.
 
 praxis profiles [--refresh]            list profiles (never prints tokens)
-praxis profiles use <name> [--local]   switch the active profile and re-sync
+praxis profiles pin <name> | unpin     use a profile in this folder (both CLIs)
+praxis profiles set-default <name>     change the machine default and re-sync
 praxis profiles rename OLD NEW         rename a profile, credentials only
 praxis profiles rm NAME                delete a non-active profile's credentials
 praxis logout [--all]                  remove the active profile's credentials
@@ -166,45 +169,49 @@ praxis version | completion <shell> | help
 
 ### Profile selection
 
-`-p, --profile <name>` uses a profile for one command and writes nothing:
-`praxis -p acme duty list`. `PRAXIS_PROFILE=<name>` does the same for every
-command in one shell or agent session. Both are safe with concurrent sessions.
-
-The active profile resolves in this order (first match wins):
+Selecting a profile writes nothing. Only `praxis profiles set-default` and a
+bare `praxis login` change the machine default, `[default]`.
 
 ```text
-1. -p/--profile flag
+1. -p/--profile flag                                    one command
 2. CONTROL_PLANE_URL + FACETS_USERNAME + FACETS_TOKEN   raptor's env credential
-3. $PRAXIS_PROFILE
-4. $FACETS_PROFILE                                      raptor's selector; moves both CLIs
-5. [default] of the store in effect                     the tree's file inside a local tree
+3. $PRAXIS_PROFILE, then $FACETS_PROFILE                one shell or agent session
+4. the folder pin, <folder>/.facets/profile             one folder and below it
+5. [default]                                            the machine default
 6. the only section, when there is exactly one
 ```
 
-A misspelled `-p` or `$PRAXIS_PROFILE` fails with exit 3; praxis never falls
-back to another profile. `logout` and `refresh-skills` refuse (exit 2,
-nothing changed) when `-p` or `$PRAXIS_PROFILE` names a profile other than
-the active one.
+raptor resolves the same order (with `--profile` for the flag), so a
+selection moves both CLIs. When `PRAXIS_PROFILE` and `FACETS_PROFILE` name
+different profiles, both CLIs use `PRAXIS_PROFILE` and print a warning.
+
+A misspelled selection fails with exit 3; praxis never falls back to another
+profile. `logout` and `refresh-skills` refuse (exit 2, nothing changed) when
+`-p` or `$PRAXIS_PROFILE` names a profile other than the one in effect.
 
 ## Profiles
 
-> **Whatever changes the active profile also re-installs the skills.**
-
-The active profile is the `[default]` section of the credentials store, the
-same rule raptor uses. Only `praxis login` and `praxis profiles use` change it.
-Both copy the profile's section over `[default]`, remove the previous
-profile's `praxis-*` skills and agents, and install the new profile's. The
-praxis and raptor skills do not depend on the profile and stay. Hand-editing
-`[default]` is not a switch: it leaves the old profile's skills installed.
-
 ```bash
-praxis login --profile acme --url https://acme.console.facets.cloud   # add; becomes active
-praxis profiles                  # list
-praxis profiles use acme         # switch back, no browser
-praxis -p bigcorp duty list      # one command against another profile
+praxis login --url https://root.console.facets.cloud                  # [default]
+praxis login --profile acme --url https://acme.console.facets.cloud   # adds [acme]
+praxis profiles                       # list; * marks the profile in effect here
+praxis -p acme duty list              # one command against acme
+export FACETS_PROFILE=acme            # this shell, both CLIs
+praxis profiles pin acme              # this folder, both CLIs
+praxis profiles set-default acme      # the whole machine
 ```
 
-`profiles use` checks the stored token first and changes nothing when it
+A login with `--profile` saves credentials only. It does not change
+`[default]` or the installed org skills, so other sessions keep their profile.
+
+**Org skills follow the machine default.** The user-level `praxis-*` skills
+and agents belong to the profile `[default]` holds. `set-default` and a bare
+`login` replace them; other selections do not. When a command uses a profile
+from another org, praxis prints one line that says so. To get that org's
+skills, pin a folder to it and run `praxis refresh-skills` there. The praxis
+and raptor skills do not depend on the profile.
+
+`set-default` checks the stored token first and changes nothing when it
 cannot switch:
 
 | Situation | Exit |
@@ -213,52 +220,49 @@ cannot switch:
 | deployment unreachable | `5` |
 | no such profile | `2` |
 
-**Several sessions at once.** `profiles use` is machine-wide: it rewrites
-`[default]` and the installed skills for every shell and agent session.
-To run sessions against different profiles, set `PRAXIS_PROFILE` in each
-instead. A session scoped this way still reads the skill files of the
-globally active profile; for another org's skills in one repo, use local
-mode.
+**Agents.** An agent shell loses `export` between commands. On a machine with
+more than one profile, an agent passes `--profile` on each command or works in
+a pinned folder. An agent command that selects nothing prints one line with
+the profile it used.
 
-**Shared with raptor.** Control-plane tokens live in `~/.facets/credentials`,
-and `praxis profiles use` moves raptor too, because both read `[default]`.
-The CLIs differ only for praxis-only selectors (`-p`, `$PRAXIS_PROFILE`):
-`praxis status --json` then reports, in its `raptor` block, whether the AI
-host must run raptor as `FACETS_PROFILE=<profile> raptor …`. `praxis logout`
+**Shared with raptor.** Control-plane tokens live in `~/.facets/credentials`.
+Both CLIs read the same store and the same selection order. `praxis logout`
 and `profiles rm` remove the section from `~/.facets/credentials`, so raptor
 is logged out of it too.
 
 ## Local mode
 
-Local mode pins a profile to a directory tree, so different repos can work
-in different orgs at the same time.
+Local mode pins a profile to a folder, so different repos can work in
+different orgs at the same time.
 
 ```bash
 cd ~/work/acme-repo
-praxis profiles use acme --local      # or: praxis login --profile acme --local
+praxis login --profile acme --local   # or: praxis profiles pin acme && praxis refresh-skills
 ```
 
 It:
 
-1. Writes `<repo>/.facets/credentials` with the profile's section and a
-   `[default]` copy, plus a `.gitignore`. This is the file
-   `raptor login --local` writes, and inside the tree both CLIs read it
-   instead of the home store. Only a control-plane PAT profile can be pinned.
-2. Installs the profile's skills and agents into the repo
-   (`<repo>/.claude/skills`, `<repo>/.agents/skills`, …). The raptor skill
-   stays at user level.
-3. Keeps the skill receipt and MCP snapshot in `<repo>/.praxis/`.
+1. Saves the token in `~/.facets/credentials`, as any login does.
+2. Writes `<repo>/.facets/profile` with the profile name only, and a
+   `.gitignore` in `.facets`. Every praxis and raptor command in the repo then
+   uses the profile. Only a control-plane PAT profile can be pinned.
+3. Installs the profile's skills and agents into the repo
+   (`<repo>/.claude/skills`, `<repo>/.agents/skills`, …), and keeps the skill
+   receipt and MCP snapshot in `<repo>/.praxis/`. The raptor skill stays at
+   user level. `praxis setup` refreshes the praxis skill in these repos after
+   an upgrade.
 
 Things to know:
 
-- The repo must be under your home folder; `--local` refuses other folders
-  (exit 2). Symlinks are resolved first.
-- `login` and `profiles use` without `--local` change the home store, also
-  when run inside a local tree. Their output then shows
-  `shadowed_by_project_root`, because the tree's file still wins there.
-- To detach a repo, delete its `.facets` and `.praxis` folders.
-- Add `/.praxis/` to the repo's `.gitignore`. A `.praxis/` folder without
-  `.facets/credentials` beside it does nothing.
+- The repo must be under your home folder for the skill install; the home
+  folder itself cannot be pinned.
+- In a pinned folder, `praxis login --local` re-logs the pinned profile.
+- `praxis profiles unpin` removes the pin. `praxis logout` in a pinned folder
+  removes the pinned profile and the pin.
+- An older praxis wrote `<repo>/.facets/credentials` (a token copy) for local
+  mode. Both CLIs still read such a tree file, and a `--local` login there
+  writes to it.
+- Add `/.praxis/` to the repo's `.gitignore`.
 
 ## Files
 
@@ -267,10 +271,11 @@ Things to know:
 ~/.praxis/credentials        Praxis API keys and loopback (local dev) PATs (0600)
 ~/.praxis/installed.json     receipt of every skill and agent file praxis wrote
 ~/.praxis/mcp-tools.json     MCP snapshot
+~/.praxis/projects.json      project trees with a project install (refreshed after upgrades)
 ~/.praxis/backups/           copies of skills praxis replaced after you changed them
 
 ~/.claude/skills/praxis/                 praxis skill (Claude Code)
-~/.claude/skills/praxis-<name>/          org skills (change with the profile)
+~/.claude/skills/praxis-<name>/          org skills (follow [default])
 ~/.agents/skills/…                       the same, for Codex and Gemini CLI
 ~/.gemini/config/skills/…                the same, for Antigravity
 ~/.claude/agents/, ~/.gemini/agents/     custom agents
@@ -282,9 +287,9 @@ Things to know:
                                          (recorded in ~/.facets/raptor-skills.json)
 ```
 
-In local mode, credentials, receipt, snapshot, skills and agents move into the
-repo: `<repo>/.facets/credentials`, `<repo>/.praxis/` and the repo's
-`.claude`, `.agents` and `.gemini` folders.
+In local mode, the pin, receipt, snapshot, skills and agents go into the
+repo: `<repo>/.facets/profile`, `<repo>/.praxis/` and the repo's `.claude`,
+`.agents` and `.gemini` folders. The token stays in `~/.facets/credentials`.
 
 ## Security: keep credentials out of transcripts
 

@@ -24,9 +24,7 @@ func TestLogoutCmd_InTree_OnlyDefault_WipesTheTreeNotHome(t *testing.T) {
 
 	seedPAT(t, "default", "https://home.test", "t1")
 	repo := repoUnderHome(t, home)
-	if err := credentials.SetDefaultLocal("default", repo); err != nil {
-		t.Fatal(err)
-	}
+	seedLegacyTree(t, repo, "default")
 	for _, root := range []string{filepath.Join(home, ".praxis"), filepath.Join(repo, ".praxis")} {
 		if err := os.MkdirAll(root, 0o700); err != nil {
 			t.Fatal(err)
@@ -233,11 +231,11 @@ func TestPickProfile_ListsCopiesOnceAndTakesANumber(t *testing.T) {
 	}
 }
 
-// raptor's env credential outranks every file for both CLIs, so a switch made
-// under it is reported as shadowed by CONTROL_PLANE_URL, not silently.
-func TestProfilesUse_UnderEnvOverride_ReportsTheShadow(t *testing.T) {
+// raptor's env credential outranks every file for both CLIs, so a default
+// changed under it is reported as not in effect here.
+func TestProfilesSetDefault_UnderEnvOverride_ReportsTheShadow(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	resetProfilesUseFlags(t)
+	resetSetDefaultFlags(t)
 	clearFacetsEnv(t)
 	seedPAT(t, "default", "https://d.test", "td")
 	seedPAT(t, "acme", "https://acme.test", "ta")
@@ -247,12 +245,11 @@ func TestProfilesUse_UnderEnvOverride_ReportsTheShadow(t *testing.T) {
 	okAuthMe(t, "u@x")
 	stubPostAuthCapture(t)
 
-	out, err := runProfilesUse(t, "acme")
+	out, err := runSetDefault(t, "acme")
 	if err != nil {
 		t.Fatalf("RunE err = %v", err)
 	}
-	got := decodeMap(t, out)
-	if got["shadowed_by_env"] != "CONTROL_PLANE_URL=env" || got["effective_profile"] != "env" {
-		t.Errorf("payload = %v; want shadowed_by_env CONTROL_PLANE_URL=env, effective_profile env", got)
+	if got := decodeMap(t, out); got["effective_profile"] != "env (env-override)" {
+		t.Errorf("payload = %v; want effective_profile env (env-override)", got)
 	}
 }

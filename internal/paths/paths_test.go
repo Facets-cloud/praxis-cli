@@ -541,3 +541,28 @@ func TestActiveRoot_DoesNotCreateTheProjectDir(t *testing.T) {
 		t.Errorf("ActiveRoot() created %s; only writers may", root)
 	}
 }
+
+// A name-only pin opts a tree in, like a legacy credentials file.
+func TestProjectRoot_PinIsAMarker(t *testing.T) {
+	home := withHome(t)
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".facets"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".facets", "profile"), []byte("acme\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
+	if got, ok, _ := ProjectRoot(); !ok || got != filepath.Join(repo, ".praxis") {
+		t.Errorf("ProjectRoot() = %q, %v; want the pinned tree", got, ok)
+	}
+	if got, _ := Getwd(); got != repo {
+		t.Errorf("Getwd() = %q, want the seam's %q", got, repo)
+	}
+	if p, _ := Projects(); p != filepath.Join(home, ".praxis", "projects.json") {
+		t.Errorf("Projects() = %q, want it under the home root", p)
+	}
+	if _, _, ok := LegacyProjectPointer(); ok {
+		t.Error("a pinned tree is not a legacy pointer")
+	}
+}

@@ -446,3 +446,23 @@ func TestRetireReplacedGlobals(t *testing.T) {
 		}
 	}
 }
+
+// The receipt names whose org catalog is installed, and a later skill write
+// keeps that name.
+func TestSetOrg_RecordsAndSurvivesInstalls(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, ".praxis")
+	if _, ok := OrgAt(root); ok {
+		t.Fatal("a fresh root has no org")
+	}
+	if err := SetOrg("acme", "https://acme.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install("praxis", []harness.Harness{{Name: "claude-code", SkillDir: filepath.Join(home, ".claude", "skills")}}); err != nil {
+		t.Fatal(err)
+	}
+	if org, ok := OrgAt(root); !ok || org.Profile != "acme" || org.URL != "https://acme.test" {
+		t.Errorf("OrgAt = %+v, %v; want acme kept across an install", org, ok)
+	}
+}

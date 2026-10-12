@@ -229,9 +229,9 @@ func TestLogin_PAT_ReplacesForeignSection(t *testing.T) {
 	}
 }
 
-func TestLogin_Local_WritesProjectFacetsFile(t *testing.T) {
-	// --local is raptor's local mode: the PAT lands in <cwd>/.facets/credentials
-	// with a .gitignore, and the home file is not touched.
+func TestLogin_Local_NewPATGoesHomeAndTheFolderGetsAPin(t *testing.T) {
+	// --local keeps the token in the one home store and pins the folder by
+	// name: no token is copied into the tree, and [default] is not created.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	resetLoginFlags(t)
@@ -243,7 +243,7 @@ func TestLogin_Local_WritesProjectFacetsFile(t *testing.T) {
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(paths.SetGetwdForTest(func() (string, error) { return repo, nil }))
+	inDir(t, repo)
 
 	rootProfile = "acme"
 	loginLocal = true
@@ -252,24 +252,21 @@ func TestLogin_Local_WritesProjectFacetsFile(t *testing.T) {
 		t.Fatalf("login --local err: %v", err)
 	}
 
-	got := readFacetsFile(t, repo)["acme"]
-	if got["token"] != "pat-local" || got["control_plane_url"] != "https://acme.test" {
-		t.Errorf("repo facets [acme] = %v", got)
+	got := readFacetsFile(t, home)
+	if got["acme"]["token"] != "pat-local" || got["acme"]["control_plane_url"] != "https://acme.test" {
+		t.Errorf("home facets [acme] = %v", got["acme"])
+	}
+	if _, ok := got["default"]; ok {
+		t.Errorf("a --local login must not create [default]: %v", got)
+	}
+	if tree := readFacetsFile(t, repo); tree != nil {
+		t.Errorf("tree credentials written by a --local login: %v", tree)
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".facets", ".gitignore")); err != nil {
 		t.Errorf(".gitignore missing: %v", err)
 	}
-	if facets := readFacetsFile(t, home); facets != nil {
-		t.Errorf("home facets file written by a --local login: %v", facets)
-	}
-	if got["token"] != readFacetsFile(t, repo)["default"]["token"] {
-		t.Errorf("tree file lacks a [default] copy: %v", readFacetsFile(t, repo))
-	}
-	// Inside the tree, praxis reads the local file — the same one raptor does —
-	// and its [default] is acme.
-	t.Cleanup(credentials.SetGetwdForTest(func() (string, error) { return repo, nil }))
-	if a, _ := credentials.ResolveActive(""); a.Name != "default" || !a.Loaded || a.Profile.URL != "https://acme.test" || a.Profile.Store != credentials.StoreFacets {
-		t.Errorf("in-repo resolution = %+v, want default with acme's credentials from the local file", a)
+	if a, _ := credentials.ResolveActive(""); a.Name != "acme" || !a.Loaded || a.Source != credentials.SourcePin {
+		t.Errorf("in-repo resolution = %+v, want acme from the pin", a)
 	}
 }
 
@@ -454,6 +451,11 @@ func TestPickProfile_WhenItStepsIn(t *testing.T) {
 		{name: "an existing name picks it", creds: threeSections, local: true, tty: true, answer: "zed", want: "zed"},
 		{name: "a new name creates a profile", creds: threeSections, local: true, tty: true, answer: "newcp", want: "newcp"},
 		{name: "an invalid new name is refused", creds: threeSections, local: true, tty: true, answer: "has space", wantErr: true},
+		// One profile is enough to guard [default]: a bare login for another
+		// control plane must not replace it on a guess.
+		{name: "single profile, --url for another host, no terminal refuses", creds: "[default]\ncontrol_plane_url = https://root.test\nusername = u\ntoken = t\n", flagURL: "https://acme.console.facets.cloud", tty: false, wantErr: true},
+		{name: "--url for another host suggests its host label", creds: "[default]\ncontrol_plane_url = https://root.test\nusername = u\ntoken = t\n", flagURL: "https://acme.console.facets.cloud", tty: true, answer: "", want: "acme"},
+		{name: "replacing [default] takes an explicit answer", creds: threeSections, flagURL: "https://new.test", tty: true, answer: "default", want: "default"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

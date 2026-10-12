@@ -7,10 +7,11 @@
 //
 //  1. env override — CONTROL_PLANE_URL set (FACETS_USERNAME/FACETS_TOKEN
 //     optional with FACETS_HEADERS)
-//  2. FACETS_PROFILE env var
-//  3. the [default] section
-//  4. the sole profile, when exactly one exists
-//  5. none — raptor itself would error
+//  2. PRAXIS_PROFILE, then FACETS_PROFILE
+//  3. the folder pin (.facets/profile)
+//  4. the [default] section
+//  5. the sole profile, when exactly one exists
+//  6. none — raptor itself would error
 package raptorstate
 
 import (
@@ -28,7 +29,8 @@ type Source string
 
 const (
 	SourceEnv        Source = "env"         // CONTROL_PLANE_URL override
-	SourceEnvProfile Source = "env-profile" // FACETS_PROFILE
+	SourceEnvProfile Source = "env-profile" // PRAXIS_PROFILE or FACETS_PROFILE
+	SourcePin        Source = "pin"         // .facets/profile
 	SourceDefault    Source = "default"     // [default] section
 	SourceSole       Source = "sole"        // the only profile in the file
 )
@@ -89,11 +91,11 @@ func resolve(profiles map[string]credentials.Profile) State {
 		return st
 	}
 
-	// 2. FACETS_PROFILE. A name that doesn't exist is still reported (raptor
-	// itself would error on it).
-	if name := os.Getenv("FACETS_PROFILE"); name != "" {
+	// 2-3. The environment, then the folder pin. A name that doesn't exist is
+	// still reported (raptor itself would error on it).
+	if name, src := selected(); name != "" {
 		st.Profile = name
-		st.Source = SourceEnvProfile
+		st.Source = src
 		if p, ok := profiles[name]; ok {
 			st.Found = true
 			st.ControlPlaneURL = p.URL
@@ -126,6 +128,19 @@ func resolve(profiles map[string]credentials.Profile) State {
 
 	// 5. Nothing resolved — zero or multiple profiles without a selector.
 	return st
+}
+
+// selected is the profile the environment or a folder pin names, if any.
+func selected() (string, Source) {
+	for _, v := range []string{credentials.EnvProfile, credentials.FacetsEnvProfile} {
+		if name := strings.TrimSpace(os.Getenv(v)); name != "" {
+			return name, SourceEnvProfile
+		}
+	}
+	if name, _, ok := credentials.FindPin(); ok {
+		return name, SourcePin
+	}
+	return "", ""
 }
 
 // PAT returns the (username, control-plane PAT) pair stored for the named

@@ -29,16 +29,16 @@
 //     credential, a complete profile named "env"
 //  3. $PRAXIS_PROFILE (scoped to one shell or agent session)
 //  4. $FACETS_PROFILE — raptor's selector, so one variable drives both CLIs
-//  5. the [default] section — raptor's own rule
-//  6. the sole section, when exactly one exists — raptor's own rule
+//  5. the pin: the name in the nearest <dir>/.facets/profile above the working
+//     directory (never $HOME's own), written by `praxis profiles pin`
+//  6. the [default] section — raptor's own rule
+//  7. the sole section, when exactly one exists — raptor's own rule
 //
-// There is no pointer file. `praxis profiles use X` copies X's section over
-// [default], so both CLIs move together; `--local` writes the tree's
-// .facets/credentials, which both CLIs read first from inside that tree.
-// The environment is the only per-session scope: it writes nothing and is
-// invisible to other sessions, which is what makes it concurrency-safe.
+// A selection is a read: nothing here writes the store. Only `praxis profiles
+// set-default` and a bare `praxis login` change [default]. raptor resolves the
+// same chain, so a pinned folder or an exported variable moves both CLIs.
 //
-// Single-profile users never see steps 1–4 — everything resolves to their one
+// Single-profile users never see steps 1–5 — everything resolves to their one
 // section automatically.
 //
 // OnDiskActiveName answers "what would a bare command act on?" for callers
@@ -144,20 +144,14 @@ const (
 	SourceEnvOverride Source = "env-override" // CONTROL_PLANE_URL + FACETS_USERNAME + FACETS_TOKEN
 	SourceEnv         Source = "env"          // PRAXIS_PROFILE
 	SourceFacetsEnv   Source = "facets-env"   // FACETS_PROFILE
+	SourcePin         Source = "pin"          // <dir>/.facets/profile
 	SourceDefault     Source = "default"      // the [default] section
 	SourceSole        Source = "sole"         // the only section in the store
 )
 
 // EnvProfile selects the active profile for one PROCESS TREE — i.e. one shell
-// or one agent session.
-//
-// This is the concurrency-safe way to work in a profile. The [default]
-// section and the installed org skills are BOTH
-// machine-global, so `praxis profiles use X` changes what every other session
-// on the machine resolves to, and rewrites skill files those sessions have
-// already read. Exporting PRAXIS_PROFILE instead writes nothing: it can't be
-// observed by another session, and another session's switch can't be observed
-// by you.
+// or one agent session. It writes nothing, so another session can neither see
+// nor move it.
 const EnvProfile = "PRAXIS_PROFILE"
 
 // Active is the resolved active profile + provenance.
@@ -168,15 +162,16 @@ type Active struct {
 	// Loaded is false when the active profile name doesn't exist yet
 	// in the credentials file (e.g., user hasn't logged in).
 	Loaded bool
+	// PinPath is the pin file that named the profile (SourcePin only).
+	PinPath string
 }
 
 // ResolveActive walks the priority chain and returns the active profile.
 // The Profile field is zeroed if the named section doesn't exist; callers
 // should check Loaded before using URL/Token.
 //
-// With nothing explicit, the active profile is raptor's: the [default]
-// section, else the sole section when exactly one exists. There is no pointer
-// file — `praxis profiles use X` copies X into [default], so both CLIs move.
+// With nothing explicit, the active profile is the pin, else raptor's rule:
+// the [default] section, else the sole section when exactly one exists.
 func ResolveActive(flagProfile string) (Active, error) {
 	if a, ok := envOverride(flagProfile); ok {
 		return a, nil
@@ -186,8 +181,9 @@ func ResolveActive(flagProfile string) (Active, error) {
 		return Active{}, err
 	}
 	name, src := resolveName(flagProfile)
+	pin := ""
 	if src == SourceDefault {
-		name, src = onDiskActive(store)
+		name, src, pin = onDiskActive(store)
 	}
 	p, ok := store[name]
 	return Active{
@@ -195,11 +191,12 @@ func ResolveActive(flagProfile string) (Active, error) {
 		Source:  src,
 		Profile: p,
 		Loaded:  ok,
+		PinPath: pin,
 	}, nil
 }
 
 // resolveName is the explicit part of the chain: flag, then environment.
-// SourceDefault means "nothing explicit" — the caller applies raptor's rule.
+// SourceDefault means "nothing explicit" — the caller applies the on-disk rule.
 func resolveName(flagProfile string) (string, Source) {
 	if flagProfile != "" {
 		return flagProfile, SourceFlag
@@ -210,27 +207,32 @@ func resolveName(flagProfile string) (string, Source) {
 	return DefaultProfileName, SourceDefault
 }
 
-// onDiskActive is raptor's rule for a bare command: [default] if it exists,
-// else the sole section, else the literal "default" (which then fails to load).
-func onDiskActive(store map[string]Profile) (string, Source) {
+// onDiskActive is what a bare command uses here: the pin, else raptor's rule —
+// [default] if it exists, else the sole section, else the literal "default"
+// (which then fails to load). The third value is the pin file, if one decided.
+func onDiskActive(store map[string]Profile) (string, Source, string) {
+	if name, path, ok := FindPin(); ok {
+		return name, SourcePin, path
+	}
 	if _, ok := store[DefaultProfileName]; ok || len(store) != 1 {
-		return DefaultProfileName, SourceDefault
+		return DefaultProfileName, SourceDefault, ""
 	}
 	for name := range store {
-		return name, SourceSole
+		return name, SourceSole, ""
 	}
-	return DefaultProfileName, SourceDefault
+	return DefaultProfileName, SourceDefault, ""
 }
 
 // OnDiskActiveName is the profile a bare command acts on, ignoring --profile
-// and the environment — the one whose org skills are installed. Destructive
-// commands compare an explicit selection against this.
+// and the environment — the pin, else [default] or the sole section. Its org
+// skills are the ones installed here. Destructive commands compare an explicit
+// selection against this.
 func OnDiskActiveName() string {
 	store, err := Load()
 	if err != nil {
 		return DefaultProfileName
 	}
-	name, _ := onDiskActive(store)
+	name, _, _ := onDiskActive(store)
 	return name
 }
 
@@ -286,7 +288,7 @@ func envOverride(flagProfile string) (Active, bool) {
 }
 
 // SameAs returns the other sections whose URL, username and token equal
-// profile `name` — after `profiles use X`, [default] is a copy of X, and
+// profile `name` — after `profiles set-default X`, [default] is a copy of X, and
 // listings say so.
 func SameAs(store map[string]Profile, name string) []string {
 	p, ok := store[name]
@@ -322,7 +324,7 @@ func Distinct(store map[string]Profile) []string {
 }
 
 // SameCreds reports whether two profile names hold identical credentials —
-// true after `profiles use X` for X and "default". A guard that refuses a
+// true after `profiles set-default X` for X and "default". A guard that refuses a
 // selection diverging from the active profile must not refuse its own copy.
 func SameCreds(a, b string) bool {
 	if a == b {
@@ -398,36 +400,6 @@ func keepName(store map[string]Profile, rawURL string) string {
 		}
 		name = fmt.Sprintf("%s-%d", base, i)
 	}
-}
-
-// SetDefaultLocal pins `name` to a directory tree the way `raptor login
-// --local` does: <dir>/.facets/credentials gets [name] and a [default] copy,
-// so both CLIs resolve it there with no env var. Only a control-plane PAT can
-// live in that file.
-func SetDefaultLocal(name, dir string) error {
-	store, err := Load()
-	if err != nil {
-		return err
-	}
-	p, ok := store[name]
-	if !ok {
-		// A --local login wrote the section into the tree's file, which the
-		// walk from the caller's directory may not have reached yet.
-		p, ok = loadFacets(FacetsPathIn(dir))[name]
-	}
-	if !ok {
-		return fmt.Errorf("profile %q does not exist", name)
-	}
-	if !isFacetsCredential(p) {
-		return fmt.Errorf("profile %q is a Praxis API key; local mode needs a control-plane PAT", name)
-	}
-	if err := PutLocal(name, p, dir); err != nil {
-		return err
-	}
-	if name == DefaultProfileName {
-		return nil
-	}
-	return PutLocal(DefaultProfileName, p, dir)
 }
 
 // Load returns every profile praxis can use: the praxis file's API keys plus
@@ -514,6 +486,21 @@ func Put(name string, p Profile) error {
 // (raptor's local mode) with a .gitignore; the praxis file stays global.
 func PutLocal(name string, p Profile, dir string) error {
 	return put(name, p, dir)
+}
+
+// PutFor saves a PAT where a read from dir finds it — a legacy tree file at or
+// above dir, else the home file — and returns that file. `login --local` uses
+// it, so a pin never names a profile its tree cannot see.
+func PutFor(dir, name string, p Profile) (string, error) {
+	home, err := FacetsHome()
+	if err != nil {
+		return "", err
+	}
+	path := facetsPathFrom(dir)
+	if path == home {
+		return path, Put(name, p)
+	}
+	return path, PutLocal(name, p, filepath.Dir(filepath.Dir(path)))
 }
 
 func put(name string, p Profile, dir string) error {

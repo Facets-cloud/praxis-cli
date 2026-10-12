@@ -49,6 +49,40 @@ type AgentInstallation struct {
 type Receipt struct {
 	Skills []Installation      `json:"skills"`
 	Agents []AgentInstallation `json:"agents,omitempty"`
+	// Org is the profile whose org catalog is installed in this root. Older
+	// receipts have none.
+	Org *InstalledOrg `json:"org,omitempty"`
+}
+
+// InstalledOrg names a profile and its deployment URL.
+type InstalledOrg struct {
+	Profile string `json:"profile"`
+	URL     string `json:"url"`
+}
+
+// SetOrg records that the active root now holds profile's org catalog.
+func SetOrg(profile, url string) error {
+	return withSkillLock(func() error {
+		r, err := loadReceipt()
+		if err != nil {
+			return err
+		}
+		r.Org = &InstalledOrg{Profile: profile, URL: url}
+		return saveReceipt(r)
+	})
+}
+
+// OrgAt returns the org recorded in the receipt under root (a .praxis folder).
+func OrgAt(root string) (InstalledOrg, bool) {
+	data, err := os.ReadFile(filepath.Join(root, "installed.json"))
+	if err != nil {
+		return InstalledOrg{}, false
+	}
+	var r Receipt
+	if json.Unmarshal(data, &r) != nil || r.Org == nil {
+		return InstalledOrg{}, false
+	}
+	return *r.Org, true
 }
 
 // Install writes the named skill into every detected harness's user-level
