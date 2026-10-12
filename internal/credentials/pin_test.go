@@ -192,3 +192,43 @@ func TestPutDefault_KeepsOnlyAnotherIdentity(t *testing.T) {
 		t.Errorf("home store = %+v", h)
 	}
 }
+
+// A pin never reaches git: a new .facets/.gitignore ignores the folder, and an
+// older one that ignores only `credentials` gets a `profile` line. Lines that
+// already ignore the pin, and every other line, stay as they are.
+func TestWritePin_KeepsThePinOutOfGit(t *testing.T) {
+	home := withHome(t)
+	seedFacets(t, homeFacets(t), twoRaptorSections)
+	for _, tc := range []struct{ name, before, want string }{
+		{"absent", "", "*\n"},
+		{"older file", "credentials\n", "credentials\nprofile\n"},
+		{"no final newline", "credentials", "credentials\nprofile\n"},
+		{"already ignores all", "credentials\n*\n", "credentials\n*\n"},
+		{"already ignores the pin", "/profile\n", "/profile\n"},
+	} {
+		repo := filepath.Join(home, tc.name)
+		gi := filepath.Join(repo, ".facets", ".gitignore")
+		if tc.before != "" {
+			seedFacets(t, gi, tc.before)
+		}
+		if err := WritePin(repo, "acme"); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := os.ReadFile(gi); string(b) != tc.want {
+			t.Errorf("%s: .gitignore = %q, want %q", tc.name, b, tc.want)
+		}
+	}
+}
+
+func TestIdentities_CountsHostAndUser(t *testing.T) {
+	store := map[string]Profile{
+		"default": FacetsProfile("https://root.test", "u@x", "new"),
+		"root":    FacetsProfile("https://ROOT.test/", "u@x", "old"),
+		"key":     {URL: "https://root.test", Username: "u@x", Token: "sk"},
+		"other":   FacetsProfile("https://root.test", "v@x", "t"),
+		"acme":    FacetsProfile("https://acme.test", "u@x", "t"),
+	}
+	if n := Identities(store); n != 3 {
+		t.Errorf("Identities = %d, want 3 (root/u, root/v, acme/u)", n)
+	}
+}

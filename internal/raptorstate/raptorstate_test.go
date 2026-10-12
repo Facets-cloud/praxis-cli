@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
@@ -252,6 +253,7 @@ func TestResolve_FolderPin(t *testing.T) {
 	t.Setenv("HOME", home)
 	clearRaptorEnv(t)
 	stubInstalled(t, true)
+	stubPinProbe(t, true)
 	seedHomeFacets(t, "[default]\ncontrol_plane_url = https://root.test\nusername = u\ntoken = t\n\n[acme]\ncontrol_plane_url = https://acme.test\nusername = u\ntoken = t\n")
 	repo := filepath.Join(home, "repo")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
@@ -267,5 +269,62 @@ func TestResolve_FolderPin(t *testing.T) {
 	t.Setenv("FACETS_PROFILE", "default")
 	if st := Resolve(); st.Profile != "default" || st.Source != SourceEnvProfile {
 		t.Errorf("FACETS_PROFILE must beat the pin, got %+v", st)
+	}
+}
+
+// stubPinProbe answers the pin probe without running raptor.
+func stubPinProbe(t *testing.T, supported bool) {
+	t.Helper()
+	t.Cleanup(SetPinProbeForTest(func(string) bool { return supported }))
+}
+
+// fakeRaptor puts a raptor script on PATH that answers `raptor profiles`
+// with exit 0 only when it supports pins.
+func fakeRaptor(t *testing.T, supportsPins bool) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake raptor is a shell script")
+	}
+	dir := t.TempDir()
+	body := "#!/bin/sh\nexit 1\n"
+	if supportsPins {
+		body = "#!/bin/sh\n[ \"$1\" = profiles ] && exit 0\nexit 1\n"
+	}
+	path := filepath.Join(dir, "raptor")
+	if err := os.WriteFile(path, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Cleanup(SetPinProbeForTest(ProbePins))
+	return path
+}
+
+// An older raptor on PATH ignores pins: the state says what it really uses
+// ([default]) and names the pin it ignores. A raptor with `profiles` follows it.
+func TestResolve_PinFollowsTheRaptorOnPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	clearRaptorEnv(t)
+	seedHomeFacets(t, "[default]\ncontrol_plane_url = https://root.test\nusername = u\ntoken = t\n\n[acme]\ncontrol_plane_url = https://acme.test\nusername = u\ntoken = t\n")
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.WritePin(repo, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(credentials.SetGetwdForTest(func() (string, error) { return repo, nil }))
+
+	old := fakeRaptor(t, false)
+	if st := Resolve(); st.Profile != "default" || st.IgnoredPin != credentials.PinPathIn(repo) {
+		t.Errorf("old raptor: %+v, want [default] and the ignored pin", st)
+	}
+	if path, supported, installed := PinSupport(); path != old || supported || !installed {
+		t.Errorf("PinSupport = %q, %v, %v; want the old raptor, unsupported", path, supported, installed)
+	}
+
+	fakeRaptor(t, true)
+	if st := Resolve(); st.Profile != "acme" || st.Source != SourcePin || st.IgnoredPin != "" {
+		t.Errorf("new raptor: %+v, want acme from the pin", st)
 	}
 }

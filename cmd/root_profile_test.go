@@ -12,6 +12,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/raptorinstall"
+	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 )
 
 // $PRAXIS_PROFILE now outranks both on-disk pointers, so a developer with it
@@ -36,6 +37,9 @@ func TestMain(m *testing.M) {
 	// through the developer's real home. Start it at the (faked) HOME instead so
 	// no test reads a live ~/.facets/credentials.
 	restore := credentials.SetGetwdForTest(func() (string, error) { return os.Getenv("HOME"), nil })
+	// The developer's raptor must not decide a test: assume one that follows
+	// pins. Tests of the probe put a fake raptor on PATH.
+	restorePins := raptorstate.SetPinProbeForTest(func(string) bool { return true })
 	// Login, setup and update install and upgrade raptor over the network.
 	// Tests that exercise that path swap the real functions back in.
 	ensureRaptorBinary = func() (raptorinstall.Result, error) { return raptorinstall.Result{}, nil }
@@ -43,6 +47,7 @@ func TestMain(m *testing.M) {
 	// A real start would run the test binary as `praxis __auto-update`.
 	startAutoUpdate = func(string, string) error { return errors.New("no automatic update in tests") }
 	code := m.Run()
+	restorePins()
 	restore()
 	_ = os.RemoveAll(home)
 	os.Exit(code)

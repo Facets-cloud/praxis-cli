@@ -257,6 +257,9 @@ Things to know:
 - The repo must be under your home folder for the skill install; the home
   folder itself cannot be pinned.
 - In a pinned folder, `praxis login --local` re-logs the pinned profile.
+- An older raptor ignores pins. `pin` and `login --local` then warn with the
+  raptor path and the upgrade command, and `praxis status` reports
+  `pin_support: false` in its `raptor` block.
 - `praxis profiles unpin` removes the pin. `praxis logout` in a pinned folder
   removes the pinned profile and the pin.
 - An older praxis wrote `<repo>/.facets/credentials` (a token copy) for local

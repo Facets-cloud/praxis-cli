@@ -56,7 +56,7 @@ func init() {
 	// Persistent, so it works in both positions an AI host might emit it:
 	// `praxis --profile acme mcp ...` and `praxis mcp ... --profile acme`.
 	rootCmd.PersistentFlags().StringVarP(&rootProfile, "profile", "p", "",
-		"credentials profile to use for this invocation (overrides $"+credentials.EnvProfile+"; default: the active profile)")
+		"credentials profile to use (default: the folder pin, then [default] or the only profile)")
 
 }
 
@@ -94,12 +94,13 @@ func noteProfileChoice(active credentials.Active) {
 }
 
 // implicitProfileNote is the agent guard: an AI host that selected no profile
-// on a machine with more than one got the machine default, which is a guess.
+// on a machine with more than one identity got the machine default, which is
+// a guess.
 func implicitProfileNote(active credentials.Active, host string) string {
 	if host == "" || (active.Source != credentials.SourceDefault && active.Source != credentials.SourceSole) {
 		return ""
 	}
-	if store, err := credentials.Load(); err != nil || len(credentials.Distinct(store)) < 2 {
+	if store, err := credentials.Load(); err != nil || credentials.Identities(store) < 2 {
 		return ""
 	}
 	return fmt.Sprintf("praxis: using profile %q (%s); pass --profile NAME to choose another", active.Name, active.Profile.URL)
@@ -184,6 +185,17 @@ func noCredentials(active credentials.Active) (string, string) {
 		hint += "; or pass --profile NAME, one of: " + strings.Join(names, ", ")
 	}
 	return msg, hint
+}
+
+// raptorPinWarning warns, when the raptor on PATH predates folder pins, that
+// raptor commands in a pinned folder still use [default]. "" otherwise.
+func raptorPinWarning() string {
+	path, supported, installed := raptorstate.PinSupport()
+	if !installed || supported {
+		return ""
+	}
+	return fmt.Sprintf("raptor at %s does not follow folder pins: raptor commands in this folder use [default], "+
+		"not the pin, until you upgrade it (`raptor upgrade`, or `sudo raptor upgrade` when root owns the file)", path)
 }
 
 // envConflictNote says which variable wins when PRAXIS_PROFILE and

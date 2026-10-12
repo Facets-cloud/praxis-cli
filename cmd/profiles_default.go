@@ -86,9 +86,9 @@ To use a profile without that, select it instead — nothing is written:
 			return nil
 		}
 		previous := homeDefaultName(store)
-		// A [default] copy is not a second profile; one profile has no other
-		// session to disturb, so it gets no machine-wide warning.
-		multi := len(credentials.Distinct(store)) > 1
+		// One identity (copies, rotated tokens, an old API key for the same
+		// deployment) has no other session to disturb: no machine-wide warning.
+		multi := credentials.Identities(store) > 1
 
 		// Verify BEFORE mutating anything. A switch that rewrites [default]
 		// and then fails to fetch the catalog would leave the previous

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
@@ -72,8 +73,16 @@ with ` + "`praxis login --profile <name> --local`" + `, which does both.`,
 			return err // reached only under test (osExit stubbed)
 		}
 		pin := credentials.PinPathIn(dir)
+		warn := raptorPinWarning()
+		if warn != "" {
+			fmt.Fprintln(os.Stderr, "Warning: "+warn)
+		}
 		if asJSON {
-			return render.JSON(out, map[string]any{"ok": true, "profile": name, "pin_path": pin})
+			payload := map[string]any{"ok": true, "profile": name, "pin_path": pin}
+			if warn != "" {
+				payload["raptor_pin_warning"] = warn
+			}
+			return render.JSON(out, payload)
 		}
 		fmt.Fprintf(out, "✓ Pinned profile %q to %s (%s)\n", name, dir, pin)
 		fmt.Fprintln(out, "  praxis and raptor use it in this folder. Run `praxis refresh-skills` here to install its org skills.")

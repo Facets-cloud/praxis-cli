@@ -62,8 +62,8 @@ func readPin(path string) string {
 }
 
 // WritePin pins name to dir. The name must be a control-plane PAT in the store
-// a read from dir would use, and dir must not be the home directory. A .gitignore that ignores
-// the folder is added when .facets has none.
+// a read from dir would use, and dir must not be the home directory. The
+// folder's .gitignore is made to ignore the pin (see ignorePin).
 func WritePin(dir, name string) error {
 	if err := validateProfileName(name); err != nil {
 		return err
@@ -90,11 +90,31 @@ func WritePin(dir, name string) error {
 	if err := os.WriteFile(PinPathIn(dir), []byte(name+"\n"), 0o644); err != nil {
 		return err
 	}
-	gi := filepath.Join(folder, ".gitignore")
-	if _, err := os.Stat(gi); os.IsNotExist(err) {
+	return ignorePin(filepath.Join(folder, ".gitignore"))
+}
+
+// ignorePin keeps the pin out of git: a committed pin would make every clone
+// use a profile its owner may not have. A new .gitignore ignores the whole
+// folder; an existing one gets a "profile" line unless a line already ignores
+// it. No line is ever removed.
+func ignorePin(gi string) error {
+	data, err := os.ReadFile(gi)
+	if os.IsNotExist(err) {
 		return os.WriteFile(gi, []byte("*\n"), 0o644)
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		switch strings.TrimSpace(line) {
+		case "*", "profile", "/profile":
+			return nil
+		}
+	}
+	if len(data) > 0 && !strings.HasSuffix(string(data), "\n") {
+		data = append(data, '\n')
+	}
+	return os.WriteFile(gi, append(data, []byte("profile\n")...), 0o644)
 }
 
 // RemovePin removes the nearest pin at or above the working directory and

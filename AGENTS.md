@@ -219,6 +219,14 @@ Invariants to preserve when touching this area:
   through a project receipt repairs such entries first
   (`skillinstall.repairForeignEntries`): an embedded-skill entry outside the
   project moves to the project copy, or is dropped.
+- **raptor may predate pins.** `raptorstate.PinSupport` probes the raptor on
+  PATH (`raptor profiles --help` exits 0), not its version. A pin that raptor
+  ignores is `State.IgnoredPin`, so status reports what raptor really uses;
+  `pin` and `login --local` warn (`raptorPinWarning`). Tests stub the probe in
+  `TestMain` and run the real one against a fake raptor script.
+- **"More than one profile" means more than one identity**
+  (`credentials.Identities`: control-plane host + username). Copies, rotated
+  tokens and an old API key for the same deployment are one identity.
 - **Every write that replaces `[default]` keeps a unique old one**
   (`credentials.PutDefault` / `SetDefault`, the keepName rule): the bare-login
   replace and a `--local` login named "default" included.

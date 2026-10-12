@@ -72,10 +72,17 @@ A failing check on one profile is reported inline and does not abort the
 listing.
 
 The profile a command uses here is marked with "*" and reported as
-active_profile in JSON output; the line above the table says what selected it
-(--profile, PRAXIS_PROFILE, FACETS_PROFILE, a folder pin, [default], or the
-only profile). SAME AS lists the sections that hold the same credentials,
-such as a [default] copy.
+active_profile in JSON output; the line above the table says what selected it.
+The order (raptor uses the same one):
+
+  1. --profile NAME
+  2. CONTROL_PLANE_URL + FACETS_USERNAME + FACETS_TOKEN
+  3. PRAXIS_PROFILE, then FACETS_PROFILE
+  4. the folder pin, the nearest <dir>/.facets/profile
+  5. [default], else the only profile
+
+SAME AS lists the sections that hold the same credentials, such as a
+[default] copy.
 
 To use another profile: --profile NAME on one command, FACETS_PROFILE=NAME
 for a shell, ` + "`praxis profiles pin NAME`" + ` for a folder, or

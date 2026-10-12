@@ -273,6 +273,13 @@ func raptorStatusBlockFor(st raptorstate.State, active credentials.Active, goos,
 	if st.Source != "" {
 		block["source"] = string(st.Source)
 	}
+	if st.Installed {
+		_, supported, _ := raptorstate.PinSupport()
+		block["pin_support"] = supported
+	}
+	if st.IgnoredPin != "" {
+		block["ignored_pin"] = st.IgnoredPin
+	}
 	if st.Found {
 		block["control_plane_url"] = st.ControlPlaneURL
 		if st.Username != "" {
@@ -330,6 +337,9 @@ func raptorStatusLine(st raptorstate.State, active credentials.Active) string {
 			st.Profile, st.Source, st.ControlPlaneURL, match)
 		if sharedProfile(active) && prefixRequired(st, active) {
 			line += fmt.Sprintf("; use FACETS_PROFILE=%s for this praxis profile", active.Name)
+		}
+		if st.IgnoredPin != "" {
+			line += "; this raptor ignores the folder pin " + st.IgnoredPin + " — upgrade raptor"
 		}
 		return line
 	case sharedProfile(active):

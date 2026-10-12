@@ -323,6 +323,22 @@ func Distinct(store map[string]Profile) []string {
 	return out
 }
 
+// Identities counts the distinct (control-plane host, username) pairs in the
+// store: one person on one deployment is one identity, whatever its tokens —
+// a [default] copy, a rotated token or an old Praxis API key beside a PAT.
+// Output that only matters with more than one profile asks this, not Distinct.
+func Identities(store map[string]Profile) int {
+	seen := map[string]bool{}
+	for _, p := range store {
+		host := strings.TrimSpace(p.URL)
+		if u, err := url.Parse(host); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		seen[strings.ToLower(host)+"\x00"+p.Username] = true
+	}
+	return len(seen)
+}
+
 // SameCreds reports whether two profile names hold identical credentials —
 // true after `profiles set-default X` for X and "default". A guard that refuses a
 // selection diverging from the active profile must not refuse its own copy.

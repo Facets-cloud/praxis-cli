@@ -705,11 +705,19 @@ func persistLocal(out io.Writer, asJSON bool, profileName string, prof credentia
 	defer restore()
 	state := postAuthSetup(out, asJSON, prof.URL, prof.Auth())
 	recordOrg(profileName, prof.URL, state)
+	// Checked after the sync, which installs or upgrades raptor.
+	warn := raptorPinWarning()
+	if warn != "" {
+		fmt.Fprintln(os.Stderr, "Warning: "+warn)
+	}
 	if asJSON {
 		payload := setupPayload(profileName, displayName, prof.URL, projectRoot, true, state)
 		payload["credentials_path"] = storePath
 		payload["shared_with_raptor"] = true
 		payload["pin_path"] = credentials.PinPathIn(filepath.Dir(projectRoot))
+		if warn != "" {
+			payload["raptor_pin_warning"] = warn
+		}
 		return render.JSON(out, payload)
 	}
 	fmt.Fprintf(out, "\n✓ Logged in as %s and pinned profile %q to %s\n", displayName, profileName, filepath.Dir(projectRoot))

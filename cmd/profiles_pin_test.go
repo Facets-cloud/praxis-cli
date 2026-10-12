@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
+	"github.com/Facets-cloud/praxis-cli/internal/raptorstate"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
 
@@ -354,5 +356,142 @@ func TestPutFor_DefaultKeepsTheOldDefault(t *testing.T) {
 	store, _ := credentials.LoadHome()
 	if store["root"].Token != "old-root" || store["default"].Token != "ta" {
 		t.Errorf("store = %+v, want root kept and default replaced", store)
+	}
+}
+
+// putFakeRaptor puts a raptor script on PATH; only a raptor that supports
+// pins answers `raptor profiles --help` with exit 0. The real probe runs.
+func putFakeRaptor(t *testing.T, supportsPins bool) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake raptor is a shell script")
+	}
+	dir := t.TempDir()
+	body := "#!/bin/sh\nexit 1\n"
+	if supportsPins {
+		body = "#!/bin/sh\n[ \"$1\" = profiles ] && exit 0\nexit 1\n"
+	}
+	path := filepath.Join(dir, "raptor")
+	if err := os.WriteFile(path, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Cleanup(raptorstate.SetPinProbeForTest(raptorstate.ProbePins))
+	return path
+}
+
+// An old raptor ignores pins: pin still writes the pin, warns with the raptor
+// path and the upgrade command, and status reports it.
+func TestProfilesPin_OldRaptorWarnsAndStatusSaysSo(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	clearFacetsEnv(t)
+	isolateRaptorEnv(t)
+	setRootProfile(t, "")
+	resetStatusFlags()
+	seedPAT(t, "default", "https://d.test", "td")
+	seedPAT(t, "acme", "https://acme.test", "ta")
+	repo := repoUnderHome(t, home)
+	inDir(t, repo)
+	old := putFakeRaptor(t, false)
+
+	out, err := runPinCmd(t, "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	warn, _ := decodeMap(t, out)["raptor_pin_warning"].(string)
+	if !strings.Contains(warn, old) || !strings.Contains(warn, "raptor upgrade") {
+		t.Errorf("raptor_pin_warning = %q, want the raptor path and the upgrade command", warn)
+	}
+	if _, err := os.Stat(credentials.PinPathIn(repo)); err != nil {
+		t.Errorf("the praxis part must still happen: %v", err)
+	}
+
+	var buf bytes.Buffer
+	statusCmd.SetOut(&buf)
+	t.Cleanup(func() { statusCmd.SetOut(nil) })
+	if err := statusCmd.RunE(statusCmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := decodeMap(t, buf.String())["raptor"].(map[string]any)
+	if r["pin_support"] != false || r["ignored_pin"] != credentials.PinPathIn(repo) || r["profile"] != "default" {
+		t.Errorf("raptor block = %v, want no pin support, the ignored pin and [default]", r)
+	}
+}
+
+func TestProfilesPin_NewRaptorNoWarning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	clearFacetsEnv(t)
+	setRootProfile(t, "")
+	seedPAT(t, "default", "https://d.test", "td")
+	seedPAT(t, "acme", "https://acme.test", "ta")
+	repo := repoUnderHome(t, home)
+	inDir(t, repo)
+	putFakeRaptor(t, true)
+
+	out, err := runPinCmd(t, "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w, ok := decodeMap(t, out)["raptor_pin_warning"]; ok {
+		t.Errorf("a raptor that follows pins needs no warning, got %v", w)
+	}
+}
+
+// login --local warns the same way after its sync, and still pins.
+func TestLoginLocal_OldRaptorWarns(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	clearFacetsEnv(t)
+	seedPAT(t, "default", "https://d.test", "td")
+	repo := repoUnderHome(t, home)
+	inDir(t, repo)
+	stubPostAuthCapture(t)
+	old := putFakeRaptor(t, false)
+
+	var buf bytes.Buffer
+	if err := persistAndSetup(&buf, true, "acme", credentials.FacetsProfile("https://acme.test", "u@x", "ta"), "u@x", true); err != nil {
+		t.Fatal(err)
+	}
+	got := decodeMap(t, buf.String())
+	if w, _ := got["raptor_pin_warning"].(string); !strings.Contains(w, old) {
+		t.Errorf("raptor_pin_warning = %v, want it to name %s", got["raptor_pin_warning"], old)
+	}
+	if got["pin_path"] != credentials.PinPathIn(repo) {
+		t.Errorf("pin_path = %v; the pin must still be written", got["pin_path"])
+	}
+}
+
+// One person on one deployment is one profile for the guard, whatever its
+// tokens: a rotated token under a second name, or an old Praxis API key beside
+// the PAT, stays silent. SAME AS still lists only exact copies.
+func TestImplicitProfileNote_OneIdentityStaysSilent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		seed func(t *testing.T)
+	}{
+		{"rotated token", func(t *testing.T) {
+			seedPAT(t, "default", "https://root.test", "new")
+			seedPAT(t, "root", "https://root.test", "old")
+		}},
+		{"PAT and an old API key", func(t *testing.T) {
+			seedPAT(t, "default", "https://root.test", "pat")
+			seedProfile(t, "key", "https://ROOT.test", "sk-old")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateHome(t)
+			clearFacetsEnv(t)
+			tc.seed(t)
+			active, _ := credentials.ResolveActive("")
+			if note := implicitProfileNote(active, "claude-code"); note != "" {
+				t.Errorf("one identity: note %q, want none", note)
+			}
+			store, _ := credentials.Load()
+			if same := credentials.SameAs(store, "default"); len(same) != 0 {
+				t.Errorf("SAME AS = %v; a different token is not a copy", same)
+			}
+		})
 	}
 }
