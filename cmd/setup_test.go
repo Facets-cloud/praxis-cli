@@ -528,8 +528,23 @@ func TestSetup_InsideAProject_WritesTheHomeReceipt(t *testing.T) {
 	if err := setupCmd.RunE(setupCmd, nil); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
+	// Compare decoded paths: JSON escapes each Windows separator, so the raw
+	// file never contains the plain path.
 	data, err := os.ReadFile(filepath.Join(home, ".praxis", "installed.json"))
-	if err != nil || !strings.Contains(string(data), filepath.Join(home, ".claude", "skills", "praxis")) {
+	var receipt struct {
+		Skills []struct {
+			Path string `json:"path"`
+		} `json:"skills"`
+	}
+	if err == nil {
+		err = json.Unmarshal(data, &receipt)
+	}
+	userLevel := filepath.Join(home, ".claude", "skills", "praxis")
+	found := false
+	for _, s := range receipt.Skills {
+		found = found || strings.HasPrefix(s.Path, userLevel)
+	}
+	if err != nil || !found {
 		t.Errorf("home receipt = %s, %v; want the user-level praxis skill", data, err)
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".praxis", "installed.json")); !os.IsNotExist(err) {
