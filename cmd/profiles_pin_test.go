@@ -46,6 +46,9 @@ func TestProfilesPinAndUnpin(t *testing.T) {
 	if got := decodeMap(t, out); got["pin_path"] != credentials.PinPathIn(repo) {
 		t.Errorf("pin output = %v", got)
 	}
+	if b, _ := os.ReadFile(filepath.Join(repo, ".praxis", ".gitignore")); string(b) != "*\n" {
+		t.Errorf(".praxis/.gitignore = %q, want everything ignored", b)
+	}
 	if a, _ := credentials.ResolveActive(""); a.Name != "acme" || a.Source != credentials.SourcePin {
 		t.Errorf("after pin = %+v, want acme from the pin", a)
 	}
@@ -188,8 +191,9 @@ func TestOrgSkillsNote(t *testing.T) {
 	if note := orgSkillsNote(root); note != "" {
 		t.Errorf("the installed org: note %q, want none", note)
 	}
-	if note := orgSkillsNote(acme); !strings.Contains(note, `for profile "default"`) || !strings.Contains(note, "profiles pin acme") {
-		t.Errorf("another org: note %q", note)
+	if note := orgSkillsNote(acme); !strings.Contains(note, `for profile "default"`) || !strings.Contains(note, "profiles pin acme") ||
+		!strings.Contains(note, "profiles set-default acme") {
+		t.Errorf("a --profile selection from another org: note %q, want pin or set-default", note)
 	}
 	// A pinned project with no org of its own falls back to the user level.
 	repo := repoUnderHome(t, home)
@@ -272,5 +276,83 @@ func TestProfilesCmd_ShowsSourcePinAndCopies(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "Active here: zed (pin "+credentials.PinPathIn(repo)+")") || !strings.Contains(buf.String(), "SAME AS") {
 		t.Errorf("text listing:\n%s", buf.String())
+	}
+}
+
+// When [default] moved to another org (raptor set-default, a hand edit) the
+// fix is a global refresh, and the note names sections, not "default".
+func TestOrgSkillsNote_DefaultMovedToAnotherOrg(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	clearFacetsEnv(t)
+	seedPAT(t, "root", "https://root.test", "tr")
+	seedPAT(t, "acme", "https://acme.test", "ta")
+	seedPAT(t, "default", "https://acme.test", "ta") // [default] now copies acme
+	inDir(t, home)
+	restore := paths.OverrideActiveRoot(filepath.Join(home, ".praxis"))
+	if err := skillinstall.SetOrg("default", "https://root.test"); err != nil {
+		t.Fatal(err)
+	}
+	restore()
+
+	active, _ := credentials.ResolveActive("")
+	note := orgSkillsNote(active)
+	for _, want := range []string{`for profile "root"`, `not "acme"`, "Run `praxis refresh-skills` to install"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note %q lacks %q", note, want)
+		}
+	}
+	if strings.Contains(note, "profiles pin") || strings.Contains(note, `"default"`) {
+		t.Errorf("note %q must not suggest a pin or name the default section", note)
+	}
+
+	// In a pinned folder the fix is a refresh in that folder.
+	repo := repoUnderHome(t, home)
+	if err := credentials.WritePin(repo, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	inDir(t, repo)
+	pinned, _ := credentials.ResolveActive("")
+	if note := orgSkillsNote(pinned); !strings.Contains(note, "Run `praxis refresh-skills` in "+repo) {
+		t.Errorf("pinned note %q, want a refresh in %s", note, repo)
+	}
+}
+
+// The guard's "replace [default]" answer (pickProfile returns "default", see
+// TestPickProfile_WhenItStepsIn) must not lose the old default: a [default]
+// that no other section holds is kept under its host label first.
+func TestLogin_ReplacingDefault_KeepsTheOldOne(t *testing.T) {
+	isolateHome(t)
+	clearFacetsEnv(t)
+	seedPAT(t, "default", "https://root.test", "old-root")
+	call := stubPostAuthCapture(t)
+
+	var buf bytes.Buffer
+	if err := persistAndSetup(&buf, true, "default", credentials.FacetsProfile("https://new.test", "u@x", "new"), "u@x", false); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := credentials.LoadHome()
+	if store["default"].URL != "https://new.test" || store["default"].Token != "new" {
+		t.Errorf("[default] = %+v, want the new control plane", store["default"])
+	}
+	if store["root"].Token != "old-root" || store["root"].URL != "https://root.test" {
+		t.Errorf("[root] = %+v, want the old default kept with its token", store["root"])
+	}
+	if call.count != 1 {
+		t.Errorf("postAuthSetup ran %d times; the new default re-syncs", call.count)
+	}
+}
+
+// A --local login named "default" on the home store keeps the old default too.
+func TestPutFor_DefaultKeepsTheOldDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	seedPAT(t, "default", "https://root.test", "old-root")
+	if _, err := credentials.PutFor(filepath.Join(home, "repo"), "default", credentials.FacetsProfile("https://acme.test", "u@x", "ta")); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := credentials.LoadHome()
+	if store["root"].Token != "old-root" || store["default"].Token != "ta" {
+		t.Errorf("store = %+v, want root kept and default replaced", store)
 	}
 }

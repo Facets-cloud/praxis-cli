@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -104,15 +106,53 @@ func implicitProfileNote(active credentials.Active, host string) string {
 }
 
 // orgSkillsNote reports a profile from another org than the org skills
-// installed here: the skill text the host reads is not this profile's.
+// installed here: the skill text the host reads is not this profile's. The
+// fix depends on what selected the profile.
 func orgSkillsNote(active credentials.Active) string {
 	org, ok := installedOrg()
 	if !ok || raptorstate.MatchesHost(org.URL, active.Profile.URL) {
 		return ""
 	}
-	return fmt.Sprintf("praxis: the org skills installed here are for profile %q (%s), not %q. "+
-		"To install %q's skills in a folder, run `praxis profiles pin %s` and then `praxis refresh-skills` there.",
-		org.Profile, org.URL, active.Name, active.Name, active.Name)
+	store, _ := credentials.Load()
+	name := sectionName(store, active.Name, active.Profile.URL)
+	var fix string
+	switch active.Source {
+	case credentials.SourceDefault, credentials.SourceSole:
+		fix = "Run `praxis refresh-skills` to install its skills."
+	case credentials.SourcePin:
+		fix = fmt.Sprintf("Run `praxis refresh-skills` in %s to install its skills there.",
+			filepath.Dir(filepath.Dir(active.PinPath)))
+	default:
+		fix = fmt.Sprintf("To install its skills, pin a folder to it (`praxis profiles pin %[1]s`, then "+
+			"`praxis refresh-skills` there), or make it the machine default (`praxis profiles set-default %[1]s`).", name)
+	}
+	return fmt.Sprintf("praxis: the org skills installed here are for profile %q (%s), not %q (%s). %s",
+		sectionName(store, org.Profile, org.URL), org.URL, name, active.Profile.URL, fix)
+}
+
+// sectionName names a profile for a person: [default] on control plane url by
+// the section it copies, else another section on that control plane, else as
+// is.
+func sectionName(store map[string]credentials.Profile, name, url string) string {
+	if name != credentials.DefaultProfileName {
+		return name
+	}
+	for _, n := range credentials.SameAs(store, name) {
+		if raptorstate.MatchesHost(store[n].URL, url) {
+			return n
+		}
+	}
+	names := make([]string, 0, len(store))
+	for n := range store {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if n != name && raptorstate.MatchesHost(store[n].URL, url) {
+			return n
+		}
+	}
+	return name
 }
 
 // installedOrg is the org whose skills an AI host sees here: the active root's,

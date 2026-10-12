@@ -75,6 +75,9 @@ installs only the skill, offline.
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(setupJSON, false, out)
+		// Setup installs user-level skills, so its receipt is the home one,
+		// whatever folder started it.
+		defer pinRootToHome()()
 		repaired, repairWarn := repairPraxisHooks()
 		printHookRepair(out, asJSON, repaired, repairWarn)
 		raptor, raptorErr := prepareRaptor(out, asJSON)
@@ -392,6 +395,11 @@ func startBackgroundSetup(dir string) error {
 	defer log.Close()
 	c := exec.Command(self, "setup", "--json")
 	c.Stdout, c.Stderr = log, log
+	// Not the caller's folder: inside a project tree that would make the
+	// project receipt the active one.
+	if home, herr := paths.Home(); herr == nil {
+		c.Dir = home
+	}
 	detach(c)
 	if err := c.Start(); err != nil {
 		return err

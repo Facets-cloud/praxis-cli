@@ -444,6 +444,11 @@ func refreshWhere(match func(Installation) (bool, error)) (refreshed []Installat
 		if err != nil {
 			return err
 		}
+		if repairForeignEntries(&receipt) {
+			if err := saveReceipt(receipt); err != nil {
+				return err
+			}
+		}
 		var names []string
 		hosts := map[string][]harness.Harness{}
 		for _, e := range receipt.Skills {
@@ -483,6 +488,57 @@ func refreshWhere(match func(Installation) (bool, error)) (refreshed []Installat
 		return errors.Join(errs...)
 	})
 	return
+}
+
+// repairForeignEntries fixes a project receipt that an older praxis damaged by
+// recording a user-level install in it (a background setup that ran inside the
+// project). An embedded-skill entry whose path is outside the project points
+// at the project's own copy when that exists (with no digest, so the next
+// refresh rewrites it), and is dropped otherwise. The home receipt is never
+// changed. Reports whether the receipt changed.
+func repairForeignEntries(r *Receipt) bool {
+	root, err := paths.ActiveRoot()
+	if err != nil {
+		return false
+	}
+	if homeRoot, herr := paths.Dir(); herr != nil || root == homeRoot {
+		return false
+	}
+	base := filepath.Dir(root)
+	home, _ := paths.Home()
+	have := map[string]bool{}
+	for _, e := range r.Skills {
+		if under(base, e.Path) {
+			have[e.SkillName+"\x00"+e.Harness] = true
+		}
+	}
+	changed := false
+	kept := r.Skills[:0]
+	for _, e := range r.Skills {
+		if !IsMetaSkill(e.SkillName) || under(base, e.Path) {
+			kept = append(kept, e)
+			continue
+		}
+		changed = true
+		rel, rerr := filepath.Rel(home, e.Path)
+		if home == "" || rerr != nil || !filepath.IsLocal(rel) || have[e.SkillName+"\x00"+e.Harness] {
+			continue
+		}
+		if _, serr := os.Stat(filepath.Join(base, rel)); serr != nil {
+			continue
+		}
+		e.Path, e.Digest = filepath.Join(base, rel), ""
+		have[e.SkillName+"\x00"+e.Harness] = true
+		kept = append(kept, e)
+	}
+	r.Skills = kept
+	return changed
+}
+
+// under reports whether path is inside dir.
+func under(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && filepath.IsLocal(rel)
 }
 
 // embeddedWrite is the package write for a skill embedded in this binary.

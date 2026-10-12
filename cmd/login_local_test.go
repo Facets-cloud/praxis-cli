@@ -45,6 +45,9 @@ func TestLogin_Local_PinsProjectAndLeavesGlobalAlone(t *testing.T) {
 	if _, err := os.Stat(credentials.FacetsPathIn(repo)); !os.IsNotExist(err) {
 		t.Error("login --local must not copy a token into the tree")
 	}
+	if b, _ := os.ReadFile(filepath.Join(repo, ".praxis", ".gitignore")); string(b) != "*\n" {
+		t.Errorf(".praxis/.gitignore = %q, want everything ignored", b)
+	}
 	if want := filepath.Join(repo, ".praxis"); call.activeRoot != want {
 		t.Errorf("activeRoot during sync = %q, want the project root %q", call.activeRoot, want)
 	}

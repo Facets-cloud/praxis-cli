@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
 func TestEmbeddedSkillNames(t *testing.T) {
@@ -464,5 +465,72 @@ func TestSetOrg_RecordsAndSurvivesInstalls(t *testing.T) {
 	}
 	if org, ok := OrgAt(root); !ok || org.Profile != "acme" || org.URL != "https://acme.test" {
 		t.Errorf("OrgAt = %+v, %v; want acme kept across an install", org, ok)
+	}
+}
+
+// An older praxis could record a user-level install in a project receipt.
+// A refresh through that receipt must never rewrite the user-level copy: the
+// entry moves to the project copy when it exists, else it is dropped.
+func TestRefreshIfStale_RepairsForeignEntriesInAProjectReceipt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	global := harness.Harness{Name: "claude-code", SkillDir: filepath.Join(home, ".claude", "skills")}
+	codex := harness.Harness{Name: "codex", SkillDir: filepath.Join(home, ".agents", "skills")}
+	if _, err := Install("praxis", []harness.Harness{global, codex}); err != nil {
+		t.Fatal(err)
+	}
+	globalSkill := filepath.Join(global.SkillDir, "praxis", "SKILL.md")
+	if err := os.WriteFile(globalSkill, []byte("user edit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	homeReceipt, _ := os.ReadFile(filepath.Join(home, ".praxis", "installed.json"))
+
+	repo := filepath.Join(home, "repo")
+	root := filepath.Join(repo, ".praxis")
+	restore := paths.OverrideActiveRoot(root)
+	t.Cleanup(restore)
+	// The project has its own Claude Code copy, but no Codex copy.
+	if _, err := Install("praxis", []harness.Harness{global.ProjectScoped(repo)}); err != nil {
+		t.Fatal(err)
+	}
+	// Damage: the project receipt now names the user-level copies.
+	if err := os.WriteFile(filepath.Join(root, "installed.json"), homeReceipt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	projectSkill := filepath.Join(repo, ".claude", "skills", "praxis", "SKILL.md")
+	if err := os.WriteFile(projectSkill, []byte("stale project copy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RefreshIfStale(); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(globalSkill); string(b) != "user edit" {
+		t.Errorf("the user-level copy was rewritten through a project receipt: %q", b)
+	}
+	if b, _ := os.ReadFile(projectSkill); string(b) == "stale project copy" {
+		t.Error("the project copy should have been refreshed")
+	}
+	recs, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range recs {
+		if !strings.HasPrefix(e.Path, repo) {
+			t.Errorf("project receipt still names %s", e.Path)
+		}
+	}
+	if len(recs) != 1 || recs[0].Harness != "claude-code" {
+		t.Errorf("project receipt = %+v, want only the project's Claude Code copy", recs)
+	}
+	if _, err := os.Stat(filepath.Join(root, "backups")); err == nil {
+		if entries, _ := os.ReadDir(filepath.Join(root, "backups")); len(entries) > 0 {
+			for _, b := range entries {
+				data, _ := os.ReadFile(filepath.Join(root, "backups", b.Name(), "provenance.json"))
+				if strings.Contains(string(data), global.SkillDir) {
+					t.Errorf("a project backup names the user-level folder: %s", data)
+				}
+			}
+		}
 	}
 }

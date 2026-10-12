@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
@@ -503,5 +504,67 @@ func TestRefreshProjectSkills(t *testing.T) {
 	_, l := loadProjects()
 	if strings.Join(l.Projects, ",") != repo {
 		t.Errorf("registry = %v, want only the live tree, once", l.Projects)
+	}
+}
+
+// Setup installs user-level skills, so run inside a project tree it still
+// writes the home receipt and leaves the project receipt alone.
+func TestSetup_InsideAProject_WritesTheHomeReceipt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	clearFacetsEnv(t)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	seedPAT(t, "default", "https://d.test", "td")
+	repo := repoUnderHome(t, home)
+	if err := credentials.WritePin(repo, "default"); err != nil {
+		t.Fatal(err)
+	}
+	inDir(t, repo)
+	setupCmd.SetOut(io.Discard)
+	t.Cleanup(func() { setupCmd.SetOut(nil) })
+
+	if err := setupCmd.RunE(setupCmd, nil); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".praxis", "installed.json"))
+	if err != nil || !strings.Contains(string(data), filepath.Join(home, ".claude", "skills", "praxis")) {
+		t.Errorf("home receipt = %s, %v; want the user-level praxis skill", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".praxis", "installed.json")); !os.IsNotExist(err) {
+		t.Errorf("project receipt written by setup: %v", err)
+	}
+}
+
+// The background setup starts in the home folder, not the caller's.
+func TestStartBackgroundSetup_RunsInHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as the praxis binary")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".praxis")
+	script := filepath.Join(t.TempDir(), "praxis")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\npwd\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	orig := setupExecutable
+	t.Cleanup(func() { setupExecutable = orig })
+	setupExecutable = func() (string, error) { return script, nil }
+	if err := startBackgroundSetup(dir); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(home)
+	var got string
+	for i := 0; i < 50; i++ {
+		b, _ := os.ReadFile(filepath.Join(dir, "setup.log"))
+		if got = strings.TrimSpace(string(b)); got != "" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if resolved, _ := filepath.EvalSymlinks(got); resolved != want {
+		t.Errorf("background setup ran in %q, want home %q", got, want)
 	}
 }

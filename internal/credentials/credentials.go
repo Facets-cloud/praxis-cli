@@ -366,6 +366,18 @@ func SetDefault(name string) (kept string, err error) {
 	return setDefaultFrom(store, p)
 }
 
+// PutDefault writes p as the home [default]. A [default] that no other section
+// duplicates is kept first under a name from its host (see setDefaultFrom);
+// the returned string names it. Every write that replaces [default] goes
+// through here or SetDefault, so no login loses a profile.
+func PutDefault(p Profile) (kept string, err error) {
+	home, err := loadHome()
+	if err != nil {
+		return "", err
+	}
+	return setDefaultFrom(home, p)
+}
+
 // setDefaultFrom copies p over the home [default] in `home` (a loadHome
 // result). A [default] that no other section duplicates is kept first under
 // a name derived from its host — unless it is the same identity as p (same
@@ -497,6 +509,10 @@ func PutFor(dir, name string, p Profile) (string, error) {
 		return "", err
 	}
 	path := facetsPathFrom(dir)
+	if path == home && name == DefaultProfileName {
+		_, err := PutDefault(p)
+		return path, err
+	}
 	if path == home {
 		return path, Put(name, p)
 	}

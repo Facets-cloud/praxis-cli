@@ -171,7 +171,7 @@ func ActiveRoot() (string, error) {
 // whatever this creates is discoverable afterwards.
 func EnsureProjectRoot() (string, error) {
 	if root, ok, _ := ProjectRoot(); ok {
-		return root, os.MkdirAll(root, 0o700)
+		return InitProjectRoot(filepath.Dir(root))
 	}
 	home, err := Home()
 	if err != nil {
@@ -188,9 +188,22 @@ func EnsureProjectRoot() (string, error) {
 	if cwd == home {
 		return "", fmt.Errorf("local mode requires a directory under your home directory (%s), not the home directory itself", home)
 	}
-	root := filepath.Join(cwd, dirName)
+	return InitProjectRoot(cwd)
+}
+
+// InitProjectRoot creates <dir>/.praxis with a .gitignore that ignores it all:
+// the receipt, backups and MCP snapshot never belong in git. An existing
+// .gitignore is left alone. Returns the root.
+func InitProjectRoot(dir string) (string, error) {
+	root := filepath.Join(dir, dirName)
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", err
+	}
+	gi := filepath.Join(root, ".gitignore")
+	if _, err := os.Stat(gi); os.IsNotExist(err) {
+		if err := os.WriteFile(gi, []byte("*\n"), 0o644); err != nil {
+			return "", err
+		}
 	}
 	return root, nil
 }

@@ -173,3 +173,22 @@ func TestFindPin_IgnoresHomeInEitherSpelling(t *testing.T) {
 		t.Errorf("FindPin found %q through the resolved home", name)
 	}
 }
+
+// PutDefault keeps an unduplicated [default] for another identity, but a
+// re-login of the same identity with a new token replaces it in place.
+func TestPutDefault_KeepsOnlyAnotherIdentity(t *testing.T) {
+	withHome(t)
+	if err := Put("default", FacetsProfile("https://root.test", "u@x", "t1")); err != nil {
+		t.Fatal(err)
+	}
+	if kept, err := PutDefault(FacetsProfile("https://root.test", "u@x", "t2")); err != nil || kept != "" {
+		t.Errorf("rotated token: kept %q, %v; want nothing kept", kept, err)
+	}
+	kept, err := PutDefault(FacetsProfile("https://acme.test", "u@x", "ta"))
+	if err != nil || kept != "root" {
+		t.Fatalf("another control plane: kept %q, %v; want root", kept, err)
+	}
+	if h := loadFacets(homeFacets(t)); h["root"].Token != "t2" || h["default"].Token != "ta" {
+		t.Errorf("home store = %+v", h)
+	}
+}

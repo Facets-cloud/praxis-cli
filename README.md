@@ -262,7 +262,9 @@ Things to know:
 - An older praxis wrote `<repo>/.facets/credentials` (a token copy) for local
   mode. Both CLIs still read such a tree file, and a `--local` login there
   writes to it.
-- Add `/.praxis/` to the repo's `.gitignore`.
+- `.facets/` and `.praxis/` each get a `.gitignore` that ignores the folder, so
+  the pin, the receipt, backups and the MCP snapshot stay out of git.
+  `.claude/` is not changed.
 
 ## Files
 

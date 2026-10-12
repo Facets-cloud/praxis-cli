@@ -213,6 +213,15 @@ Invariants to preserve when touching this area:
   `~/.praxis/projects.json` (`recordProject`); `praxis setup` refreshes the
   embedded praxis skill in each recorded tree and drops trees whose receipt is
   gone (`refreshProjectSkills`).
+- **`praxis setup` is user-level.** It pins `ActiveRoot` to home, and the
+  background setup starts with its working directory at home: run from inside
+  a project, it once wrote user-level paths into the project receipt. A refresh
+  through a project receipt repairs such entries first
+  (`skillinstall.repairForeignEntries`): an embedded-skill entry outside the
+  project moves to the project copy, or is dropped.
+- **Every write that replaces `[default]` keeps a unique old one**
+  (`credentials.PutDefault` / `SetDefault`, the keepName rule): the bare-login
+  replace and a `--local` login named "default" included.
 - **`--profile` is ONE flag on `rootCmd`**, persistent, shorthand `-p`,
   bound to `cmd.rootProfile` (root.go). Never define a local `--profile` on
   a subcommand: cobra lets the local flag shadow the inherited one, so

@@ -61,6 +61,10 @@ with ` + "`praxis login --profile <name> --local`" + `, which does both.`,
 		if err == nil {
 			err = credentials.WritePin(dir, name)
 		}
+		if err == nil {
+			// A pinned folder is a project root; keep its state out of git.
+			_, err = paths.InitProjectRoot(dir)
+		}
 		if err != nil {
 			render.PrintError(out, asJSON, err.Error(),
 				"run `praxis profiles` to see what exists; a pin needs a control-plane PAT profile", exitcode.Usage)

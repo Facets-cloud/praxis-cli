@@ -718,18 +718,28 @@ func persistLocal(out io.Writer, asJSON bool, profileName string, prof credentia
 }
 
 // saveGlobal writes a global login to the home store and reports whether the
-// profile is the one a bare command uses (see followsDefault). When [default]
-// is a copy of the profile, the copy is kept current.
+// profile is the one a bare command uses (see followsDefault). A new [default]
+// keeps a [default] no other section holds (credentials.PutDefault). When
+// [default] is a copy of the profile, the copy is kept current.
 func saveGlobal(profileName string, prof credentials.Profile) (bool, error) {
 	before, err := credentials.LoadHome()
 	if err != nil {
 		return false, err
 	}
+	if profileName == credentials.DefaultProfileName {
+		kept, err := credentials.PutDefault(prof)
+		if err != nil {
+			return false, err
+		}
+		if kept != "" {
+			fmt.Fprintf(os.Stderr, "Kept the previous default profile as [%s].\n", kept)
+		}
+		return true, nil
+	}
 	if err := credentials.Put(profileName, prof); err != nil {
 		return false, err
 	}
-	if profileName != credentials.DefaultProfileName &&
-		slices.Contains(credentials.SameAs(before, profileName), credentials.DefaultProfileName) {
+	if slices.Contains(credentials.SameAs(before, profileName), credentials.DefaultProfileName) {
 		if err := credentials.Put(credentials.DefaultProfileName, prof); err != nil {
 			return false, err
 		}
