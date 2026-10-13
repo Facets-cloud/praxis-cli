@@ -3,6 +3,7 @@ package credentials
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -196,7 +197,7 @@ func TestDeleteAll_AlsoClearsActivePointer(t *testing.T) {
 	}
 
 	// Both files should be gone.
-	home, _ := os.UserHomeDir()
+	home, _ := paths.Home()
 	if _, err := os.Stat(filepath.Join(home, ".praxis", "credentials")); !os.IsNotExist(err) {
 		t.Errorf("credentials file still exists after DeleteAll")
 	}
@@ -230,9 +231,12 @@ func TestList_DefaultFirstThenAlphabetical(t *testing.T) {
 }
 
 func TestSave_FilePerm0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix file modes")
+	}
 	withHome(t)
 	_ = Put("default", Profile{URL: "x", Token: "t"})
-	home, _ := os.UserHomeDir()
+	home, _ := paths.Home()
 	info, err := os.Stat(filepath.Join(home, ".praxis", "credentials"))
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +249,7 @@ func TestSave_FilePerm0600(t *testing.T) {
 func TestINI_FormatMatchesFacetsConvention(t *testing.T) {
 	withHome(t)
 	_ = Put("default", Profile{URL: "https://default.test", Username: "a@x", Token: "t"})
-	home, _ := os.UserHomeDir()
+	home, _ := paths.Home()
 	body, _ := os.ReadFile(filepath.Join(home, ".praxis", "credentials"))
 	for _, want := range []string{"[default]", "url      = https://default.test", "username = a@x", "token    = t"} {
 		if !strings.Contains(string(body), want) {
@@ -447,43 +451,6 @@ func TestSetDefault_CopiesSectionSoBothCLIsMove(t *testing.T) {
 	}
 	if _, err := SetDefault("ghost"); err == nil {
 		t.Error("SetDefault(ghost) should fail")
-	}
-}
-
-func TestSetDefaultLocal_WritesTreeFileWithDefaultCopy(t *testing.T) {
-	home := withHome(t)
-	seedFacets(t, homeFacets(t), twoRaptorSections)
-	if err := Put("key", Profile{URL: "https://key.test", Username: "k", Token: "sk"}); err != nil {
-		t.Fatal(err)
-	}
-	repo := filepath.Join(home, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := SetDefaultLocal("acme", repo); err != nil {
-		t.Fatal(err)
-	}
-	local := loadFacets(FacetsPathIn(repo))
-	if local["acme"].Token != "pat-acme" || local["default"].Token != "pat-acme" || len(local) != 2 {
-		t.Errorf("tree file = %v, want acme and a default copy", local)
-	}
-	// Home file untouched.
-	if h := loadFacets(homeFacets(t)); h["default"].Token != "pat-root" {
-		t.Errorf("home [default] changed: %+v", h["default"])
-	}
-	// Inside the tree both CLIs' store is the tree file, and default resolves.
-	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
-	a, _ := ResolveActive("")
-	if a.Name != "default" || a.Profile.URL != "https://acme.test" {
-		t.Errorf("in-tree ResolveActive = %+v", a)
-	}
-	if names := sortedKeys(mustLoad(t)); strings.Join(names, ",") != "default,acme,key" {
-		t.Errorf("in-tree Load() = %v; the tree file shadows home, API keys stay visible", names)
-	}
-
-	if err := SetDefaultLocal("key", repo); err == nil {
-		t.Error("an API key cannot be pinned to a tree; want error")
 	}
 }
 

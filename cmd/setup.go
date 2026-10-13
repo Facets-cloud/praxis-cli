@@ -1,14 +1,20 @@
 package cmd
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/claudehooks"
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
@@ -16,23 +22,29 @@ import (
 )
 
 // `praxis setup` also re-points hooks an older praxis wired from a path that an
-// upgrade has since deleted — see repairPraxisHooks.
+// upgrade has since deleted — see repairPraxisHooks — and installs a missing
+// raptor. First-run stays offline and does not.
 //
-// `praxis setup` and the first-run auto-install land the pre-login GTM skill
-// (praxis-getting-started) into the user's AI host the moment praxis is
-// installed — WITHOUT a login. This solves the bootstrap chicken-and-egg: skills
-// otherwise only appear after `praxis login`, so a freshly-installed praxis is
-// invisible to the host and nothing tells it to log in. The skill is embedded
-// (no network, no credentials), so this works offline and pre-auth.
+// `praxis setup` and the first-run auto-install land the embedded praxis skill
+// into the user's AI host the moment praxis is installed — WITHOUT a login, and
+// retire the embedded skills it replaced. This solves the bootstrap
+// chicken-and-egg: skills otherwise only appear after `praxis login`, so a
+// freshly-installed praxis is invisible to the host and nothing tells it to log
+// in. The skill is embedded (no network, no credentials), so this works offline
+// and pre-auth.
 //
-// `setup` is hidden: it is the primitive the Homebrew post-install hook and
-// first-run call. The user-facing GTM surface is the installed skill itself; the
+// praxis starts setup in the background once per version (maybeStartSetup):
+// after an install, a brew upgrade or `praxis update`. The Homebrew cask cannot
+// run it, because Homebrew runs cask install steps in a sandbox without the
+// home folder.
+//
+// `setup` is hidden: it is the primitive that praxis itself and first-run call. The user-facing GTM surface is the installed skill itself; the
 // documented command surface stays unchanged. (`init`, the obvious name, was
 // removed in the major-version cleanup and must not return — see root_test.go.)
 
 // bootstrapMarker is bumped when the bootstrap skill content changes enough to
 // warrant a one-time re-install on machines that already ran first-run.
-const bootstrapMarker = ".bootstrap-v1"
+const bootstrapMarker = ".bootstrap-v2"
 
 var setupJSON bool
 
@@ -43,37 +55,71 @@ func init() {
 
 var setupCmd = &cobra.Command{
 	Use:    "setup",
-	Short:  "Install the Praxis getting-started skill into your AI host (no login needed)",
-	Hidden: true, // invoked by the brew post-install hook + first-run, not by hand
-	Long: `Install the pre-login "getting started" skill into every detected AI host
-(Claude Code, Codex, Gemini CLI) so your assistant knows what Praxis by
-Facets does, where to sign up, and how to log in — before you authenticate.
+	Short:  "Install the Praxis skill into your AI host (no login needed)",
+	Hidden: true, // praxis starts it once per version, not by hand
+	Long: `Install the praxis skill into every detected AI host (Claude Code, Codex,
+Gemini CLI) so your assistant knows what Praxis by Facets does, where to sign
+up, and how to log in — before you authenticate. The embedded skills it
+replaced (praxis-getting-started, praxis-memory, praxis-onboarding, use-ig) are
+removed; changed copies are backed up under ~/.praxis/backups.
 
 It also re-points any hook an older praxis wired from a path that an upgrade
-has since deleted. No hook is added, and no credentials or network are
-required. This runs automatically on first use and via the Homebrew
-post-install hook.
+has since deleted. It installs the Raptor CLI to ~/.local/bin when it is
+missing and upgrades it otherwise, then has raptor refresh its own skill. No
+hook is added and no credentials are required. praxis runs this in the
+background once per version, after an install or an upgrade; first use
+installs only the skill, offline.
 
   Next: praxis login --url https://<your-account-id>.console.facets.cloud`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		asJSON := render.UseJSON(setupJSON, false, out)
+		// Setup installs user-level skills, so its receipt is the home one,
+		// whatever folder started it.
+		defer pinRootToHome()()
 		repaired, repairWarn := repairPraxisHooks()
 		printHookRepair(out, asJSON, repaired, repairWarn)
+		raptor, raptorErr := prepareRaptor(out, asJSON)
+		// Setup runs after every praxis upgrade, so an existing raptor is
+		// upgraded here too. A raptor installed just now is current.
+		var upgrade *raptorUpgradeResult
+		if raptor.Path != "" && !raptor.Installed {
+			up, upErr := updateRaptor(out, asJSON, true)
+			upgrade = &up
+			raptorErr = errors.Join(raptorErr, upErr)
+		}
 		n, err := installBootstrapSkills(out, asJSON)
 		if err != nil {
 			return err
 		}
+		refreshProjectSkills()
+		var raptorSkills []skillInstallationLite
+		if raptor.Path != "" {
+			var skillErr error
+			raptorSkills, skillErr = refreshRaptorSkills(out, asJSON)
+			raptorErr = errors.Join(raptorErr, skillErr)
+		}
+		// With praxis and raptor's skills in place, drop the GLOBAL skills
+		// they replace (best-effort, like the per-command check).
+		_, _ = retireReplacedGlobals(replacementAt)
 		if n > 0 {
 			markBootstrapDone() // mark ONLY after a real install; a no-host run
 			// stays retryable so first-run installs once a host appears.
 		}
+		markSetupVersion()
 		if asJSON {
-			return render.JSON(out, map[string]any{"installed": n})
+			payload := map[string]any{"installed": n, "raptor_binary": raptor, "raptor_skills": raptorSkills}
+			if upgrade != nil {
+				payload["raptor_upgrade"] = upgrade
+			}
+			if raptorErr != nil {
+				payload["raptor_warning"] = raptorErr.Error()
+			}
+			return render.JSON(out, payload)
 		}
 		if n > 0 {
-			fmt.Fprintf(out, "Installed the getting-started skill into %d host target(s).\n", n)
+			fmt.Fprintf(out, "Installed the praxis skill into %d host target(s).\n", n)
 			fmt.Fprintln(out, "Next: praxis login --url https://<your-account-id>.console.facets.cloud")
 		}
 		return nil
@@ -105,12 +151,16 @@ func installBootstrapSkills(out io.Writer, asJSON bool) (int, error) {
 			}
 		}
 	}
-	return n, nil
+	retired, err := retireLegacySkills(hosts)
+	if !asJSON && len(retired) > 0 {
+		fmt.Fprintf(out, "Removed %d replaced skill install(s).\n", len(retired))
+	}
+	return n, err
 }
 
 // repairPraxisHooks re-points already-wired hooks at the stable binary path. An
 // upgrade deletes the version-stamped directory an older praxis wired from, so
-// the cask post-install hook (which runs `praxis setup`) heals those hooks
+// `praxis setup`, which praxis runs once per version, heals those hooks
 // without a login. Two limits keep it from touching hooks it should not: it
 // adds no hook, so a user who never logged in stays untouched; and it needs a
 // PATH entry that IS the running binary, so a throwaway build (a repo `./praxis
@@ -121,7 +171,7 @@ func repairPraxisHooks() (repaired []string, warning string) {
 	if !ok {
 		return nil, ""
 	}
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return nil, ""
 	}
@@ -244,4 +294,185 @@ func maybeFirstRunBootstrap(args []string) {
 	firstRunBootstrap(args, mp, func() (int, error) {
 		return installBootstrapSkills(io.Discard, true)
 	})
+}
+
+// maybeRefreshEmbeddedSkills rewrites the installed praxis skill when this
+// binary's copy differs from it (skillinstall.RefreshIfStale). Best-effort and
+// silent: a failure never affects the command it precedes. Skipped for
+// development builds, which would otherwise install unreleased text, and for
+// commands that install skills themselves or must stay minimal.
+func maybeRefreshEmbeddedSkills(args []string) {
+	if isDevBuild(version) {
+		return
+	}
+	switch firstPositional(args) {
+	case "completion", "__complete", "git-credential", "hook", "setup", "update", "upgrade",
+		"login", "logout", "refresh-skills", "profiles", "version":
+		return
+	}
+	_, _ = refreshIfStale()
+	_, _ = retireReplacedGlobals(replacementAt)
+}
+
+// setupVersionFile holds the praxis version whose setup last succeeded. The
+// claim file lets one process start setup; a failed setup leaves it, so the
+// next start waits setupRetryAfter.
+const (
+	setupVersionFile = "setup-version"
+	setupClaimFile   = "setup.claim"
+	setupRetryAfter  = time.Hour
+)
+
+var (
+	startSetup      = startBackgroundSetup
+	setupExecutable = os.Executable
+)
+
+// maybeStartSetup starts `praxis setup` in the background when this version has
+// not run it yet: after an install, a brew upgrade or `praxis update`. The
+// command does not wait for it. Skipped for development builds, CI, and
+// commands that must stay minimal or that upgrade raptor themselves.
+func maybeStartSetup(args []string) {
+	if isDevBuild(version) || httpclient.CIName() != "" {
+		return
+	}
+	switch firstPositional(args) {
+	case "completion", "__complete", "git-credential", "hook", "ig", "setup", "update", "upgrade",
+		"login", "logout", "refresh-skills", "profiles", "version":
+		return
+	}
+	dir, err := paths.Dir()
+	if err != nil {
+		return
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, setupVersionFile)); err == nil && strings.TrimSpace(string(b)) == version {
+		return
+	}
+	claim := filepath.Join(dir, setupClaimFile)
+	if !claimSetup(claim, time.Now()) {
+		return
+	}
+	if startSetup(dir) != nil {
+		_ = os.Remove(claim)
+	}
+}
+
+// claimSetup creates the claim file exclusively, so parallel commands start
+// setup once. A claim older than setupRetryAfter is taken over.
+func claimSetup(path string, now time.Time) bool {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false
+	}
+	for range 2 {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			_ = f.Close()
+			return true
+		}
+		info, err := os.Stat(path)
+		if err != nil || now.Sub(info.ModTime()) < setupRetryAfter {
+			return false
+		}
+		_ = os.Remove(path)
+	}
+	return false
+}
+
+// startBackgroundSetup runs `praxis setup --json` in its own session, with its
+// output in ~/.praxis/setup.log.
+func startBackgroundSetup(dir string) error {
+	self, err := setupExecutable()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	log, err := os.Create(filepath.Join(dir, "setup.log"))
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	c := exec.Command(self, "setup", "--json")
+	c.Stdout, c.Stderr = log, log
+	// Not the caller's folder: inside a project tree that would make the
+	// project receipt the active one.
+	if home, herr := paths.Home(); herr == nil {
+		c.Dir = home
+	}
+	detach(c)
+	if err := c.Start(); err != nil {
+		return err
+	}
+	return c.Process.Release()
+}
+
+// markSetupVersion records that this version's setup succeeded and releases
+// the claim (best-effort).
+func markSetupVersion() {
+	if dir, err := paths.Dir(); err == nil {
+		_ = os.MkdirAll(dir, 0o755)
+		_ = os.WriteFile(filepath.Join(dir, setupVersionFile), []byte(version+"\n"), 0o644)
+		_ = os.Remove(filepath.Join(dir, setupClaimFile))
+	}
+}
+
+// projectList is the registry of project trees with a project-scoped install
+// (~/.praxis/projects.json).
+type projectList struct {
+	Projects []string `json:"projects"`
+}
+
+func loadProjects() (string, projectList) {
+	var l projectList
+	path, err := paths.Projects()
+	if err != nil {
+		return "", l
+	}
+	if data, rerr := os.ReadFile(path); rerr == nil {
+		_ = json.Unmarshal(data, &l)
+	}
+	return path, l
+}
+
+func saveProjects(path string, l projectList) {
+	if data, err := json.MarshalIndent(l, "", "  "); err == nil {
+		_ = os.MkdirAll(filepath.Dir(path), 0o700)
+		_ = os.WriteFile(path, data, 0o600)
+	}
+}
+
+// recordProject adds dir (a folder holding .praxis) to the registry, so a
+// later upgrade refreshes the praxis skill installed there. Best-effort.
+func recordProject(dir string) {
+	path, l := loadProjects()
+	if path == "" || slices.Contains(l.Projects, dir) {
+		return
+	}
+	l.Projects = append(l.Projects, dir)
+	saveProjects(path, l)
+}
+
+// refreshProjectSkills brings the praxis skill in every recorded project tree
+// to this binary's text — the same refresh a command run inside that tree
+// does — and drops trees whose receipt is gone. Best-effort.
+func refreshProjectSkills() {
+	path, l := loadProjects()
+	if path == "" || len(l.Projects) == 0 {
+		return
+	}
+	keep := l.Projects[:0:0]
+	for _, dir := range l.Projects {
+		root := filepath.Join(dir, ".praxis")
+		if _, err := os.Stat(filepath.Join(root, "installed.json")); err != nil {
+			continue
+		}
+		keep = append(keep, dir)
+		restore := paths.OverrideActiveRoot(root)
+		_, _ = skillinstall.RefreshIfStale()
+		restore()
+	}
+	if len(keep) != len(l.Projects) {
+		saveProjects(path, projectList{Projects: keep})
+	}
 }

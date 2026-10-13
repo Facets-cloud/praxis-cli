@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"os"
 	"strings"
 	"testing"
@@ -32,11 +34,12 @@ func fakeHome(t *testing.T) string {
 }
 
 // writeCache seeds praxis's throttle entry with the given age and latest version.
+// writeCache seeds the praxis entry as a check by this binary would write it:
+// stamped with the current census key, so only its age decides freshness.
 func writeCache(t *testing.T, age time.Duration, latest string) {
 	t.Helper()
-	if err := saveFreshnessCache(freshnessCache{
-		"praxis": {CheckedAt: time.Now().Add(-age), LatestVersion: latest},
-	}); err != nil {
+	entry := toolCacheEntry{}.checked(censusKeyFor("praxis"), time.Now().Add(-age), latest)
+	if err := saveFreshnessCache(freshnessCache{"praxis": entry}); err != nil {
 		t.Fatalf("saveFreshnessCache: %v", err)
 	}
 }
@@ -519,6 +522,7 @@ func TestSkipUpdateCheck(t *testing.T) {
 		{[]string{"--version"}, true},
 		{[]string{"-v"}, true},
 		{[]string{"completion", "zsh"}, true},
+		{[]string{"setup", "--json"}, true},
 		// A positional value named like a command must NOT suppress the check.
 		{[]string{"login", "--profile", "update"}, false},
 		{[]string{"status", "version"}, false},
@@ -569,5 +573,225 @@ func TestRuneWidth(t *testing.T) {
 		if got := runeWidth(tt.r); got != tt.want {
 			t.Errorf("runeWidth(%q) = %d, want %d", tt.r, got, tt.want)
 		}
+	}
+}
+
+// The quiet path takes the daily slot before it fetches, so an agent that
+// exits mid-fetch does not retry on every command. A fresh slot fetches nothing.
+func TestQuietDailyCheckClaimsTheSlotOnce(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+	origV, origF := version, fetchLatestRelease
+	t.Cleanup(func() { version, fetchLatestRelease = origV, origF })
+	version = "1.0.0"
+	calls := 0
+	var seenDuringFetch toolCacheEntry
+	fetchLatestRelease = func() (*selfupdate.Release, error) {
+		calls++
+		c, _ := readFreshnessCache()
+		seenDuringFetch = c["praxis"]
+		return &selfupdate.Release{TagName: "v1.2.0"}, nil
+	}
+	now := time.Now()
+	quietDailyCheck(now)
+	if calls != 1 || seenDuringFetch.CheckedAt.IsZero() {
+		t.Fatalf("calls=%d, slot during fetch=%+v; want one fetch after the claim", calls, seenDuringFetch)
+	}
+	if c, _ := readFreshnessCache(); c["praxis"].LatestVersion != "v1.2.0" {
+		t.Errorf("cache = %+v, want the fetched tag", c["praxis"])
+	}
+	quietDailyCheck(now.Add(time.Hour))
+	if calls != 1 {
+		t.Errorf("calls=%d after a fresh slot, want no second fetch", calls)
+	}
+	// Only praxis is claimed: raptor's entry is not touched.
+	if c, _ := readFreshnessCache(); len(c) != 1 {
+		t.Errorf("cache = %+v, want only the praxis entry", c)
+	}
+}
+
+// A change of praxis version, CP or user makes the praxis entry stale at once,
+// so the census sees an upgrade the same day, and a CI step with credentials is
+// counted after a first step without. No change sends nothing.
+func TestQuietDailyCheckFollowsTheCensusKey(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+	t.Setenv("CONTROL_PLANE_URL", "")
+	t.Setenv("FACETS_USERNAME", "")
+	t.Setenv("FACETS_TOKEN", "")
+	clifeed.SetProfileFlag("")
+	origV, origF := version, fetchLatestRelease
+	t.Cleanup(func() { version, fetchLatestRelease = origV, origF })
+	version = "1.0.0"
+	calls := 0
+	fetchLatestRelease = func() (*selfupdate.Release, error) {
+		calls++
+		return &selfupdate.Release{TagName: "v1.2.0"}, nil
+	}
+	now := time.Now()
+
+	quietDailyCheck(now)
+	quietDailyCheck(now.Add(time.Minute))
+	if calls != 1 {
+		t.Fatalf("calls=%d with nothing changed, want 1", calls)
+	}
+
+	t.Setenv("CONTROL_PLANE_URL", "https://acme.console.facets.cloud")
+	t.Setenv("FACETS_USERNAME", "ci@acme.io")
+	t.Setenv("FACETS_TOKEN", "x")
+	quietDailyCheck(now.Add(2 * time.Minute))
+	quietDailyCheck(now.Add(3 * time.Minute))
+	if calls != 2 {
+		t.Fatalf("calls=%d after the CP appeared, want 2", calls)
+	}
+	if c, _ := readFreshnessCache(); c["praxis"].CPURL != "https://acme.console.facets.cloud" || c["praxis"].User != "ci@acme.io" {
+		t.Errorf("cache = %+v, want the CP and user stamped", c["praxis"])
+	}
+
+	version = "1.1.0"
+	quietDailyCheck(now.Add(4 * time.Minute))
+	if calls != 3 {
+		t.Fatalf("calls=%d after an upgrade, want 3", calls)
+	}
+
+	// A skill change (here a failed raptor skill install) sends the next check.
+	clifeed.RecordRaptorSkillError(errors.New("raptor install skill failed"))
+	quietDailyCheck(now.Add(5 * time.Minute))
+	quietDailyCheck(now.Add(6 * time.Minute))
+	if calls != 4 {
+		t.Fatalf("calls=%d after a skill change, want 4", calls)
+	}
+}
+
+// Sessions that alternate between two control planes send one check per CP a
+// day, not one on every change of CP; a day later each key is sent again.
+func TestQuietDailyCheckSendsEachKeyOnceADay(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+	t.Setenv("FACETS_USERNAME", "u@x")
+	t.Setenv("FACETS_TOKEN", "x")
+	clifeed.SetProfileFlag("")
+	origV, origF := version, fetchLatestRelease
+	t.Cleanup(func() { version, fetchLatestRelease = origV, origF })
+	version = "1.0.0"
+	calls := 0
+	fetchLatestRelease = func() (*selfupdate.Release, error) {
+		calls++
+		return &selfupdate.Release{TagName: "v1.2.0"}, nil
+	}
+	now := time.Now()
+	for i := 0; i < 20; i++ {
+		cp := "https://a.test"
+		if i%2 == 1 {
+			cp = "https://b.test"
+		}
+		t.Setenv("CONTROL_PLANE_URL", cp)
+		quietDailyCheck(now.Add(time.Duration(i) * time.Minute))
+	}
+	if calls != 2 {
+		t.Fatalf("calls=%d over 20 alternating runs, want one per CP", calls)
+	}
+	t.Setenv("CONTROL_PLANE_URL", "https://a.test")
+	quietDailyCheck(now.Add(25 * time.Hour))
+	t.Setenv("CONTROL_PLANE_URL", "https://b.test")
+	quietDailyCheck(now.Add(25*time.Hour + time.Minute))
+	if calls != 4 {
+		t.Fatalf("calls=%d a day later, want each CP sent again", calls)
+	}
+	// Keys older than a day are dropped from the cache.
+	quietDailyCheck(now.Add(50 * time.Hour))
+	if c, _ := readFreshnessCache(); len(c["praxis"].Sent) != 1 {
+		t.Errorf("sent keys = %v, want only the latest", c["praxis"].Sent)
+	}
+}
+
+// An entry written before Sent existed still counts for its own key.
+func TestFreshEntryWithoutSent(t *testing.T) {
+	now := time.Now()
+	k := toolCacheEntry{Version: "1.0.0", CPURL: "https://a.test"}
+	old := toolCacheEntry{CheckedAt: now.Add(-time.Hour), Version: "1.0.0", CPURL: "https://a.test"}
+	if !old.fresh(k, now) {
+		t.Error("an old-format entry for the same key must be fresh")
+	}
+	if old.fresh(toolCacheEntry{Version: "1.0.0", CPURL: "https://b.test"}, now) {
+		t.Error("an old-format entry must not answer for another key")
+	}
+}
+
+func TestProfileFlagFromArgs(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"status"}, ""},
+		{[]string{"status", "--profile", "prod"}, "prod"},
+		{[]string{"--profile=prod", "mcp"}, "prod"},
+		{[]string{"mcp", "-p", "prod"}, "prod"},
+		{[]string{"mcp", "-pprod"}, "prod"},
+		{[]string{"mcp", "--", "-p", "prod"}, ""},
+		{[]string{"mcp", "-p"}, ""},
+		{[]string{"status", "--profile", "first", "--profile", "second"}, "second"},
+		{[]string{"status", "-pfirst", "--profile=second", "--", "-p", "third"}, "second"},
+	} {
+		if got := profileFlagFromArgs(tc.args); got != tc.want {
+			t.Errorf("profileFlagFromArgs(%v) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
+// A cache from before the census key (no version stamped) is stale, so the
+// first run after an upgrade sends a check.
+func TestCacheWithoutCensusKeyIsStale(t *testing.T) {
+	fakeHome(t)
+	withVersion(t, "1.0.0")
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+	if err := saveFreshnessCache(freshnessCache{"praxis": {CheckedAt: time.Now(), LatestVersion: "v1.0.0"}}); err != nil {
+		t.Fatal(err)
+	}
+	orig := fetchLatestRelease
+	t.Cleanup(func() { fetchLatestRelease = orig })
+	fetched := false
+	fetchLatestRelease = func() (*selfupdate.Release, error) {
+		fetched = true
+		return &selfupdate.Release{TagName: "v1.1.0"}, nil
+	}
+	if got := checkForUpdate(); got != "v1.1.0" || !fetched {
+		t.Fatalf("checkForUpdate() = %q, fetched=%v; want a fetch and v1.1.0", got, fetched)
+	}
+}
+
+// A quiet run waits for its check, except in CI.
+func TestQuietCheckWait(t *testing.T) {
+	for _, k := range httpclient.CIEnvVars() {
+		t.Setenv(k, "")
+	}
+	if got := quietCheckWait(); got != updateCheckMaxWait {
+		t.Errorf("outside CI: %v, want %v", got, updateCheckMaxWait)
+	}
+	t.Setenv("GITLAB_CI", "true")
+	if got := quietCheckWait(); got != 0 {
+		t.Errorf("in CI: %v, want 0", got)
+	}
+}
+
+// The Execute box covers praxis only: raptor prints its own notice and
+// upgrades itself, so praxis neither shows a raptor box nor runs raptor.
+func TestCollectStaleNagsHasNoRaptorBox(t *testing.T) {
+	fakeHome(t)
+	t.Setenv("PRAXIS_NO_UPDATE_CHECK", "")
+	origV, origRV, origF := version, raptorLocalVersion, fetchRaptorTag
+	t.Cleanup(func() { version, raptorLocalVersion, fetchRaptorTag = origV, origRV, origF })
+	raptorLocalVersion = func() (string, bool) { t.Error("praxis ran raptor --version"); return "0.1.0", true }
+	fetchRaptorTag = func() (string, error) { t.Error("praxis fetched raptor's release"); return "v0.2.0", nil }
+	withFakeRelease(t, &selfupdate.Release{TagName: "v9.9.9"}, nil)
+
+	version = "9.9.9"
+	if nags := collectStaleNags(); len(nags) != 0 {
+		t.Errorf("current praxis: nags = %+v", nags)
+	}
+	version = "2.1.0"
+	nags := collectStaleNags()
+	if len(nags) != 1 || nags[0].Freshness.Tool != "praxis" || !strings.Contains(nags[0].Action, "praxis update") {
+		t.Errorf("nags = %+v", nags)
 	}
 }

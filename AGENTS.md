@@ -1,1 +1,447 @@
-CLAUDE.md
+# AGENTS.md — praxis-cli
+
+Guidance for Claude Code (and other AI assistants) working in this repo.
+Project-specific overrides for the global `~/.claude/CLAUDE.md`.
+
+## Project overview
+
+Single-binary Go CLI (`praxis`) that exposes Praxis cloud capabilities to
+the local AI hosts Claude Code, Codex, Gemini CLI and Antigravity
+(`internal/harness`). The CLI is a thin HTTPS client to a Praxis cloud
+deployment — it does not run an agent loop locally. The `praxis` skill is
+embedded in the binary; org catalog skills are fetched and installed as
+`praxis-*`; raptor installs its own `raptor` skill. MCP tools execute
+server-side under org-managed credentials. See [README.md](README.md) for the
+user-facing story.
+
+## Design principle — single-profile users first
+
+The typical praxis user has ONE profile (a customer on one control plane);
+everything must resolve silently to "default" for them. Multi-profile users
+(Facets engineers, support) are power users: their flows must work, but they
+are strictly secondary and must never regress the single-profile flow.
+Concretely:
+
+- New flags and subcommands are opt-in; the default flow never grows
+  required steps, prompts, or warnings a single-profile user would see.
+- Power-user affordances (profile pins, raptor cross-checks, per-directory
+  profiles) live behind flags or status fields that stay inert when only
+  one profile exists.
+- When a trade-off pits multi-profile ergonomics against single-profile
+  cleanliness, single-profile wins.
+
+## Match this repo, and keep it small
+
+Before adding anything, open 2-3 existing files that do the same job and copy
+their shape. A diff that reads like a different person wrote it is a review cost
+even when the logic is right.
+
+- **Smallest diff that works.** Fewest files, fewest new packages. Extending an
+  existing file beats a new one; a new one beats a new package.
+- **Comments: match the neighbours, which are terse.** One line in a function
+  body. Package/function docs 3-8 lines, one long block per file at most. Never
+  explain what the code says, never defend a design — that goes in the PR body.
+- **No layer for data we already have.** Check what the server already sends and
+  what the CLI already parses before writing a parser.
+- **No speculative entries.** A filter list, config key or flag with nothing
+  using it today is dead state; leave it out.
+
+Measure, don't guess: `grep -cE '^\s*//' <file>`, and prefer files whose
+`git log` has no `Co-Authored-By: Claude` — that is a real baseline, not prior
+AI output.
+
+## Testing
+
+Unit test coverage is required.
+
+- Every new package has a `*_test.go` in the commit that introduces it.
+- Bug fixes land with a regression test that fails before the fix and
+  passes after.
+- `make test` (= `go test -race ./...`) must stay green on every commit
+  to `main`. CI gates merges on this.
+- Never lower a package's coverage. Use `go test -cover ./...` before
+  opening a PR. This includes `cmd/*` cobra commands — test them with
+  `cmd.SetOut(&buf)` and call `RunE`/`Run` directly. Mock external
+  dependencies via package-level function vars (see `cmd/update.go`'s
+  seams as a reference).
+
+### Conventions
+
+- Table-driven tests are the default (`tests := []struct{ name, in, want }{...}`).
+- HTTP code uses `net/http/httptest.Server` for stubbing — never hit
+  the real network from a test.
+- Filesystem code uses `t.TempDir()` for isolation — never write to
+  `~/.praxis` from a test.
+- Error paths matter: assert on the *type* / contents of returned
+  errors, not just `err != nil`.
+
+## Project structure
+
+`main.go` calls `cmd.Execute()`. `cmd/` holds the cobra tree, one file per
+verb (implemented commands only). `internal/` holds the logic, unit-tested.
+The packages to know before touching login, skills or updates:
+
+```
+paths/          HOME root (~/.praxis) and the discovered PROJECT root
+                (<repo>/.praxis); ActiveRoot decides where receipt,
+                snapshot and skills live
+credentials/    ONE store, two files: ~/.facets/credentials (raptor's,
+                control-plane PATs) and ~/.praxis/credentials (Praxis API
+                keys + loopback PATs). Load merges, facets wins; Put routes
+                by credential type. See facets.go.
+harness/        detected AI hosts and their skill/agent folders
+skillinstall/   embedded `praxis` skill tree + transactional skill installs,
+                receipt (installed.json), backups
+skillcatalog/   org catalog fetch; replaced.go lists the global skills that
+                the praxis/raptor skills replace
+render/         ExecutionPreamble for catalog skills
+agentinstall/   custom-agent files (Claude Code, Gemini CLI only)
+claudehooks/    merges praxis's hooks into each host's hook config; the
+                Hosts() table holds the per-host differences
+selfupdate/     release fetch, checksum, replace, Homebrew detection
+clifeed/        central feed (cross-control-plane): update target + census
+raptorinstall/  installs a missing raptor; raptorstate/ which section a bare
+                raptor would use
+```
+
+`Makefile` (build, install, test, fmt, vet, lint, check, clean),
+`.goreleaser.yml` (darwin/linux/windows × amd64/arm64 + Homebrew cask),
+`.github/workflows/` (`ci.yml` on push to main and on PRs, `release.yml` on
+tag).
+
+**Don't add stub commands.** A cobra command that prints "not yet
+implemented" is worse than no command — it lies to users and to
+`--help`. Skills install automatically as part of
+`login`/`profiles set-default`/`refresh-skills`. (The hidden `profiles use`
+answers only with what replaced it: it is a removal notice, not a stub.) Org
+catalog skills
+are fetched from the server, name-prefixed (`praxis-*`), and have the
+`render.ExecutionPreamble` inserted after their frontmatter so any
+in-process MCP reference (`run_cloud_cli(...)`) is rewritten to a
+`praxis mcp <mcp> <fn> --arg …` shell-out — see
+`internal/skillcatalog` and `internal/render/preamble.go`.
+
+## Profile selection and local mode
+
+**Selecting a profile is a read; nothing writes the store to select.** The
+resolution order (`credentials.ResolveActive`, mirrored by raptor and by
+`raptorstate`): `--profile` flag → raptor's env credential → `$PRAXIS_PROFILE`
+→ `$FACETS_PROFILE` → the folder pin → `[default]` → sole section. An unknown
+explicit profile does NOT fall back — it fails loudly (exit 3) rather than
+silently route to a different org. When both env vars name different profiles,
+`PRAXIS_PROFILE` wins and `Execute` prints one line (`envConflictNote`).
+
+**The pin** is `<dir>/.facets/profile`: a profile NAME, never a token
+(`credentials.WritePin` / `FindPin` / `RemovePin`). `FindPin` walks from cwd to
+the filesystem root and never reads `$HOME/.facets/profile` — the machine default
+is `[default]`. A pin names a control-plane PAT only, because raptor reads only
+those. It resolves in the store the facets walk finds from the same cwd.
+
+**Only two writes move `[default]` to another profile:** `profiles set-default X`
+(copies X over the home `[default]`, keeping an unduplicated old default under
+its host label) and a bare `login` (profile "default"). `pickProfile` makes a
+bare login ask (TTY) or refuse (no TTY) before it points `[default]` at another
+control plane, on any machine. A `login --profile X` writes `[X]` only — and,
+when `[default]` is a copy of X, the copy too, so the two do not split.
+
+Local mode: `praxis login --profile X --local` saves the PAT where the tree reads
+it (`credentials.PutFor`: a legacy tree file at or above cwd, else the home
+store), pins the project tree (`pinHere`), and installs project-scoped.
+`profiles pin X` + `refresh-skills` in that folder does the same in two steps;
+`refresh-skills --project` pins the active profile. In a pinned folder,
+`login --local` with no `-p` re-logs the pinned profile. A tree is local mode
+when it has a pin or a legacy `.facets/credentials` (`paths.isProjectMarker`);
+`paths.ProjectRoot()` discovers it git-style (walking up from cwd, **bounded to
+`$HOME`**) and reports `<dir>/.praxis` as the root for the receipt and snapshot.
+
+The active root (`paths.ActiveRoot()`) decides where the skill receipt
+(`installed.json`), MCP snapshot (`mcp-tools.json`), and installed skills
+live: the discovered project root, else the HOME root.
+
+Invariants to preserve when touching this area:
+
+- **Org skills follow the profile in effect where they are installed:**
+  `[default]` at the user level, the pin in a pinned tree. So only the writes
+  that change one of those re-sync: a bare login or a re-login of the profile
+  `[default]` copies (`followsDefault`), `set-default`, `login --local`, and
+  `refresh-skills`. A global `login --profile X` for another profile saves
+  credentials only (`renderCredentialsOnly`). After each sync, `recordOrg` notes
+  in the receipt whose catalog is installed; `noteProfileChoice` prints one
+  stderr line when a command's profile is from another org than the installed
+  skills, and one when an agent host selected nothing on a multi-profile machine.
+- **The praxis file is always global; the facets file follows raptor.**
+  `paths.Credentials()` is pinned to the HOME root; never route it through
+  `ActiveRoot()`. A control-plane PAT lives in raptor's file instead, and
+  inside a legacy tree the store IS the tree's file — raptor reads the first
+  `.facets/credentials` walking up from cwd and ignores the home file when
+  it finds one. `credentials.FacetsPath` mirrors that walk (seam:
+  `credentials.SetGetwdForTest`, wired in every test main so no test reads
+  the developer's live file). Consequence: inside a legacy tree, `-p X`
+  only loads X if the tree's file has it (or X is an API key).
+- **A profile lives in exactly one file.** `credentials.Put` routes a
+  non-loopback http(s) PAT to the facets file and everything else to the praxis file, and drops
+  the same name from the other HOME file (never a tree's). A name in both
+  would make praxis and raptor disagree. `MigrateLegacyPATs` moves PATs an
+  older praxis kept in the praxis file.
+- **A named profile inherits only its own section.** `praxis login -p X`
+  with no `--url` takes the URL from section `[X]`, never from raptor's
+  `[default]` — that is a second tenant, not the first one again. `default`
+  still follows raptor's own resolution (default, else sole profile).
+- **Logout is shared and acts where you are.** It removes the profile in effect
+  here (`credentials.OnDiskActiveName`: the pin, else `[default]`/sole), every
+  section that holds the same credentials, and the pin that named it. Inside a
+  legacy tree it removes the tree's sections. `logout --all` removes both home
+  files, and the tree's file when run inside a tree. `profiles rm X` refuses an
+  X whose credentials equal the active section's, for the same reason.
+- **Never pin a directory to a guess.** On a multi-profile machine, `login
+  --local` with no `-p` (and no pin) goes through `pickProfile`: a terminal gets
+  the list and may type a new name; `--json` or no TTY exits 2 with the list.
+  Login prints `Profile <name> → <url>` to stderr before any install output.
+- **A bare `.praxis` must stay inert.** Only a pin or a legacy credentials file
+  beside it opts a tree in.
+- **Receipt and install location share one root.** Both derive from
+  `ActiveRoot()`, so the unconditional "wipe previous profile" step
+  (`UninstallByPrefix`) only ever touches the active root. Callers set the
+  scope up front by pinning via `paths.OverrideActiveRoot` (`pinHere`,
+  `setGlobalDefault`, `pinRootToHome`) or by being in an active local tree;
+  never make a scope decision that diverges receipt from install.
+- **`set-default` verifies before it writes.** It checks the stored token via
+  `/auth/me` BEFORE any write, so a dead token or an unreachable server changes
+  nothing (exit 3 / 5). It works on the HOME store from any folder, and reports
+  `effective_profile` when a pin or a selection still outranks `[default]` here.
+- **The project registry.** A project-scoped install records its tree in
+  `~/.praxis/projects.json` (`recordProject`); `praxis setup` refreshes the
+  embedded praxis skill in each recorded tree and drops trees whose receipt is
+  gone (`refreshProjectSkills`).
+- **`praxis setup` is user-level.** It pins `ActiveRoot` to home, and the
+  background setup starts with its working directory at home: run from inside
+  a project, it once wrote user-level paths into the project receipt. A refresh
+  through a project receipt repairs such entries first
+  (`skillinstall.repairForeignEntries`): an embedded-skill entry outside the
+  project moves to the project copy, or is dropped.
+- **raptor may predate pins.** `raptorstate.PinSupport` probes the raptor on
+  PATH (`raptor profiles --help` exits 0), not its version. A pin that raptor
+  ignores is `State.IgnoredPin`, so status reports what raptor really uses;
+  `pin` and `login --local` warn (`raptorPinWarning`). Tests stub the probe in
+  `TestMain` and run the real one against a fake raptor script.
+- **"More than one profile" means more than one identity**
+  (`credentials.Identities`: control-plane host + username). Copies, rotated
+  tokens and an old API key for the same deployment are one identity.
+- **Every write that replaces `[default]` keeps a unique old one**
+  (`credentials.PutDefault` / `SetDefault`, the keepName rule): the bare-login
+  replace and a `--local` login named "default" included.
+- **`--profile` is ONE flag on `rootCmd`**, persistent, shorthand `-p`,
+  bound to `cmd.rootProfile` (root.go). Never define a local `--profile` on
+  a subcommand: cobra lets the local flag shadow the inherited one, so
+  `praxis login -p x` and `praxis -p x login` would land in different
+  variables and one of them would be silently ignored. Commands read it via
+  `activeOrAuthExit` (memory/duty/ig) or by passing `rootProfile` to
+  `credentials.ResolveActive`. Tests MUST reset `rootProfile` — it's package
+  state shared by every command (`resetLoginFlags`, `resetIgFlags`,
+  `setRootProfile` all do).
+- **A command that can't honor `--profile` must REFUSE it**, never ignore
+  it: `refusedProfileFlag` / `refusedExplicitProfile` (root.go) print a usage
+  error and exit 2. Today that's `logout` and `refresh-skills` (both rewrite
+  the org skills of the profile in effect, so honoring the flag would split
+  that profile from the skills) and `profiles set-default` / `profiles pin`
+  (target is positional). For `logout` the check MUST come before the `--all`
+  branch — `-p X --all` is a contradiction, and ignoring `-p` there wipes every
+  profile for a user who named one.
+- **Refuse on DIVERGENCE, not on presence.** Both helpers take the profile
+  the command acts on and stay silent when the selection names it — or holds
+  the same credentials (`credentials.SameCreds`): after `set-default acme`,
+  `-p acme logout` asks for exactly what a bare `logout` does to the
+  `[default]` copy. The comparison target MUST be resolved without the flag
+  and the environment, or it compares the selection with itself and never
+  fires — `credentials.OnDiskActiveName()` (the pin, else the store in effect
+  from cwd).
+- **A guard and its action MUST be one decision.** Resolve the target once and
+  have the action use that same name; never let the action re-resolve through
+  `ResolveActive*`, or the two disagree about "which profile?" and the action's
+  answer wins (`-p default logout` under `PRAXIS_PROFILE=acme` must never
+  delete acme). Two defenses, keep both — `refusedExplicitProfile` checks the flag and the
+  environment INDEPENDENTLY (not the flag-wins winner, which a matching `-p`
+  satisfies while the env still diverges), and the action reuses the approved
+  name (`target` in logout, `ResolveActive(acts)` in refresh-skills).
+- **When loosening a guard, audit what the action does with a selection the
+  guard now admits.**
+- **Multi-profile guidance is gated on the profile count.** The single-profile
+  customer gets no machine-global warning in `set-default` output and no agent
+  guard line (`credentials.Distinct`, so a `[default]` copy is not a second
+  profile). It describes a choice they don't have,
+  and it's what teaches a host to pass `-p` at the only profile there is.
+- Discovery is **home-subtree only** — matches the intended use case and
+  keeps tests deterministic under a faked `$HOME`. Tests drive discovery
+  via `paths.SetGetwdForTest` and pin via `paths.OverrideActiveRoot`.
+- **Compare `$HOME` and the cwd in one namespace.** `$HOME` can be logical
+  while `os.Getwd()` reports the physical path (macOS `/tmp` is a symlink to
+  `/private/tmp`), so a plain prefix test wrongly calls the cwd "outside
+  home" and silently disables local mode everywhere. `paths.alignUnder`
+  handles it: literal compare first (no syscalls, keeps the user's
+  spelling), then both sides `EvalSymlinks`'d, returning the pair from
+  whichever namespace matched — the walk-up bound only stops at home when
+  both come from the same one. Resolution only ADDS matches, so a symlink
+  pointing out of home keeps working. Don't reintroduce a bare
+  `isUnder(home, cwd)` on those two.
+
+## AI-host hooks (the skill nudge)
+
+`praxis login` wires a prompt-submit hook into each host that has one; `logout`
+removes it. The command written into a host config must be a path that SURVIVES
+an upgrade (`claudehooks.BinaryPath`): Homebrew stages the binary under
+`Caskroom/<version>/`, so a resolved path dies at the next upgrade. `praxis
+setup` and `praxis update` call `claudehooks.Repair` to heal hooks wired that
+way — it re-points existing entries only, and only from a PATH entry that IS the
+running binary, so a throwaway build cannot capture a real install's hooks.
+
+Per-host differences that are NOT guessable: Gemini's event is
+`BeforeAgent` (not `UserPromptSubmit`) and its timeout is in MILLISECONDS;
+Codex needs an in-app `/hooks` trust before it runs anything; Antigravity has no
+hook mechanism. See the `Hosts()` table.
+
+### Two paths to the same binary — do not mix them up
+
+`praxis update` and the hook writer need OPPOSITE answers, and each is wrong for
+the other:
+
+- A **hook command** must name the DURABLE path (`claudehooks.BinaryPath` — the
+  PATH entry / brew's `bin/praxis` symlink). A resolved path names a
+  version directory that the next upgrade deletes.
+- A **file replacement** must name the REAL file (`selfupdate.TargetPath`).
+  `os.Rename` does not follow a destination symlink — it REPLACES it — so
+  renaming over brew's `bin/praxis` turns that link into a regular file and
+  Homebrew can no longer upgrade or uninstall (`brew upgrade` then fails with
+  "already a Binary at …", and its rollback can purge the Caskroom entry).
+
+`praxis update` never writes into brew's tree (`selfupdate.HomebrewCask`): brew
+records the version in its own metadata, so a self-update there makes `brew
+info` report a version that is not on disk. It runs that prefix's own brew
+instead (`brew update`, then `brew upgrade --cask <token>`, see `brewFor`). When
+that brew is missing or the user cannot write to the cask's folder, it exits 0
+with `reason: homebrew_managed` and names the command — guidance, not a failure.
+
+Outside brew, `praxis update` renames over the real file. When the folder is not
+writable, on macOS only, it writes into the existing file through a temporary
+copy of praxis (`startUpdateHelper` → `__finish-update`, handled first in
+`Execute`): on Apple silicon, a binary that writes its own file while it runs
+has its next runs killed by macOS for about 40 seconds. Every permission check
+uses access(2) (`selfupdate.Writable`), which never opens the file. Linux never
+writes in place (ETXTBSY), and an install that praxis cannot replace is refused
+before the download.
+
+The automatic update (`cmd/auto_update.go`) does the same after a command, from
+a detached `praxis __auto-update`, when the daily check cached a newer release.
+It runs brew for a Homebrew install and otherwise only renames: it never writes
+in place, because agents run praxis in parallel and the Apple silicon kill hits
+every run of the file. It is off for dev builds, CI, containers, root, an
+unwritable folder, a Homebrew cask with no usable brew, and
+`PRAXIS_NO_AUTO_UPGRADE` or `PRAXIS_NO_UPDATE_CHECK`. One claim file
+(`claimSetup`) and a version check in the detached praxis keep parallel runs to
+one update. Tests must never start it for real: `TestMain` stubs
+`startAutoUpdate`, because the test binary would run as `praxis __auto-update`.
+
+## Windows
+
+praxis ships for Windows (amd64, arm64). The `test-windows` CI job must stay
+green.
+
+- **Home folder:** use `paths.Home()`. Never call `os.UserHomeDir()` or read
+  `$HOME` directly: on Windows Go reads `USERPROFILE`. raptor uses the same
+  rule (`pkg/homedir`); if the two differ, the CLIs read different
+  `~/.facets/credentials`.
+- **Unix-only calls go in build-tagged files**: `*_unix.go`
+  (`//go:build !windows`) and `*_windows.go`. Examples: the skill lock
+  (`lock_*.go`), `rename_noreplace_*.go`, `detach_*.go`, `exec_*.go`,
+  `selfupdate/replace_*.go`. Check with `GOOS=windows go vet ./...`.
+- **A running `.exe` cannot be overwritten or deleted, but it can be
+  renamed.** `praxis update` renames it aside, and `CleanupOld` removes the old
+  copy at the next start. Never write into the running binary on Windows.
+- **No executable bits on Windows** (files report `0666`). A digest or a mode
+  comparison must ignore them there (`execBits`).
+- **`os.SameFile` after a rename:** on Windows it reads the file ID through
+  the `Lstat` path on first use. Call `os.SameFile(info, info)` before you
+  rename that path.
+- **Paths:** `filepath` for the disk; `/` for embedded files, census values
+  and anything sent to the server. Binary names get `.exe` on Windows.
+- **Line endings:** `.gitattributes` keeps the embedded skill tree LF, because
+  it is part of the binary's digest.
+- **Tests:** `t.Setenv("HOME", …)` isolates on Windows too (through
+  `paths.Home()`). Do not assert Unix modes on Windows. Quote Windows paths in
+  JSON fixtures (`json.Marshal`). Build expected paths with `filepath.Join`.
+  Skip only a test that is Unix by nature, and give the reason in `t.Skip`.
+- **Shells:** Claude Code on Windows runs hook commands through Git Bash. Git
+  for Windows adds Git Credential Manager system-wide, so the
+  `praxis git-credential` setup clears it with an empty helper line.
+
+## Build & run
+
+```bash
+make build              # builds ./praxis with version stamp from git
+./praxis --help
+make test               # go test -race ./...
+make lint               # golangci-lint (pinned version)
+make check              # fmt (rewrites files) + vet + lint + test
+go test -cover ./...    # coverage report
+```
+
+Version is stamped via
+`-ldflags -X github.com/Facets-cloud/praxis-cli/cmd.version=...` (see Makefile).
+Override at build time: `make build VERSION=v0.5.0-dev`.
+
+## Adding a new command
+
+1. Create `cmd/<verb>.go` with a cobra command and `init()` that adds it.
+2. If it touches a server endpoint, route through `internal/httpclient`.
+   Do not call `net/http` directly from `cmd/*`.
+3. If it has parseable JSON output, support `--json` and auto-emit JSON
+   when `os.Stdout` is not a TTY (so AI hosts spawning praxis as a
+   subprocess always get parseable output).
+4. Write a unit test for the logic in its `internal/` package. Also test
+   the cobra command: use `cmd.SetOut(&buf)` and call `RunE` directly
+   (see Testing above).
+
+## Raptor and setup
+
+`login`, `refresh-skills`, `profiles set-default`, `update` and the hidden `praxis setup`
+(started in the background once per version, `cmd/setup.go`) install a missing
+raptor to `~/.local/bin` and run one `raptor install skill -o json --agent …`
+(`cmd/raptor_setup.go`). The host map is claude-code→claude,
+codex/gemini-cli→agents, antigravity→antigravity, so raptor writes the same
+folder as `harness.SkillDir`. A raptor whose `install skill --help` lacks the
+shared layout is reported as too old.
+
+## Distribution
+
+Install scripts served by cross-control-plane put the binary in
+`~/.local/bin` (`install.sh`) or `%USERPROFILE%\.local\bin` (`install.ps1`).
+macOS can also use the Homebrew cask (`Facets-cloud/homebrew-tap`).
+`praxis update` takes its target from the central feed (`clifeed`, GitHub API
+as the fallback), runs brew for a cask install, then upgrades raptor.
+
+## Shipping a change (merge → release → test)
+
+Releases are **tag-driven**: pushing a `v*.*.*` tag
+fires `.github/workflows/release.yml`, which runs goreleaser to publish
+the GitHub Release and bump the Homebrew cask in `facets-cloud/tap`.
+There is no `make release` target.
+
+1. **Wait for review + CI, then merge the PR.** Let CodeRabbit finish
+   its pass and address its findings; the `build`, `test-windows` and
+   `goreleaser-check` checks must be green. Squash-merge to `main`.
+2. **Tag the new version on `main`:**
+   ```bash
+   git checkout main && git pull
+   git tag -a vX.Y.Z -m "vX.Y.Z: <summary>"   # minor for a feature, patch for a fix
+   git push origin vX.Y.Z
+   ```
+   (Semver, e.g. `v2.1.0` → `v2.2.0` for a feature.)
+3. **Watch the release CI** (`gh run watch` / `gh run list --workflow
+   release.yml`). goreleaser publishes the GitHub Release and pushes the
+   updated cask to the tap. Needs the `HOMEBREW_TAP_TOKEN` secret.
+4. **Test the release.** The feed picks it up within about ten minutes;
+   then `praxis update` (or the automatic update) installs it. Run
+   `praxis version`, then exercise the change with read-only commands.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

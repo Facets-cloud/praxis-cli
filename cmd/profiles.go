@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
@@ -41,23 +42,28 @@ type profileEntry struct {
 	// (shared with raptor) or "praxis" for a Praxis API key.
 	Store string `json:"store,omitempty"`
 	// SameAsActive marks a section whose credentials equal the active one —
-	// after `profiles use X`, X and [default] hold the same token.
-	SameAsActive bool             `json:"same_as_active,omitempty"`
-	AuthCheck    *authCheckResult `json:"auth_check,omitempty"`
+	// after `profiles set-default X`, X and [default] hold the same token.
+	SameAsActive bool `json:"same_as_active,omitempty"`
+	// SameAs lists the other sections with the same credentials.
+	SameAs    []string         `json:"same_as,omitempty"`
+	AuthCheck *authCheckResult `json:"auth_check,omitempty"`
 }
 
 // profilesOutput is the top-level JSON shape so AI hosts can dispatch on
 // active_profile and iterate profiles without parsing English.
 type profilesOutput struct {
 	ActiveProfile string         `json:"active_profile"`
+	ActiveSource  string         `json:"active_source"`
+	PinPath       string         `json:"pin_path,omitempty"`
 	Profiles      []profileEntry `json:"profiles"`
 }
 
 var profilesCmd = &cobra.Command{
 	Use:   "profiles",
 	Short: "List all profiles and their login state",
-	Long: `List every profile in ~/.praxis/credentials with its URL, username,
-active-profile marker, and login state.
+	Long: `List every profile in ~/.facets/credentials (control-plane PATs, shared
+with raptor) and ~/.praxis/credentials (Praxis API keys) with its URL,
+username, active-profile marker, and login state.
 
 By default this is a LOCAL-ONLY snapshot (no network calls): a profile is
 "logged in" when it has a stored token. Pass --refresh to additionally hit
@@ -65,11 +71,22 @@ By default this is a LOCAL-ONLY snapshot (no network calls): a profile is
 A failing check on one profile is reported inline and does not abort the
 listing.
 
-The active profile (the one used when no --profile is given) is marked
-with "*" and reported as active_profile in JSON output.
+The profile a command uses here is marked with "*" and reported as
+active_profile in JSON output; the line above the table says what selected it.
+The order (raptor uses the same one):
 
-To change it, run ` + "`praxis profiles use <name>`" + ` — that also re-syncs
-the org skills so they match the profile you switched to.`,
+  1. --profile NAME
+  2. CONTROL_PLANE_URL + FACETS_USERNAME + FACETS_TOKEN
+  3. PRAXIS_PROFILE, then FACETS_PROFILE
+  4. the folder pin, the nearest <dir>/.facets/profile
+  5. [default], else the only profile
+
+SAME AS lists the sections that hold the same credentials, such as a
+[default] copy.
+
+To use another profile: --profile NAME on one command, FACETS_PROFILE=NAME
+for a shell, ` + "`praxis profiles pin NAME`" + ` for a folder, or
+` + "`praxis profiles set-default NAME`" + ` for the whole machine.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
@@ -107,6 +124,7 @@ the org skills so they match the profile you switched to.`,
 				LoggedIn:     p.Token != "",
 				Store:        p.Store,
 				SameAsActive: same[name],
+				SameAs:       credentials.SameAs(store, name),
 			}
 			// --refresh: live-verify only profiles that actually hold a
 			// token. A per-profile failure is recorded, never fatal — the
@@ -121,7 +139,8 @@ the org skills so they match the profile you switched to.`,
 			entries = append(entries, e)
 		}
 
-		result := profilesOutput{ActiveProfile: active.Name, Profiles: entries}
+		result := profilesOutput{ActiveProfile: active.Name, ActiveSource: string(active.Source),
+			PinPath: active.PinPath, Profiles: entries}
 		if asJSON {
 			return render.JSON(out, result)
 		}
@@ -138,18 +157,22 @@ func renderProfilesText(out io.Writer, result profilesOutput) error {
 		return nil
 	}
 
+	source := result.ActiveSource
+	if result.PinPath != "" {
+		source += " " + result.PinPath
+	}
+	fmt.Fprintf(out, "Active here: %s (%s)\n\n", result.ActiveProfile, source)
 	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ACTIVE\tPROFILE\tURL\tUSERNAME\tLOGIN\tSTORE")
+	fmt.Fprintln(tw, "ACTIVE\tPROFILE\tURL\tUSERNAME\tLOGIN\tSTORE\tSAME AS")
 	for _, p := range result.Profiles {
 		marker := ""
 		if p.Active {
 			marker = "*"
-		} else if p.SameAsActive {
-			marker = "="
 		}
 		login := loginCell(p)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			marker, p.Name, dashIfEmpty(p.URL), dashIfEmpty(p.Username), login, dashIfEmpty(p.Store))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			marker, p.Name, dashIfEmpty(p.URL), dashIfEmpty(p.Username), login, dashIfEmpty(p.Store),
+			dashIfEmpty(strings.Join(p.SameAs, ",")))
 	}
 	return tw.Flush()
 }

@@ -1,302 +1,536 @@
 package skillinstall
 
 import (
+	"bytes"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Facets-cloud/praxis-cli/internal/harness"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
-// onboarding is the one embedded multi-file (tree) meta-skill today.
-const onboardingSkill = "praxis-onboarding"
-
-// use-ig is the Praxis-MCP read variant tree skill: it carries ig's graph
-// query mental-model but routes every read through `praxis mcp ig`, so the
-// host needs no local `ig`. Same bare name as ig's native skill (only one is
-// ever present — ig ships its native copy only when praxis is absent).
-const useIGSkill = "use-ig"
-
-func TestMetaSkillNames_IncludesUseIG(t *testing.T) {
-	names := MetaSkillNames()
-	var found bool
-	for _, n := range names {
-		if n == useIGSkill {
-			found = true
+func TestEmbeddedSkillNames(t *testing.T) {
+	if got := MetaSkillNames(); !slices.Equal(got, []string{"praxis"}) {
+		t.Errorf("MetaSkillNames() = %v, want [praxis]", got)
+	}
+	if got := BootstrapSkillNames(); !slices.Equal(got, []string{"praxis"}) {
+		t.Errorf("BootstrapSkillNames() = %v, want [praxis]", got)
+	}
+	if !IsMetaSkill("praxis") {
+		t.Error("IsMetaSkill(praxis) = false; profile switches would wipe it")
+	}
+	for _, name := range legacyBuiltinSkills {
+		if IsMetaSkill(name) {
+			t.Errorf("IsMetaSkill(%q) = true; replaced skills are no longer embedded", name)
 		}
 	}
-	if !found {
-		t.Errorf("MetaSkillNames() = %v, want it to include %q", names, useIGSkill)
+	body, err := ContentFor("praxis")
+	if err != nil || !strings.HasPrefix(body, "---\nname: praxis\n") {
+		t.Errorf("ContentFor(praxis) = %.40q, %v", body, err)
 	}
-	// Still sorted (login relies on deterministic order).
-	for i := 1; i < len(names); i++ {
-		if names[i-1] > names[i] {
-			t.Errorf("MetaSkillNames() not sorted: %v", names)
-			break
-		}
+	if _, err := ContentFor("praxis-memory"); err == nil {
+		t.Error("ContentFor(praxis-memory) resolved a removed skill")
 	}
 }
 
-func TestIsMetaSkill_UseIGPreserved(t *testing.T) {
-	if !IsMetaSkill(useIGSkill) {
-		t.Errorf("IsMetaSkill(%q) = false, want true (tree meta-skills must survive profile switch)", useIGSkill)
-	}
-}
-
-// TestUseIGTreeSkill_IsMCPVariant guards that the embedded use-ig skill is the
-// Praxis-MCP read variant: it queries the graph server-side via `praxis mcp
-// ig` and does NOT carry the native local-`ig` read command surface.
-func TestUseIGTreeSkill_IsMCPVariant(t *testing.T) {
-	fsys, ok := treeSkillFS(useIGSkill)
-	if !ok {
-		t.Fatalf("treeSkillFS(%q) not found; use-ig must be an embedded tree skill", useIGSkill)
-	}
-	raw, err := fs.ReadFile(fsys, "SKILL.md")
-	if err != nil {
-		t.Fatalf("read use-ig SKILL.md: %v", err)
-	}
-	body := string(raw)
-
-	if !strings.Contains(body, "name: use-ig") {
-		t.Errorf("use-ig SKILL.md missing frontmatter `name: use-ig`")
-	}
-	// Reads must route through the Praxis MCP.
-	if !strings.Contains(body, "praxis mcp ig") {
-		t.Errorf("use-ig SKILL.md must invoke reads via `praxis mcp ig` (MCP variant)")
-	}
-	// It must NOT carry the native local-`ig` read command surface. The
-	// backticked `ig query` is the tell of the local-ig variant; this MCP
-	// copy uses `praxis mcp ig ig_query` instead.
-	if strings.Contains(body, "`ig query`") {
-		t.Errorf("use-ig SKILL.md contains local-ig read command `ig query`; this must be the `praxis mcp ig` variant")
-	}
-	// It must teach the local-checkout memory: how the agent resolves a node's
-	// repo-relative path to a real file and remembers where the member lives.
-	// This is the read counterpart the `praxis ig hook` nudge relies on.
-	if !strings.Contains(body, "ig-checkouts.json") {
-		t.Errorf("use-ig SKILL.md must teach the ~/.praxis/ig-checkouts.json local-checkout memory")
-	}
-}
-
-func TestMetaSkillNames_IncludesTreeSkill(t *testing.T) {
-	names := MetaSkillNames()
-	var found bool
-	for _, n := range names {
-		if n == onboardingSkill {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("MetaSkillNames() = %v, want it to include %q", names, onboardingSkill)
-	}
-	// Still sorted (login relies on deterministic order).
-	for i := 1; i < len(names); i++ {
-		if names[i-1] > names[i] {
-			t.Errorf("MetaSkillNames() not sorted: %v", names)
-			break
-		}
-	}
-}
-
-func TestIsMetaSkill_TreeSkillPreserved(t *testing.T) {
-	if !IsMetaSkill(onboardingSkill) {
-		t.Errorf("IsMetaSkill(%q) = false, want true (tree skills must be preserved on profile switch)", onboardingSkill)
-	}
-}
-
-func TestIsTreeSkill(t *testing.T) {
-	if !isTreeSkill(onboardingSkill) {
-		t.Errorf("isTreeSkill(%q) = false, want true", onboardingSkill)
-	}
-	if isTreeSkill("praxis") {
-		t.Errorf("isTreeSkill(\"praxis\") = true, want false (single-file meta-skill)")
-	}
-}
-
-func TestInstall_TreeSkill_WritesWholeTree(t *testing.T) {
+// Install writes every embedded file with its bytes, including hidden ones,
+// and makes scripts executable.
+func TestInstall_PraxisWritesWholeTree(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	hosts := fakeHosts(t)
-
-	results, err := Install(onboardingSkill, hosts)
-	if err != nil {
-		t.Fatalf("Install(%q) err = %v", onboardingSkill, err)
+	results, err := Install("praxis", hosts)
+	if err != nil || len(results) != len(hosts) {
+		t.Fatalf("Install = %d results, %v", len(results), err)
 	}
-	if len(results) != len(hosts) {
-		t.Fatalf("got %d installs, want %d", len(results), len(hosts))
-	}
-
-	for _, in := range results {
-		// Canonical recorded path is the SKILL.md at the tree root.
-		if filepath.Base(in.Path) != "SKILL.md" {
-			t.Errorf("recorded path %q should point at SKILL.md", in.Path)
+	tree, _ := treeSkillFS("praxis")
+	files := 0
+	err = fs.WalkDir(tree, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
 		}
-		skillDir := filepath.Dir(in.Path)
-
-		// SKILL.md present, de-templated, with the right frontmatter.
-		skill, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
-		if err != nil {
-			t.Errorf("read SKILL.md: %v", err)
-			continue
-		}
-		if !strings.Contains(string(skill), `name: "praxis-onboarding"`) {
-			t.Errorf("SKILL.md missing frontmatter name in %s", skillDir)
-		}
-		if strings.Contains(string(skill), "{{BRAND_NAME}}") {
-			t.Errorf("embedded SKILL.md still contains untemplated {{BRAND_NAME}}")
-		}
-
-		// The flow file must come along in its subdir.
-		flow, err := os.ReadFile(filepath.Join(skillDir, "flows", "first-deployment.md"))
-		if err != nil {
-			t.Errorf("read flows/first-deployment.md: %v", err)
-			continue
-		}
-		if !strings.Contains(string(flow), "import project-type --managed") {
-			t.Errorf("flow file missing the load-bearing import command")
-		}
-	}
-}
-
-func TestInstallTree_PrunesStaleFiles(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	hosts := fakeHosts(t)
-	results, err := Install(onboardingSkill, hosts)
-	if err != nil {
-		t.Fatalf("Install err = %v", err)
-	}
-
-	// Simulate a previous binary version that shipped a flow file this binary
-	// no longer carries. Drop an orphan into each installed tree.
-	for _, in := range results {
-		stale := filepath.Join(filepath.Dir(in.Path), "flows", "retired-flow.md")
-		if err := os.WriteFile(stale, []byte("stale"), 0600); err != nil {
-			t.Fatalf("seed stale file: %v", err)
-		}
-	}
-
-	// Re-install (e.g. the user re-runs login). The orphan must not survive.
-	if _, err := Install(onboardingSkill, hosts); err != nil {
-		t.Fatalf("re-Install err = %v", err)
-	}
-	for _, in := range results {
-		stale := filepath.Join(filepath.Dir(in.Path), "flows", "retired-flow.md")
-		if _, statErr := os.Stat(stale); !os.IsNotExist(statErr) {
-			t.Errorf("stale file %s survived re-install (stat err = %v); tree install must prune orphans", stale, statErr)
-		}
-		// The real files must still be there.
-		if _, statErr := os.Stat(filepath.Join(filepath.Dir(in.Path), "SKILL.md")); statErr != nil {
-			t.Errorf("SKILL.md missing after re-install: %v", statErr)
-		}
-	}
-}
-
-func TestRefresh_PrunesStaleTreeFiles(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	hosts := fakeHosts(t)
-	results, err := Install(onboardingSkill, hosts)
-	if err != nil {
-		t.Fatalf("Install err = %v", err)
-	}
-
-	stale := filepath.Join(filepath.Dir(results[0].Path), "flows", "retired-flow.md")
-	if err := os.WriteFile(stale, []byte("stale"), 0600); err != nil {
-		t.Fatalf("seed stale file: %v", err)
-	}
-
-	if _, err := Refresh(); err != nil {
-		t.Fatalf("Refresh err = %v", err)
-	}
-	if _, statErr := os.Stat(stale); !os.IsNotExist(statErr) {
-		t.Errorf("stale file %s survived Refresh (stat err = %v); tree refresh must prune orphans", stale, statErr)
-	}
-	// The real flow file must still be present after refresh.
-	if _, statErr := os.Stat(filepath.Join(filepath.Dir(results[0].Path), "flows", "first-deployment.md")); statErr != nil {
-		t.Errorf("flow file missing after refresh: %v", statErr)
-	}
-}
-
-func TestUninstall_TreeSkill_RemovesWholeTree(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	hosts := fakeHosts(t)
-	if _, err := Install(onboardingSkill, hosts); err != nil {
-		t.Fatalf("Install err = %v", err)
-	}
-
-	removed, err := Uninstall(onboardingSkill)
-	if err != nil {
-		t.Fatalf("Uninstall err = %v", err)
-	}
-	if len(removed) != len(hosts) {
-		t.Errorf("removed %d, want %d", len(removed), len(hosts))
-	}
-	for _, r := range removed {
-		skillDir := filepath.Dir(r.Path)
-		if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
-			t.Errorf("tree dir %s should be gone, stat err = %v", skillDir, err)
-		}
-	}
-}
-
-func TestUninstallByPrefix_PreservesTreeSkill(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	hosts := fakeHosts(t)
-	if _, err := Install(onboardingSkill, hosts); err != nil {
-		t.Fatalf("Install err = %v", err)
-	}
-
-	// Simulate a profile switch wiping the praxis- org-skill namespace.
-	if _, err := UninstallByPrefix("praxis-"); err != nil {
-		t.Fatalf("UninstallByPrefix err = %v", err)
-	}
-
-	// The embedded tree skill must survive — files still on disk and still
-	// tracked in the receipt.
-	got, err := List()
-	if err != nil {
-		t.Fatalf("List err = %v", err)
-	}
-	var stillTracked bool
-	for _, in := range got {
-		if in.SkillName == onboardingSkill {
-			stillTracked = true
-			if _, statErr := os.Stat(in.Path); statErr != nil {
-				t.Errorf("preserved skill file missing: %v", statErr)
+		files++
+		want, _ := fs.ReadFile(tree, p)
+		for _, h := range hosts {
+			dst := filepath.Join(h.SkillDir, "praxis", filepath.FromSlash(p))
+			got, err := os.ReadFile(dst)
+			if err != nil || !bytes.Equal(got, want) {
+				t.Errorf("%s: %v (equal=%t)", dst, err, bytes.Equal(got, want))
+				continue
+			}
+			if strings.HasPrefix(p, "scripts/") {
+				if fi, _ := os.Stat(dst); fi.Mode().Perm() != 0700 && runtime.GOOS != "windows" { // no Unix modes on Windows
+					t.Errorf("%s mode = %o, want 700", dst, fi.Mode().Perm())
+				}
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !stillTracked {
-		t.Errorf("praxis-onboarding was wiped by UninstallByPrefix; tree meta-skills must be preserved")
+	if files < 2 {
+		t.Fatalf("embedded praxis tree has %d files", files)
 	}
 }
 
-func TestRefresh_RewritesTreeSkill(t *testing.T) {
+// Re-install and Refresh both drop files the binary no longer ships.
+func TestPraxisTree_PrunesStaleFiles(t *testing.T) {
+	for _, via := range []string{"install", "refresh"} {
+		t.Run(via, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			hosts := fakeHosts(t)
+			results, err := Install("praxis", hosts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stale := filepath.Join(filepath.Dir(results[0].Path), "references", "retired.md")
+			if err := os.WriteFile(stale, []byte("stale"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if via == "install" {
+				_, err = Install("praxis", hosts)
+			} else {
+				_, err = Refresh()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(stale); !os.IsNotExist(err) {
+				t.Errorf("stale file survived %s: %v", via, err)
+			}
+		})
+	}
+}
+
+func TestRefresh_RestoresPraxisTree(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	hosts := fakeHosts(t)
-	results, err := Install(onboardingSkill, hosts)
+	results, err := Install("praxis", hosts)
 	if err != nil {
-		t.Fatalf("Install err = %v", err)
+		t.Fatal(err)
 	}
-
-	// Corrupt one host's SKILL.md, then Refresh should restore it.
-	target := results[0].Path
-	if err := os.WriteFile(target, []byte("corrupted"), 0600); err != nil {
-		t.Fatalf("corrupt write: %v", err)
+	if err := os.WriteFile(results[0].Path, []byte("corrupted"), 0600); err != nil {
+		t.Fatal(err)
 	}
-
 	if _, err := Refresh(); err != nil {
-		t.Fatalf("Refresh err = %v", err)
+		t.Fatal(err)
+	}
+	want, _ := ContentFor("praxis")
+	if got, _ := os.ReadFile(results[0].Path); string(got) != want {
+		t.Error("Refresh did not restore SKILL.md")
+	}
+}
+
+func TestUninstall_PraxisRemovesWholeTreeButPrefixWipeKeepsIt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)
+	if _, err := Install("praxis", hosts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UninstallByPrefix("praxis-"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := List(); len(got) != len(hosts) {
+		t.Fatalf("a praxis- wipe removed the embedded skill: %v", got)
+	}
+	removed, err := Uninstall("praxis")
+	if err != nil || len(removed) != len(hosts) {
+		t.Fatalf("Uninstall = %d, %v", len(removed), err)
+	}
+	for _, r := range removed {
+		if _, err := os.Stat(filepath.Dir(r.Path)); !os.IsNotExist(err) {
+			t.Errorf("%s still exists: %v", filepath.Dir(r.Path), err)
+		}
+	}
+}
+
+// legacyInstall writes a replaced embedded skill the way an older praxis did
+// and records it with the given receipt source.
+func legacyInstall(t *testing.T, h harness.Harness, name, source string) Installation {
+	t.Helper()
+	dir := filepath.Join(h.SkillDir, name)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("old "+name), 0600); err != nil {
+		t.Fatal(err)
+	}
+	in := Installation{SkillName: name, Harness: h.Name, Path: filepath.Join(dir, "SKILL.md"), Source: source}
+	if source != "" { // every recorded install also records its digest
+		d, err := digestTree(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in.Digest = d
+	}
+	r, err := loadReceipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Skills = append(r.Skills, in)
+	if err := saveReceipt(r); err != nil {
+		t.Fatal(err)
+	}
+	return in
+}
+
+func TestRetireLegacyBuiltins(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	all := fakeHosts(t)
+	claude, codex, gemini := all[0], all[1], all[2]
+	gemini.SkillDir = codex.SkillDir // Codex and Gemini share ~/.agents/skills
+	noPraxis := harness.Harness{Name: "antigravity", SkillDir: filepath.Join(t.TempDir(), "skills")}
+
+	if _, err := Install("praxis", []harness.Harness{claude, codex, gemini}); err != nil {
+		t.Fatal(err)
+	}
+	legacyInstall(t, claude, "praxis-memory", "")                    // older praxis: no source
+	legacyInstall(t, claude, "use-ig", "embedded")                   // recorded source
+	orgSkill := legacyInstall(t, claude, "praxis-onboarding", "cli") // an org skill reusing the name
+	legacyInstall(t, codex, "praxis-getting-started", "")
+	legacyInstall(t, gemini, "praxis-getting-started", "") // same folder, second entry
+	untouched := legacyInstall(t, noPraxis, "praxis-memory", "")
+
+	retired, err := RetireLegacyBuiltins([]harness.Harness{claude, codex, gemini, noPraxis})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retired) != 4 {
+		t.Errorf("retired %d entries, want 4: %+v", len(retired), retired)
+	}
+	for _, gone := range []string{
+		filepath.Join(claude.SkillDir, "praxis-memory"),
+		filepath.Join(claude.SkillDir, "use-ig"),
+		filepath.Join(codex.SkillDir, "praxis-getting-started"),
+	} {
+		if _, err := os.Stat(gone); !os.IsNotExist(err) {
+			t.Errorf("%s still discoverable: %v", gone, err)
+		}
+	}
+	for _, kept := range []Installation{orgSkill, untouched} {
+		if _, err := os.Stat(kept.Path); err != nil {
+			t.Errorf("%s removed: %v", kept.Path, err)
+		}
+	}
+	left, _ := List()
+	var names []string
+	for _, e := range left {
+		if e.SkillName != "praxis" {
+			names = append(names, e.Harness+":"+e.SkillName)
+		}
+	}
+	slices.Sort(names)
+	if want := []string{"antigravity:praxis-memory", "claude-code:praxis-onboarding"}; !slices.Equal(names, want) {
+		t.Errorf("receipt keeps %v, want %v (both shared-root entries must go)", names, want)
+	}
+	found := 0
+	_ = filepath.WalkDir(filepath.Join(os.Getenv("HOME"), ".praxis", "backups"), func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && d.Name() == "SKILL.md" {
+			found++
+		}
+		return nil
+	})
+	if found != 2 { // the two entries with no recorded source and digest
+		t.Errorf("backups = %d, want 2", found)
+	}
+}
+
+// Refresh (after `praxis update`) also retires the replaced skills.
+func TestRefresh_RetiresLegacyBuiltins(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)[:1]
+	if _, err := Install("praxis", hosts); err != nil {
+		t.Fatal(err)
+	}
+	legacyInstall(t, hosts[0], "praxis-memory", "")
+	if _, err := Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(hosts[0].SkillDir, "praxis-memory")); !os.IsNotExist(err) {
+		t.Errorf("praxis-memory survived Refresh: %v", err)
+	}
+}
+
+// The digest RefreshIfStale expects is the digest a real install records.
+func TestEmbeddedDigestMatchesInstall(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	results, err := Install("praxis", fakeHosts(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := embeddedDigest("praxis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range results {
+		if r.Digest != want {
+			t.Errorf("%s: installed digest %s, embeddedDigest %s", r.Harness, r.Digest, want)
+		}
+	}
+}
+
+func setReceiptDigests(t *testing.T, digest string) {
+	t.Helper()
+	r, err := loadReceipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range r.Skills {
+		if r.Skills[i].SkillName == "praxis" {
+			r.Skills[i].Digest = digest
+		}
+	}
+	if err := saveReceipt(r); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRefreshIfStale(t *testing.T) {
+	t.Run("nothing installed: first run's job", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		if got, err := RefreshIfStale(); err != nil || got != nil {
+			t.Fatalf("got %v, %v", got, err)
+		}
+	})
+	t.Run("current install: no rewrite, an edit is kept", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		hosts := fakeHosts(t)[:1]
+		results, err := Install("praxis", hosts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(results[0].Path, []byte("my edit"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := RefreshIfStale(); err != nil || got != nil {
+			t.Fatalf("refreshed a current install: %v, %v", got, err)
+		}
+		if b, _ := os.ReadFile(results[0].Path); string(b) != "my edit" {
+			t.Error("the user's edit was overwritten")
+		}
+	})
+	t.Run("installed by another binary: rewritten once", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		hosts := fakeHosts(t)[:1]
+		results, err := Install("praxis", hosts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(results[0].Path, []byte("old text"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		d, _ := digestTree(filepath.Dir(results[0].Path))
+		setReceiptDigests(t, d) // what the older binary recorded
+		got, err := RefreshIfStale()
+		if err != nil || len(got) != 1 {
+			t.Fatalf("got %v, %v", got, err)
+		}
+		want, _ := ContentFor("praxis")
+		if b, _ := os.ReadFile(results[0].Path); string(b) != want {
+			t.Error("SKILL.md not rewritten to this binary's text")
+		}
+		if again, err := RefreshIfStale(); err != nil || again != nil {
+			t.Errorf("second call refreshed again: %v, %v", again, err)
+		}
+	})
+	t.Run("receipt from a praxis without digests: refresh and retire", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		hosts := fakeHosts(t)[:1]
+		if _, err := Install("praxis", hosts); err != nil {
+			t.Fatal(err)
+		}
+		setReceiptDigests(t, "")
+		legacyInstall(t, hosts[0], "praxis-memory", "")
+		if _, err := RefreshIfStale(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(hosts[0].SkillDir, "praxis-memory")); !os.IsNotExist(err) {
+			t.Errorf("praxis-memory survived: %v", err)
+		}
+	})
+}
+
+// Only stale installs are rewritten: a current install on another host keeps
+// the user's edit active.
+func TestRefreshIfStale_OnlyStaleEntries(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hosts := fakeHosts(t)[:2]
+	results, err := Install("praxis", hosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, current := results[0], results[1]
+	r, err := loadReceipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range r.Skills {
+		if r.Skills[i].Path == stale.Path {
+			r.Skills[i].Digest = "written-by-an-older-binary"
+		}
+	}
+	if err := saveReceipt(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(current.Path, []byte("my edit"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := RefreshIfStale()
+	if err != nil || len(got) != 1 || got[0].Path != stale.Path {
+		t.Fatalf("refreshed %+v, %v; want only %s", got, err, stale.Path)
+	}
+	if b, _ := os.ReadFile(current.Path); string(b) != "my edit" {
+		t.Error("a current install was rewritten")
+	}
+}
+
+func TestInstallCatalogSkill_RecordsSourceAndScope(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	got, err := InstallCatalogSkill("praxis-x", "organization", "body", []FileBody{{"ref.md", "r"}}, fakeHosts(t)[:1])
+	if err != nil || len(got) != 1 || got[0].Source != "catalog" || got[0].Scope != "organization" || got[0].Digest == "" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(filepath.Dir(got[0].Path), "ref.md")); string(b) != "r" {
+		t.Error("supporting file not written")
+	}
+}
+
+// Only replaced GLOBAL catalog skills go, and only where the replacement is in
+// place; org skills of the same name and other skills stay.
+func TestRetireReplacedGlobals(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	all := fakeHosts(t)
+	claude, codex, gemini := all[0], all[1], all[2]
+	gemini.SkillDir = codex.SkillDir // shared ~/.agents/skills
+	mustCatalog := func(h harness.Harness, name, scope string) {
+		t.Helper()
+		if _, err := InstallCatalogSkill(name, scope, "body", nil, []harness.Harness{h}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustCatalog(claude, "praxis-cloud-operations", "global")        // praxis-v1, praxis here → goes
+	mustCatalog(claude, "praxis-facets-blueprint", "global")        // raptor-v1, no raptor here → stays
+	mustCatalog(claude, "praxis-db-migrate", "organization")        // org namesake → stays
+	mustCatalog(claude, "praxis-incident-notes", "global")          // not replaced → stays
+	mustCatalog(codex, "praxis-facets-blueprint", "global")         // raptor here → goes
+	mustCatalog(gemini, "praxis-facets-blueprint", "global")        // same folder → goes
+	legacy := legacyInstall(t, claude, "praxis-k8s-operations", "") // old receipt: no scope → treated global → goes
+
+	has := func(h harness.Harness, c string) bool {
+		return (c == "praxis-v1" && h.Name == "claude-code") || (c == "raptor-v1" && h.SkillDir == codex.SkillDir)
+	}
+	retired, err := RetireReplacedGlobals(has)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retired) != 4 {
+		t.Errorf("retired %d, want 4: %+v", len(retired), retired)
+	}
+	left, _ := List()
+	var names []string
+	for _, e := range left {
+		names = append(names, e.Harness+":"+e.SkillName)
+	}
+	slices.Sort(names)
+	want := []string{"claude-code:praxis-db-migrate", "claude-code:praxis-facets-blueprint", "claude-code:praxis-incident-notes"}
+	if !slices.Equal(names, want) {
+		t.Errorf("receipt keeps %v, want %v", names, want)
+	}
+	for _, gone := range []string{legacy.Path, filepath.Join(codex.SkillDir, "praxis-facets-blueprint")} {
+		if _, err := os.Stat(gone); !os.IsNotExist(err) {
+			t.Errorf("%s still discoverable: %v", gone, err)
+		}
+	}
+}
+
+// The receipt names whose org catalog is installed, and a later skill write
+// keeps that name.
+func TestSetOrg_RecordsAndSurvivesInstalls(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, ".praxis")
+	if _, ok := OrgAt(root); ok {
+		t.Fatal("a fresh root has no org")
+	}
+	if err := SetOrg("acme", "https://acme.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install("praxis", []harness.Harness{{Name: "claude-code", SkillDir: filepath.Join(home, ".claude", "skills")}}); err != nil {
+		t.Fatal(err)
+	}
+	if org, ok := OrgAt(root); !ok || org.Profile != "acme" || org.URL != "https://acme.test" {
+		t.Errorf("OrgAt = %+v, %v; want acme kept across an install", org, ok)
+	}
+}
+
+// An older praxis could record a user-level install in a project receipt.
+// A refresh through that receipt must never rewrite the user-level copy: the
+// entry moves to the project copy when it exists, else it is dropped.
+func TestRefreshIfStale_RepairsForeignEntriesInAProjectReceipt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	global := harness.Harness{Name: "claude-code", SkillDir: filepath.Join(home, ".claude", "skills")}
+	codex := harness.Harness{Name: "codex", SkillDir: filepath.Join(home, ".agents", "skills")}
+	if _, err := Install("praxis", []harness.Harness{global, codex}); err != nil {
+		t.Fatal(err)
+	}
+	globalSkill := filepath.Join(global.SkillDir, "praxis", "SKILL.md")
+	if err := os.WriteFile(globalSkill, []byte("user edit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	homeReceipt, _ := os.ReadFile(filepath.Join(home, ".praxis", "installed.json"))
+
+	repo := filepath.Join(home, "repo")
+	root := filepath.Join(repo, ".praxis")
+	restore := paths.OverrideActiveRoot(root)
+	t.Cleanup(restore)
+	// The project has its own Claude Code copy, but no Codex copy.
+	if _, err := Install("praxis", []harness.Harness{global.ProjectScoped(repo)}); err != nil {
+		t.Fatal(err)
+	}
+	// Damage: the project receipt now names the user-level copies.
+	if err := os.WriteFile(filepath.Join(root, "installed.json"), homeReceipt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	projectSkill := filepath.Join(repo, ".claude", "skills", "praxis", "SKILL.md")
+	if err := os.WriteFile(projectSkill, []byte("stale project copy"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	restored, err := os.ReadFile(target)
+	if _, err := RefreshIfStale(); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(globalSkill); string(b) != "user edit" {
+		t.Errorf("the user-level copy was rewritten through a project receipt: %q", b)
+	}
+	if b, _ := os.ReadFile(projectSkill); string(b) == "stale project copy" {
+		t.Error("the project copy should have been refreshed")
+	}
+	recs, err := List()
 	if err != nil {
-		t.Fatalf("read after refresh: %v", err)
+		t.Fatal(err)
 	}
-	if !strings.Contains(string(restored), `name: "praxis-onboarding"`) {
-		t.Errorf("Refresh did not restore tree skill SKILL.md content")
+	for _, e := range recs {
+		if !strings.HasPrefix(e.Path, repo) {
+			t.Errorf("project receipt still names %s", e.Path)
+		}
 	}
-	// And the sibling flow file should still be present.
-	flow := filepath.Join(filepath.Dir(target), "flows", "first-deployment.md")
-	if _, err := os.Stat(flow); err != nil {
-		t.Errorf("flow file missing after refresh: %v", err)
+	if len(recs) != 1 || recs[0].Harness != "claude-code" {
+		t.Errorf("project receipt = %+v, want only the project's Claude Code copy", recs)
+	}
+	if _, err := os.Stat(filepath.Join(root, "backups")); err == nil {
+		if entries, _ := os.ReadDir(filepath.Join(root, "backups")); len(entries) > 0 {
+			for _, b := range entries {
+				data, _ := os.ReadFile(filepath.Join(root, "backups", b.Name(), "provenance.json"))
+				if strings.Contains(string(data), global.SkillDir) {
+					t.Errorf("a project backup names the user-level folder: %s", data)
+				}
+			}
+		}
 	}
 }

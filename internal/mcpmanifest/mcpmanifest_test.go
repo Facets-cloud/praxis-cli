@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -114,7 +115,7 @@ func TestWriteSnapshot_AtomicWriteAndPath(t *testing.T) {
 
 	// File mode should be 0600 — token snapshots are user-private.
 	info, _ := os.Stat(dest)
-	if perm := info.Mode().Perm(); perm != 0o600 {
+	if perm := info.Mode().Perm(); perm != 0o600 && runtime.GOOS != "windows" { // no Unix modes on Windows
 		t.Errorf("file perm = %o, want 0600", perm)
 	}
 }

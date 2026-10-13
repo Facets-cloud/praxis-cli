@@ -38,6 +38,8 @@ type Asset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
+	// Digest is "sha256:<hex>" when GitHub or the central feed knows it.
+	Digest string `json:"digest,omitempty"`
 }
 
 // LatestRelease returns full metadata (incl. assets) for the most recent
@@ -123,8 +125,10 @@ func AssetForPlatform(r *Release) (binary *Asset, checksums *Asset, err error) {
 	return binary, checksums, nil
 }
 
-// Download fetches the URL into a temp file and returns its path.
-func Download(url string) (string, error) {
+// Download fetches the URL into a temp file in dir, the folder of the binary, so
+// the final rename stays on one file system. When dir is not writable it uses
+// the system temp folder. It returns the file's path.
+func Download(url, dir string) (string, error) {
 	client := &http.Client{Timeout: 5 * time.Minute}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -139,9 +143,11 @@ func Download(url string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download returned %s", resp.Status)
 	}
-	tmp, err := os.CreateTemp("", "praxis-update-*")
+	tmp, err := os.CreateTemp(dir, ".praxis-update-*")
 	if err != nil {
-		return "", err
+		if tmp, err = os.CreateTemp("", "praxis-update-*"); err != nil {
+			return "", err
+		}
 	}
 	if _, err := io.Copy(tmp, resp.Body); err != nil {
 		tmp.Close()
@@ -239,7 +245,8 @@ func HomebrewCask(path string) (string, bool) {
 // AtomicReplace replaces the binary at currentPath with the file at newPath.
 // On Linux/macOS, os.Rename is atomic and safe to use against a running
 // executable: the kernel maps exec'd images, so the on-disk file can be
-// replaced without disturbing the running process.
+// replaced without disturbing the running process. Windows cannot replace a
+// running .exe, so replaceFile first renames it aside (see replace_windows.go).
 func AtomicReplace(currentPath, newPath string) error {
 	if info, err := os.Stat(currentPath); err == nil {
 		if err := os.Chmod(newPath, info.Mode()); err != nil {
@@ -248,8 +255,38 @@ func AtomicReplace(currentPath, newPath string) error {
 	} else if err := os.Chmod(newPath, 0755); err != nil {
 		return fmt.Errorf("chmod new binary: %w", err)
 	}
-	if err := os.Rename(newPath, currentPath); err != nil {
+	if err := replaceFile(newPath, currentPath); err != nil {
 		return fmt.Errorf("rename: %w", err)
 	}
 	return nil
+}
+
+// WriteInPlaceSafe is true on macOS, where an update may write the new binary
+// into the existing file (WriteInPlace). Linux refuses to open a running binary
+// for writing (ETXTBSY). A variable so tests can exercise both paths.
+var WriteInPlaceSafe = runtime.GOOS == "darwin"
+
+// CanReplace reports whether an update can put a new binary at path: by a
+// rename in its folder, or on macOS by a write into the file itself.
+func CanReplace(path string) bool {
+	return Writable(filepath.Dir(path)) || (WriteInPlaceSafe && Writable(path))
+}
+
+// WriteInPlace copies src into the existing file dst, which keeps its inode and
+// owner. It opens src first, so a missing src leaves dst as it was.
+func WriteInPlace(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }

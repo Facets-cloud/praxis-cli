@@ -29,7 +29,7 @@ func TestDir_BuildsUnderHome(t *testing.T) {
 }
 
 func TestDir_NoHome(t *testing.T) {
-	// Both HOME (Unix) and USERPROFILE (Windows) cleared so os.UserHomeDir()
+	// Both HOME (Unix) and USERPROFILE (Windows) cleared so Home()
 	// errors. We don't assert on the exact error message — just that one is
 	// returned and Dir doesn't paper over it.
 	t.Setenv("HOME", "")
@@ -539,5 +539,59 @@ func TestActiveRoot_DoesNotCreateTheProjectDir(t *testing.T) {
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Errorf("ActiveRoot() created %s; only writers may", root)
+	}
+}
+
+// A name-only pin opts a tree in, like a legacy credentials file.
+func TestProjectRoot_PinIsAMarker(t *testing.T) {
+	home := withHome(t)
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".facets"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".facets", "profile"), []byte("acme\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
+	if got, ok, _ := ProjectRoot(); !ok || got != filepath.Join(repo, ".praxis") {
+		t.Errorf("ProjectRoot() = %q, %v; want the pinned tree", got, ok)
+	}
+	if got, _ := Getwd(); got != repo {
+		t.Errorf("Getwd() = %q, want the seam's %q", got, repo)
+	}
+	if p, _ := Projects(); p != filepath.Join(home, ".praxis", "projects.json") {
+		t.Errorf("Projects() = %q, want it under the home root", p)
+	}
+	if _, _, ok := LegacyProjectPointer(); ok {
+		t.Error("a pinned tree is not a legacy pointer")
+	}
+}
+
+// A project root ignores itself in git; a .gitignore already there stays.
+func TestEnsureProjectRoot_WritesAGitignore(t *testing.T) {
+	home := withHome(t)
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(SetGetwdForTest(func() (string, error) { return repo, nil }))
+	root, err := EnsureProjectRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, ".gitignore")); string(b) != "*\n" {
+		t.Errorf(".praxis/.gitignore = %q, want everything ignored", b)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InitProjectRoot(repo); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, ".gitignore")); string(b) != "mine\n" {
+		t.Errorf("an existing .gitignore was replaced: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".claude")); !os.IsNotExist(err) {
+		t.Error(".claude must be left alone")
 	}
 }

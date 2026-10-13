@@ -116,3 +116,23 @@ func TestAvailableCommands_ParsesOnlyTheCommandSection(t *testing.T) {
 // state shared with other tests in this package. The `version` SUBCOMMAND
 // (TestVersionCmd_PrintsAllFields in version_test.go) gives us the same
 // signal with a clean test boundary.
+
+func TestCommandPath(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"mcp", "k8s_cli", "kubectl_get", "--json"}, "mcp"},
+		{[]string{"-p", "acme", "memory", "recall", "x"}, "memory recall"},
+		{[]string{"refresh-skills", "--project"}, "refresh-skills"},
+		{[]string{"--version"}, ""},
+		{[]string{"no-such-command"}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			if got := commandPath(tc.args); got != tc.want {
+				t.Errorf("commandPath(%q) = %q, want %q", tc.args, got, tc.want)
+			}
+		})
+	}
+}

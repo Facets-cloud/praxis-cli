@@ -148,7 +148,7 @@ exactly what a bare logout does.`,
 		// removes, together.
 		//
 		// Every section that holds the same credentials goes with it: after
-		// `login -p acme` or `profiles use acme`, [default] is a copy of [acme],
+		// `profiles set-default acme`, [default] is a copy of [acme],
 		// and removing only [default] would leave [acme] as the sole section —
 		// logged in again, with no skills.
 		store, _ := credentials.Load()
@@ -170,9 +170,16 @@ exactly what a bare logout does.`,
 			}
 		}
 
-		// Wipe org skills + agents. With the v0.7 single-active-profile
-		// model, both always belong to the currently-active profile, so
-		// this is unambiguous.
+		// A pin that named the removed profile would now name nothing.
+		removedPin := ""
+		if pinned, pinPath, ok := credentials.FindPin(); ok && pinned == target {
+			if os.Remove(pinPath) == nil {
+				removedPin = pinPath
+			}
+		}
+
+		// Wipe org skills + agents. Both belong to the profile in effect in
+		// the active root, which is the one just removed.
 		var warnings []string
 		removed, err := skillinstall.UninstallByPrefix("praxis-")
 		if err != nil {
@@ -217,6 +224,9 @@ exactly what a bare logout does.`,
 			if len(copies) > 0 {
 				envelope["removed_copies"] = copies
 			}
+			if removedPin != "" {
+				envelope["removed_pin"] = removedPin
+			}
 			if stillActive != "" {
 				envelope["now_active"] = stillActive
 			}
@@ -234,6 +244,9 @@ exactly what a bare logout does.`,
 		}
 		if len(copies) > 0 {
 			fmt.Fprintf(out, "  Also removed %q — the same credentials under another name.\n", copies)
+		}
+		if removedPin != "" {
+			fmt.Fprintf(out, "  Also removed the folder pin %s.\n", removedPin)
 		}
 		if len(removed) > 0 {
 			fmt.Fprintf(out, "✓ Removed %d org skill(s) from %d host(s).\n",
@@ -295,7 +308,7 @@ func ifTrue(cond bool, v string) any {
 // the wiring `praxis login` does. Never fatal; returns a warning so a JSON
 // logout does not claim success while hooks remain.
 func unwirePraxisHooks() (removed bool, warning string) {
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return false, fmt.Sprintf("removing praxis hooks failed: %v", err)
 	}

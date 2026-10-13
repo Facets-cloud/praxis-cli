@@ -1,9 +1,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -12,6 +12,7 @@ import (
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/mcpmanifest"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
+	"github.com/Facets-cloud/praxis-cli/internal/raptorinstall"
 	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 )
@@ -21,6 +22,9 @@ import (
 // exactly what changed on disk so they can decide whether to re-read
 // any cached skill files.
 type postAuthState struct {
+	raptorBinary    raptorinstall.Result
+	raptorSkills    []skillInstallationLite
+	raptorWarning   string
 	metaSkill       []skillInstallationLite
 	removedSkills   []skillInstallationLite
 	catalogSkills   []skillInstallationLite
@@ -39,6 +43,9 @@ type postAuthState struct {
 	// home) and the install fell back to user-level, so callers report
 	// where files actually landed.
 	projectScoped bool
+	// catalogFetched says the org skill catalog came back, so the skills on
+	// disk now belong to the profile this setup ran for.
+	catalogFetched bool
 }
 
 // skillInstallationLite is the trimmed JSON shape for skill installs in
@@ -99,6 +106,11 @@ type agentInstallationLite struct {
 // global skills, and vice versa).
 func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[string]string) postAuthState {
 	state := postAuthState{}
+	// Step 0: install raptor if missing, so both CLIs arrive together.
+	var raptorErr error
+	if state.raptorBinary, raptorErr = prepareRaptor(out, asJSON); raptorErr != nil {
+		state.raptorWarning = raptorErr.Error()
+	}
 	hosts := detectHarnesses()
 
 	projectDir, inProject := resolveProjectScope()
@@ -111,6 +123,9 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 		}
 	}
 	state.projectScoped = inProject
+	if inProject {
+		recordProject(projectDir)
+	}
 	noHosts := len(hosts) == 0
 	if noHosts && !asJSON {
 		fmt.Fprintln(out, "No supported AI hosts detected on this machine.")
@@ -118,12 +133,21 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 		fmt.Fprintln(out, "(Continuing — credentials and MCP manifest snapshot will still be written.)")
 	}
 
-	// Step 1: every binary-embedded meta-skill (idempotent — Install
-	// upserts). Host-dependent. As of v0.x there are two:
-	//   - "praxis"        the CLI driver
-	//   - "praxis-memory" the memory-recall guide
-	// Names come from MetaSkillNames() so adding another meta-skill
-	// only requires a dummySkills entry.
+	// Step 0.5: raptor installs and registers its own skill, at user level, so
+	// its own upgrades keep it current. Needs the binary from step 0.
+	if !noHosts && state.raptorBinary.Path != "" {
+		var err error
+		state.raptorSkills, err = installRaptorSkills(state.raptorBinary.Path, detectHarnesses())
+		if err != nil {
+			state.raptorWarning = errors.Join(raptorErr, err).Error()
+		}
+		if !asJSON {
+			reportRaptorSkills(out, state.raptorSkills, err)
+		}
+	}
+
+	// Step 1: every binary-embedded skill (idempotent — Install upserts), then
+	// retire the embedded skills the praxis package replaced. Host-dependent.
 	if !noHosts {
 		for _, name := range skillinstall.MetaSkillNames() {
 			metaResults, err := installSkill(name, hosts)
@@ -141,6 +165,11 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 			}
 			state.metaSkill = append(state.metaSkill, liteResults(metaResults)...)
 		}
+		retired, err := retireLegacySkills(hosts)
+		if err != nil && !asJSON {
+			fmt.Fprintf(out, "Warning: removing replaced skills failed: %v\n", err)
+		}
+		state.removedSkills = append(state.removedSkills, liteResults(retired)...)
 	}
 
 	// Step 2 + 3: fetch FIRST, then swap. If the fetch fails, leave the
@@ -148,7 +177,18 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 	// re-run on a flaky network without leaving the user empty-handed.
 	// Host-dependent (no point fetching if we can't install).
 	if !noHosts {
-		skills, fetchErr := fetchCatalog(baseURL, auth)
+		// Claim the replacements that are in place, so the server and the
+		// client filter leave out the GLOBAL skills they replace. raptor-v1
+		// needs raptor's skill on every detected host raptor supports;
+		// otherwise those hosts keep the old raptor-route skills as fallback.
+		var caps []string
+		if len(state.metaSkill) > 0 {
+			caps = append(caps, "praxis-v1")
+		}
+		if raptorSkillEverywhere(detectHarnesses()) {
+			caps = append(caps, "raptor-v1")
+		}
+		skills, fetchErr := fetchCatalog(baseURL, auth, caps...)
 		switch {
 		case fetchErr != nil:
 			if !asJSON {
@@ -156,22 +196,24 @@ func runPostAuthSetup(out io.Writer, asJSON bool, baseURL string, auth map[strin
 				fmt.Fprintln(out, "Existing org skills left in place. Re-run `praxis login` once the gateway is reachable.")
 			}
 		case len(skills) == 0:
+			state.catalogFetched = true
 			// Empty catalog is a definitive answer — wipe stale entries.
 			// The wipe targets the active root's receipt only (see func doc),
 			// so it's safe in both user and project scope.
 			removed := wipePrevProfileSkills(out, asJSON)
-			state.removedSkills = liteResults(removed)
+			state.removedSkills = append(state.removedSkills, liteResults(removed)...)
 			orphaned := removeOrphanedProfileSkills(out, asJSON, nil, hosts)
 			state.removedSkills = append(state.removedSkills, liteResults(orphaned)...)
 			if !asJSON {
 				fmt.Fprintln(out, "\nCatalog is empty for this org — nothing to install.")
 			}
 		default:
+			state.catalogFetched = true
 			// Catalog in hand. Now wipe and install. The wipe targets the
 			// active root's receipt only (see func doc), so it's safe in
 			// both user and project scope.
 			removed := wipePrevProfileSkills(out, asJSON)
-			state.removedSkills = liteResults(removed)
+			state.removedSkills = append(state.removedSkills, liteResults(removed)...)
 			orphaned := removeOrphanedProfileSkills(out, asJSON, skills, hosts)
 			state.removedSkills = append(state.removedSkills, liteResults(orphaned)...)
 			state.catalogSkills = installFetchedCatalog(out, asJSON, skills, hosts)
@@ -292,7 +334,7 @@ func wirePraxisHooks(out io.Writer, asJSON bool, hosts []harness.Harness) []stri
 		}
 		return nil
 	}
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return nil
 	}
@@ -403,20 +445,13 @@ func installFetchedCatalog(out io.Writer, asJSON bool, skills []skillcatalog.Ski
 	failures := 0
 	for _, sk := range skills {
 		prefixed := sk.PrefixedName()
-		var results []skillinstall.Installation
-		var err error
-		if sk.IsMultiFile() {
-			// Multi-file skill: write SKILL.md (with preamble) + supporting
-			// files as a directory tree. Supporting files install verbatim —
-			// the server already branded them; no preamble (SKILL.md-only).
-			files := make([]skillinstall.FileBody, len(sk.Files))
-			for i, f := range sk.Files {
-				files[i] = skillinstall.FileBody{Path: f.Path, Content: f.Content}
-			}
-			results, err = installSkillTree(prefixed, sk.RenderedContent(), files, hosts)
-		} else {
-			results, err = installSkillBody(prefixed, sk.RenderedContent(), hosts)
+		// Supporting files install verbatim — the server already branded
+		// them; only SKILL.md gets the preamble.
+		files := make([]skillinstall.FileBody, len(sk.Files))
+		for i, f := range sk.Files {
+			files[i] = skillinstall.FileBody{Path: f.Path, Content: f.Content}
 		}
+		results, err := installCatalogSkill(prefixed, sk.Scope, sk.RenderedContent(), files, hosts)
 		if err != nil {
 			if !asJSON {
 				fmt.Fprintf(out, "  ✗ %-40s failed: %v\n", prefixed, err)

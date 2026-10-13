@@ -1,5 +1,5 @@
 // Package ighook backs `praxis ig hook`, the Claude Code cwd hook that nudges
-// toward the use-ig skill when the session is sitting in a repo that belongs to
+// toward the praxis skill's catalog route when the session is in a repo that belongs to
 // an ig catalog.
 //
 // The gate is deliberately GENERIC and SERVER-authoritative: given cwd's git
@@ -20,7 +20,9 @@ import (
 // .git-less, lowercased host/path so https, ssh, and scp forms of the same repo
 // collapse to one identity. Returns "" for empty input.
 func CanonicalGitURL(raw string) string {
-	s := strings.TrimSpace(raw)
+	// Lowercase first: the result is lowercase anyway, and schemes are
+	// case-insensitive (HTTPS:// is valid).
+	s := strings.ToLower(strings.TrimSpace(raw))
 	if s == "" {
 		return ""
 	}
@@ -37,12 +39,12 @@ func CanonicalGitURL(raw string) string {
 	s = strings.TrimSuffix(s, "/")
 	s = strings.TrimSuffix(s, ".git")
 	s = strings.TrimSuffix(s, "/")
-	return strings.ToLower(s)
+	return s
 }
 
 // NudgeContext is the additionalContext a hook injects when cwd's repo is a
 // catalog member: it names the claiming catalog(s) and points the agent at the
-// use-ig skill (reads run via `praxis mcp ig`) over grepping across repos.
+// praxis skill's catalog route (reads run via `praxis mcp ig`) over grepping.
 func NudgeContext(catalogs []string) string {
 	label := "an ig catalog"
 	if len(catalogs) > 0 {
@@ -50,7 +52,7 @@ func NudgeContext(catalogs []string) string {
 	}
 	return "This repo is a member of " + label + ". For cross-service questions — " +
 		"who calls whom, frontend→backend handler, blast radius, code↔infra — use the " +
-		"`use-ig` skill instead of grepping across repos: reads run server-side via " +
+		"`praxis` skill's `references/catalog-read.md` route instead of grepping across repos: reads run server-side via " +
 		"`praxis mcp ig` (start with `praxis mcp ig ig_list_catalogs`)."
 }
 

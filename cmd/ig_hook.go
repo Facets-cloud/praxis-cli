@@ -19,7 +19,7 @@ import (
 // `praxis ig hook session-start|cwd-changed` — wired into Claude Code's
 // settings.json by `praxis login`. If the session's cwd is a git repo that the
 // catalog server says is an ig catalog member, it injects a one-line nudge
-// toward the use-ig skill. Silent + exit 0 otherwise — a hook must never block a
+// toward the praxis skill's catalog route. Silent + exit 0 otherwise — a hook must never block a
 // session.
 //
 // The membership check is GENERIC and server-authoritative (`praxis ig claims`
@@ -113,7 +113,7 @@ func serverClaims(canonURL string) ([]string, error) {
 
 var igHookCmd = &cobra.Command{
 	Use:    "hook <session-start|cwd-changed>",
-	Short:  "Claude Code hook: nudge toward use-ig inside an ig catalog repo",
+	Short:  "Claude Code hook: nudge toward ig catalog reads inside an ig catalog repo",
 	Hidden: true, // wired by `praxis login`, not called by hand
 	Args:   cobra.ExactArgs(1),
 	// A hook's stderr must stay quiet so it never clutters a session; a bad arg

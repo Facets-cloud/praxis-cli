@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 
@@ -141,8 +142,11 @@ func TestLogoutCmd_InProjectDir_RemovesTreeDefaultNotHome(t *testing.T) {
 	seedPAT(t, "default", "https://home.test", "t1")
 	seedPAT(t, "acme", "https://acme.test", "t2")
 	repo := repoUnderHome(t, home)
-	if err := credentials.SetDefaultLocal("acme", repo); err != nil {
-		t.Fatal(err)
+	// A legacy local tree: acme and a [default] copy in the tree's own file.
+	for _, name := range []string{"acme", "default"} {
+		if err := credentials.PutLocal(name, credentials.FacetsProfile("https://acme.test", "u@x", "t2"), repo); err != nil {
+			t.Fatal(err)
+		}
 	}
 	inDir(t, repo)
 
@@ -166,5 +170,38 @@ func TestLogoutCmd_InProjectDir_RemovesTreeDefaultNotHome(t *testing.T) {
 	}
 	if got := homeFacetsURL(t); got != "https://home.test" {
 		t.Errorf("home [default] = %q; a logout inside a tree must not touch the home store", got)
+	}
+}
+
+// In a pinned folder logout removes the pinned profile and the pin, and leaves
+// the machine default alone.
+func TestLogoutCmd_InPinnedFolder_RemovesThePinnedProfileAndThePin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	resetLogoutFlags()
+	defer resetLogoutFlags()
+	clearFacetsEnv(t)
+
+	seedPAT(t, "default", "https://home.test", "t1")
+	seedPAT(t, "acme", "https://acme.test", "t2")
+	repo := repoUnderHome(t, home)
+	if err := credentials.WritePin(repo, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	inDir(t, repo)
+
+	var buf bytes.Buffer
+	logoutCmd.SetOut(&buf)
+	if err := logoutCmd.RunE(logoutCmd, nil); err != nil {
+		t.Fatalf("RunE err = %v", err)
+	}
+	if !strings.Contains(buf.String(), `"removed": "acme"`) || !strings.Contains(buf.String(), `"removed_pin"`) {
+		t.Errorf("logout in a pinned folder must remove acme and its pin; got %q", buf.String())
+	}
+	if _, err := os.Stat(credentials.PinPathIn(repo)); !os.IsNotExist(err) {
+		t.Error("the pin should be gone")
+	}
+	if got := homeFacetsURL(t); got != "https://home.test" {
+		t.Errorf("home [default] = %q; logout of a pinned profile must not touch it", got)
 	}
 }

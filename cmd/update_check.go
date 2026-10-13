@@ -13,10 +13,13 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Facets-cloud/praxis-cli/internal/clifeed"
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
 )
 
-// updateCheckInterval throttles how often the background check hits GitHub.
+// updateCheckInterval throttles how often the background check calls the
+// central feed (or GitHub, its fallback).
 const updateCheckInterval = 24 * time.Hour
 
 // updateCheckMaxWait caps how long Execute waits for the background check before
@@ -28,6 +31,16 @@ const updateCheckInterval = 24 * time.Hour
 // fast local commands, whose work finishes long before a network fetch could.
 const updateCheckMaxWait = 3 * time.Second
 
+// quietCheckWait is how long a quiet run waits for its check after the
+// command. In CI it is zero: the check only races the command and never delays
+// a pipeline.
+func quietCheckWait() time.Duration {
+	if httpclient.CIName() != "" {
+		return 0
+	}
+	return updateCheckMaxWait
+}
+
 // updateCheckRetryDelay pauses between the two live-fetch attempts. A var (not
 // a const) so tests can zero it out and not sleep.
 var updateCheckRetryDelay = 2 * time.Second
@@ -38,7 +51,59 @@ var updateCheckRetryDelay = 2 * time.Second
 type toolCacheEntry struct {
 	CheckedAt     time.Time `json:"checked_at"`
 	LatestVersion string    `json:"latest_version"`
+	// Version, CPURL and User are what praxis's last check told the census (the
+	// raptor entry leaves them empty). A key that was not sent in the last day
+	// makes the entry stale, so the census sees an upgrade at once, and a CI
+	// step with credentials is counted after a first step without.
+	Version string `json:"version,omitempty"`
+	CPURL   string `json:"cp_url,omitempty"`
+	User    string `json:"user,omitempty"`
+	Skills  string `json:"skills,omitempty"` // clifeed.SkillsKey
+	// Sent is when each census key was last sent, for the last day. A machine
+	// whose sessions use several profiles then sends one check per key a day,
+	// not one on every change of key.
+	Sent map[string]time.Time `json:"sent,omitempty"`
 }
+
+// censusKeyFor is the census key of this invocation for a tool's entry: the
+// praxis version, its CP and user, and its skill state for praxis, and nothing
+// for raptor, whose census raptor sends itself.
+func censusKeyFor(tool string) toolCacheEntry {
+	if tool != "praxis" {
+		return toolCacheEntry{}
+	}
+	cpURL, user := clifeed.Identity()
+	return toolCacheEntry{Version: strings.TrimPrefix(version, "v"), CPURL: cpURL, User: user, Skills: clifeed.SkillsKey()}
+}
+
+// keyID is census key k as one string.
+func (k toolCacheEntry) keyID() string {
+	return strings.Join([]string{k.Version, k.CPURL, k.User, k.Skills}, "\x00")
+}
+
+// fresh reports whether entry e answers for census key k at now: checked in
+// the last interval, with k sent in that interval too.
+func (e toolCacheEntry) fresh(k toolCacheEntry, now time.Time) bool {
+	sent, ok := e.Sent[k.keyID()]
+	if !ok && e.Version == k.Version && e.CPURL == k.CPURL && e.User == k.User && e.Skills == k.Skills {
+		sent, ok = e.CheckedAt, true // an entry written before Sent existed
+	}
+	return ok && now.Sub(e.CheckedAt) < updateCheckInterval && now.Sub(sent) < updateCheckInterval
+}
+
+// checked returns the entry for a check of key k at now that found tag: k is
+// recorded as sent, and keys older than the interval are dropped.
+func (e toolCacheEntry) checked(k toolCacheEntry, now time.Time, tag string) toolCacheEntry {
+	sent := map[string]time.Time{k.keyID(): now}
+	for id, t := range e.Sent {
+		if id != k.keyID() && now.Sub(t) < updateCheckInterval {
+			sent[id] = t
+		}
+	}
+	return toolCacheEntry{CheckedAt: now, LatestVersion: tag,
+		Version: k.Version, CPURL: k.CPURL, User: k.User, Skills: k.Skills, Sent: sent}
+}
+
 type freshnessCache map[string]toolCacheEntry
 
 // toolSpec describes a tool whose freshness praxis tracks. praxis and raptor
@@ -145,18 +210,17 @@ func toolsFreshness(now time.Time, mode freshMode) []Freshness {
 // empty tag so an offline/API outage honors the 24h throttle (compareSemver
 // treats "" as not-stale) instead of re-fetching every run.
 func latestTagFor(spec toolSpec, now time.Time, mode freshMode) string {
-	if mode != freshLive {
-		if c, err := readFreshnessCache(); err == nil {
-			if e, ok := c[spec.Name]; ok && (mode == freshCached || now.Sub(e.CheckedAt) < updateCheckInterval) {
-				return e.LatestVersion
-			}
-		}
+	key := censusKeyFor(spec.Name)
+	c, _ := readFreshnessCache()
+	e, ok := c[spec.Name]
+	if mode != freshLive && ok && (mode == freshCached || e.fresh(key, now)) {
+		return e.LatestVersion
 	}
 	if mode == freshCached {
 		return "" // status default: local-only, never fetch
 	}
 	tag := fetchTagWithRetry(spec.fetchTag)
-	putCacheEntry(spec.Name, toolCacheEntry{CheckedAt: now, LatestVersion: tag})
+	putCacheEntry(spec.Name, e.checked(key, now, tag))
 	return tag
 }
 
@@ -394,16 +458,15 @@ func checkToolsBounded(now time.Time, mode freshMode) []Freshness {
 	return out
 }
 
-// collectStaleNags returns the stale tools (concurrent, bounded) with their
-// upgrade instruction — the Execute-time TTY nag source.
+// collectStaleNags returns praxis's nag when praxis is behind — the
+// Execute-time TTY nag source. raptor prints its own notice and upgrades
+// itself, so praxis shows no raptor box.
 func collectStaleNags() []staleNag {
-	var out []staleNag
-	for _, f := range checkToolsBounded(time.Now(), freshCachedOrFetch) {
-		if f.Stale {
-			out = append(out, staleNag{Freshness: f, Action: nagActionForTool(f.Tool)})
-		}
+	spec := praxisSpec()
+	if f := checkTool(spec, time.Now(), freshCachedOrFetch); f.Stale {
+		return []staleNag{{Freshness: f, Action: nagAction(spec)}}
 	}
-	return out
+	return nil
 }
 
 // specByName looks up a tool's spec by name.
@@ -474,7 +537,9 @@ func skipUpdateCheck(args []string) bool {
 			continue // a flag (or its value) before the command — keep scanning
 		default:
 			// First positional token is the command name.
-			return a == "update" || a == "version" || a == "completion"
+			// setup runs in the background, started by a command that sends the
+			// check itself.
+			return a == "update" || a == "version" || a == "completion" || a == "setup"
 		}
 	}
 	return false
@@ -543,4 +608,33 @@ func maxInt(vals ...int) int {
 		}
 	}
 	return m
+}
+
+// claimDailySlot marks the tool as checked now, keeping its last known tag,
+// and reports true, when its cache entry is stale. It reports false when the
+// entry is fresh. The quiet path calls it before the fetch: a quiet run stops
+// waiting after updateCheckMaxWait, so an interrupted fetch then costs one
+// attempt a day, not one for every command an agent runs.
+func claimDailySlot(tool string, now time.Time) bool {
+	key := censusKeyFor(tool)
+	c, _ := readFreshnessCache()
+	e, ok := c[tool]
+	if ok && e.fresh(key, now) {
+		return false
+	}
+	putCacheEntry(tool, e.checked(key, now, e.LatestVersion))
+	return true
+}
+
+// quietDailyCheck is the background check of a run that a person does not
+// watch: it sends praxis's daily check to the feed, at most once a day, and
+// prints nothing.
+func quietDailyCheck(now time.Time) {
+	spec := praxisSpec()
+	if _, _, checkable := spec.current(); !checkable || os.Getenv("PRAXIS_NO_UPDATE_CHECK") != "" {
+		return
+	}
+	if claimDailySlot(spec.Name, now) {
+		latestTagFor(spec, now, freshLive)
+	}
 }

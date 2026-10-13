@@ -135,11 +135,7 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		storeEffect = "refused: local mode needs a control-plane PAT (drop --local, or create a PAT)"
 	}
 
-	skillsEffect := fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)
-	if !credentials.SameCreds(profileName, activeName) {
-		skillsEffect = fmt.Sprintf("active profile switches %q → %q; %q's praxis-* org skills are wiped and %q's catalog installed",
-			activeName, profileName, activeName, profileName)
-	}
+	skillsEffect := dryRunSkillsEffect(profileName, activeName, local)
 
 	if asJSON {
 		payload := map[string]any{
@@ -183,4 +179,21 @@ func runLoginDryRun(out io.Writer, asJSON bool, profileName, baseURL string, loc
 		osExit(exitcode.Network)
 	}
 	return nil
+}
+
+// dryRunSkillsEffect says what a login of profileName does to installed org
+// skills: a --local login installs them into the pinned folder; a global login
+// re-syncs the user-level set only when the profile is the machine default.
+func dryRunSkillsEffect(profileName, activeName string, local bool) string {
+	if local {
+		return fmt.Sprintf("this folder is pinned to %q and its org skills are installed here; other folders and sessions do not change", profileName)
+	}
+	home, _ := credentials.LoadHome()
+	if !followsDefault(home, profileName) {
+		return fmt.Sprintf("credentials only: the machine default and its org skills do not change (use --profile %s, --local, or `praxis profiles set-default %s`)", profileName, profileName)
+	}
+	if credentials.SameCreds(profileName, activeName) {
+		return fmt.Sprintf("org skills re-synced from %q's catalog (no profile switch)", profileName)
+	}
+	return fmt.Sprintf("the user-level org skills change from %q's to %q's catalog", activeName, profileName)
 }

@@ -5,23 +5,14 @@ import (
 	"io/fs"
 )
 
-// treeSkillFiles holds the binary-embedded source of every multi-file (tree)
-// skill — each a SKILL.md engine plus optional subdirectories (e.g.
-// praxis-onboarding's flows/). Unlike the single-file meta-skills in dummy.go
-// (string bodies) and unlike org catalog skills (fetched from the server),
-// this content ships inside the binary as a real file tree so it can carry
-// multiple files.
+// treeSkillFiles holds every embedded skill as a real file tree: SKILL.md plus
+// references, scripts and assets.
 //
-//   - praxis-onboarding: the guided getting-started journey.
-//   - use-ig: the Praxis-MCP read variant of ig's use-ig skill; reads run
-//     server-side via `praxis mcp ig`, so the host needs no local `ig`.
-//
-//go:embed embedded/praxis-onboarding embedded/use-ig
+//go:embed embedded/praxis
 var treeSkillFiles embed.FS
 
-// treeSkillNames is the set of binary-embedded tree skills, in the order they
-// are declared in the embed directive above.
-var treeSkillNames = []string{"praxis-onboarding", "use-ig"}
+// treeSkillNames is the set of embedded skills, in embed order.
+var treeSkillNames = []string{praxisSkillName}
 
 // treeSkills maps a binary-embedded multi-file skill name to its rooted file
 // tree (SKILL.md at the root, plus subdirectories like flows/). Tree skills

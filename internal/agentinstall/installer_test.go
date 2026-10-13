@@ -3,6 +3,7 @@ package agentinstall
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -267,6 +268,9 @@ func TestListRejectsCorruptReceipt(t *testing.T) {
 }
 
 func TestSaveReceiptFailsOnUnwritableDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod does not make a folder read-only on Windows")
+	}
 	home := setupHome(t)
 	dir := filepath.Join(home, ".praxis")
 	if err := os.MkdirAll(dir, 0700); err != nil {

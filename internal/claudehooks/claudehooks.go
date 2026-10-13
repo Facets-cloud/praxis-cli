@@ -319,7 +319,7 @@ func Install(h Host, praxisPath string) (bool, error) {
 
 // Repair re-points h's EXISTING praxis hook entries at praxisPath and adds
 // none. An upgrade deletes the directory an older praxis wired its hooks from,
-// so `praxis setup` (the Homebrew post-install hook) calls this to heal them
+// so `praxis setup` (run once per praxis version) calls this to heal them
 // without a login — while a user who never logged in still gets no hooks.
 func Repair(h Host, praxisPath string) (bool, error) {
 	return upsert(h, praxisPath, true)

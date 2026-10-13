@@ -41,7 +41,7 @@ func SetGetwdForTest(fn func() (string, error)) func() {
 
 // FacetsHome is ~/.facets/credentials — where a global PAT login writes.
 func FacetsHome() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := paths.Home()
 	if err != nil {
 		return "", err
 	}
@@ -58,15 +58,7 @@ func FacetsPathIn(dir string) string {
 // walking up to the filesystem root, else the home file.
 func FacetsPath() (string, error) {
 	if cwd, err := getwd(); err == nil {
-		for dir := cwd; ; dir = filepath.Dir(dir) {
-			p := FacetsPathIn(dir)
-			if _, err := os.Stat(p); err == nil {
-				return p, nil
-			}
-			if filepath.Dir(dir) == dir {
-				break
-			}
-		}
+		return facetsPathFrom(cwd), nil
 	}
 	return FacetsHome()
 }

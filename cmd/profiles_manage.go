@@ -2,29 +2,128 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/Facets-cloud/praxis-cli/internal/exitcode"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
 	"github.com/Facets-cloud/praxis-cli/internal/render"
 	"github.com/spf13/cobra"
 )
 
 // Subcommands of `praxis profiles` for managing the credentials store
 // without a login round-trip (issue #66: the only in-band alternatives were
-// hand-editing the credentials file or re-running login). Both are
-// power-user tools: a single-profile user never needs them, and neither
+// hand-editing the credentials file or re-running login). All are
+// power-user tools: a single-profile user never needs them, and none
 // touches installed skills or opens a browser.
 
 var (
 	profilesRenameJSON bool
 	profilesRmJSON     bool
+	profilesPinJSON    bool
 )
 
 func init() {
 	profilesRenameCmd.Flags().BoolVar(&profilesRenameJSON, "json", false, "JSON output")
 	profilesRmCmd.Flags().BoolVar(&profilesRmJSON, "json", false, "JSON output")
-	profilesCmd.AddCommand(profilesRenameCmd)
-	profilesCmd.AddCommand(profilesRmCmd)
+	profilesPinCmd.Flags().BoolVar(&profilesPinJSON, "json", false, "JSON output")
+	profilesUnpinCmd.Flags().BoolVar(&profilesPinJSON, "json", false, "JSON output")
+	profilesCmd.AddCommand(profilesRenameCmd, profilesRmCmd, profilesPinCmd, profilesUnpinCmd)
+}
+
+var profilesPinCmd = &cobra.Command{
+	Use:   "pin <profile>",
+	Short: "Use a profile in this folder, for praxis and raptor (writes .facets/profile)",
+	Long: `Pin a profile to the current folder tree. Every praxis and raptor command
+run in this folder, or below it, then uses the profile when nothing else
+selects one (--profile, PRAXIS_PROFILE and FACETS_PROFILE still win). Other
+folders, shells and agent sessions do not change.
+
+The pin is <folder>/.facets/profile and holds only the profile name, never a
+token. The folder is the project tree at or above the working directory, else
+the working directory itself. The home directory cannot be pinned: [default]
+is the machine default (` + "`praxis profiles set-default`" + `).
+
+Installed skills are not touched. To install the profile's org skills into
+this folder, run ` + "`praxis refresh-skills`" + ` here after the pin, or log in
+with ` + "`praxis login --profile <name> --local`" + `, which does both.`,
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeProfileNames,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		out := cmd.OutOrStdout()
+		asJSON := render.UseJSON(profilesPinJSON, false, out)
+		name := args[0]
+		if refusedProfileFlag(out, asJSON, "profiles pin",
+			"name the profile as the argument instead: `praxis profiles pin %s`", name) {
+			return nil
+		}
+		dir, err := pinDir()
+		if err == nil {
+			err = credentials.WritePin(dir, name)
+		}
+		if err == nil {
+			// A pinned folder is a project root; keep its state out of git.
+			_, err = paths.InitProjectRoot(dir)
+		}
+		if err != nil {
+			render.PrintError(out, asJSON, err.Error(),
+				"run `praxis profiles` to see what exists; a pin needs a control-plane PAT profile", exitcode.Usage)
+			osExit(exitcode.Usage)
+			return err // reached only under test (osExit stubbed)
+		}
+		pin := credentials.PinPathIn(dir)
+		warn := raptorPinWarning()
+		if warn != "" {
+			fmt.Fprintln(os.Stderr, "Warning: "+warn)
+		}
+		if asJSON {
+			payload := map[string]any{"ok": true, "profile": name, "pin_path": pin}
+			if warn != "" {
+				payload["raptor_pin_warning"] = warn
+			}
+			return render.JSON(out, payload)
+		}
+		fmt.Fprintf(out, "✓ Pinned profile %q to %s (%s)\n", name, dir, pin)
+		fmt.Fprintln(out, "  praxis and raptor use it in this folder. Run `praxis refresh-skills` here to install its org skills.")
+		return nil
+	},
+}
+
+var profilesUnpinCmd = &cobra.Command{
+	Use:   "unpin",
+	Short: "Remove the profile pin of this folder (.facets/profile)",
+	Long: `Remove the nearest pin at or above the working directory. Commands in that
+folder then use the machine default again. Credentials and installed skills
+are not touched.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		out := cmd.OutOrStdout()
+		asJSON := render.UseJSON(profilesPinJSON, false, out)
+		path, err := credentials.RemovePin()
+		if err != nil {
+			return err
+		}
+		if asJSON {
+			return render.JSON(out, map[string]any{"ok": true, "removed": path})
+		}
+		if path == "" {
+			fmt.Fprintln(out, "No pin at or above this folder.")
+			return nil
+		}
+		fmt.Fprintf(out, "✓ Removed %s\n", path)
+		return nil
+	},
+}
+
+// pinDir is where a new pin goes: the project tree at or above the working
+// directory, so a pin from a subfolder does not nest a second tree, else the
+// working directory.
+func pinDir() (string, error) {
+	if root, ok, _ := paths.ProjectRoot(); ok {
+		return filepath.Dir(root), nil
+	}
+	return paths.Getwd()
 }
 
 var profilesRenameCmd = &cobra.Command{

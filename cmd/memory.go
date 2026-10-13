@@ -67,8 +67,8 @@ var memoryCmd = &cobra.Command{
 	Use:   "memory",
 	Short: "Recall and manage org memories (AI-only — JSON output)",
 	Long: `Memories are durable facts (conventions, decisions, references) the
-organization has captured on this Praxis deployment. The praxis-memory
-meta-skill teaches AI hosts when to read vs write.
+organization has captured on this Praxis deployment. The praxis skill's
+memory reference teaches AI hosts when to read vs write.
 
 Read paths:
   praxis memory recall "<query>"   Server-side keyword ranking. Fast,
@@ -133,12 +133,11 @@ func activeOrAuthExit(out io.Writer) credentials.Active {
 		os.Exit(exitcode.Error)
 	}
 	if !active.Loaded || active.Profile.Token == "" {
-		render.PrintError(out, true,
-			fmt.Sprintf("no credentials for profile %q", active.Name),
-			"run `praxis login` (or `praxis login --profile "+active.Name+"`)",
-			exitcode.Auth)
+		msg, hint := noCredentials(active)
+		render.PrintError(out, true, msg, hint, exitcode.Auth)
 		os.Exit(exitcode.Auth)
 	}
+	noteProfileChoice(active)
 	return active
 }
 

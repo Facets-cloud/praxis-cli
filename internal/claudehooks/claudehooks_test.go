@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -198,7 +199,7 @@ func TestInstallPreservesForeignHooksAndKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected settings.json.bak, got %v", err)
 	}
-	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
+	if perm := fi.Mode().Perm(); perm&0o077 != 0 && runtime.GOOS != "windows" { // no Unix modes on Windows
 		t.Errorf("settings backup must not be group/world readable, got %o", perm)
 	}
 }
@@ -392,6 +393,9 @@ func TestInstallReplacesStaleCaskroomEntry(t *testing.T) {
 // BinaryPath must not resolve symlinks: the resolved target is the
 // version-stamped path that the next upgrade deletes.
 func TestBinaryPathPrefersTheStablePathEntry(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a bin/praxis symlink without .exe, which LookPath does not find on Windows")
+	}
 	dir := t.TempDir()
 	staged := filepath.Join(dir, "praxis_darwin_arm64")
 	if err := os.WriteFile(staged, []byte("#!/bin/sh\n"), 0o755); err != nil {

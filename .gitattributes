@@ -1,0 +1,3 @@
+# The embedded skill tree is part of the binary and of its digest. A CRLF
+# checkout (Git for Windows default) would change both.
+internal/skillinstall/embedded/** text eol=lf

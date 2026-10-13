@@ -5,16 +5,21 @@
 package skillinstall
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/harness"
 	"github.com/Facets-cloud/praxis-cli/internal/paths"
+	"github.com/Facets-cloud/praxis-cli/internal/skillcatalog"
 )
 
 // Installation is one (skill, harness, file) tuple — the unit recorded in
@@ -24,6 +29,9 @@ type Installation struct {
 	Harness     string    `json:"harness"`
 	Path        string    `json:"path"`
 	InstalledAt time.Time `json:"installed_at"`
+	Source      string    `json:"source,omitempty"`
+	Scope       string    `json:"scope,omitempty"`
+	Digest      string    `json:"digest,omitempty"`
 }
 
 // AgentInstallation is one (agent, harness, file) tuple — the unit
@@ -41,6 +49,40 @@ type AgentInstallation struct {
 type Receipt struct {
 	Skills []Installation      `json:"skills"`
 	Agents []AgentInstallation `json:"agents,omitempty"`
+	// Org is the profile whose org catalog is installed in this root. Older
+	// receipts have none.
+	Org *InstalledOrg `json:"org,omitempty"`
+}
+
+// InstalledOrg names a profile and its deployment URL.
+type InstalledOrg struct {
+	Profile string `json:"profile"`
+	URL     string `json:"url"`
+}
+
+// SetOrg records that the active root now holds profile's org catalog.
+func SetOrg(profile, url string) error {
+	return withSkillLock(func() error {
+		r, err := loadReceipt()
+		if err != nil {
+			return err
+		}
+		r.Org = &InstalledOrg{Profile: profile, URL: url}
+		return saveReceipt(r)
+	})
+}
+
+// OrgAt returns the org recorded in the receipt under root (a .praxis folder).
+func OrgAt(root string) (InstalledOrg, bool) {
+	data, err := os.ReadFile(filepath.Join(root, "installed.json"))
+	if err != nil {
+		return InstalledOrg{}, false
+	}
+	var r Receipt
+	if json.Unmarshal(data, &r) != nil || r.Org == nil {
+		return InstalledOrg{}, false
+	}
+	return *r.Org, true
 }
 
 // Install writes the named skill into every detected harness's user-level
@@ -52,14 +94,13 @@ type Receipt struct {
 // dispatched to InstallTree. For server-fetched org skills, use
 // InstallWithBody instead.
 func Install(skillName string, hosts []harness.Harness) ([]Installation, error) {
-	if fsys, ok := treeSkillFS(skillName); ok {
-		return InstallTree(skillName, fsys, hosts)
-	}
-	body, err := ContentFor(skillName)
+	w, err := embeddedWrite(skillName)
 	if err != nil {
 		return nil, err
 	}
-	return InstallWithBody(skillName, body, hosts)
+	var out []Installation
+	err = withSkillLock(func() error { var err error; out, err = applyPackages([]packageWrite{w}, nil, hosts); return err })
+	return out, err
 }
 
 // installToHosts writes a skill once per unique SkillDir (via write, called
@@ -71,36 +112,13 @@ func Install(skillName string, hosts []harness.Harness) ([]Installation, error) 
 // a sibling harness just populated, since the tree writers clear it first.
 // The recorded path is always <dir>/SKILL.md.
 func installToHosts(skillName string, hosts []harness.Harness, write func(dir string) error) ([]Installation, error) {
-	receipt, err := loadReceipt()
-	if err != nil {
-		return nil, err
-	}
-
-	now := time.Now().UTC()
-	results := make([]Installation, 0, len(hosts))
-	written := make(map[string]bool, len(hosts))
-	for _, h := range hosts {
-		dir := filepath.Join(h.SkillDir, skillName)
-		if !written[dir] {
-			if err := write(dir); err != nil {
-				return results, err
-			}
-			written[dir] = true
-		}
-		install := Installation{
-			SkillName:   skillName,
-			Harness:     h.Name,
-			Path:        filepath.Join(dir, "SKILL.md"),
-			InstalledAt: now,
-		}
-		results = append(results, install)
-		receipt = upsert(receipt, install)
-	}
-
-	if err := saveReceipt(receipt); err != nil {
-		return results, fmt.Errorf("save receipt: %w", err)
-	}
-	return results, nil
+	var results []Installation
+	err := withSkillLock(func() error {
+		var err error
+		results, err = applyPackages([]packageWrite{{name: skillName, source: "cli", write: write}}, nil, hosts)
+		return err
+	})
+	return results, err
 }
 
 // InstallTree writes a multi-file (tree) skill into every host's skill
@@ -119,12 +137,14 @@ func InstallTree(skillName string, fsys fs.FS, hosts []harness.Harness) ([]Insta
 // binary whose embedded tree dropped or renamed a file does not leave the
 // stale file behind — the on-disk tree always matches the embedded source.
 func writeTree(fsys fs.FS, dstDir string) error {
-	if err := os.RemoveAll(dstDir); err != nil {
-		return fmt.Errorf("clear %s: %w", dstDir, err)
-	}
 	return fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if p != "." {
+			if err := portablePath(p); err != nil {
+				return err
+			}
 		}
 		dst := filepath.Join(dstDir, filepath.FromSlash(p))
 		if d.IsDir() {
@@ -133,6 +153,13 @@ func writeTree(fsys fs.FS, dstDir string) error {
 			}
 			return nil
 		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsafe skill file path %q: not regular", p)
+		}
 		data, err := fs.ReadFile(fsys, p)
 		if err != nil {
 			return fmt.Errorf("read embedded %s: %w", p, err)
@@ -140,7 +167,7 @@ func writeTree(fsys fs.FS, dstDir string) error {
 		if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(dst), err)
 		}
-		if err := os.WriteFile(dst, data, 0600); err != nil {
+		if err := os.WriteFile(dst, data, installedMode(p, info.Mode())); err != nil {
 			return fmt.Errorf("write %s: %w", dst, err)
 		}
 		return nil
@@ -193,8 +220,16 @@ func InstallTreeWithBodies(skillName, primary string, files []FileBody, hosts []
 // is rejected: the server validates this too, but the CLI must never write
 // outside the skill folder on the strength of a server response.
 func writeBodies(dstDir, primary string, files []FileBody) error {
-	if err := os.RemoveAll(dstDir); err != nil {
-		return fmt.Errorf("clear %s: %w", dstDir, err)
+	seen := map[string]bool{"skill.md": true}
+	for _, f := range files {
+		if err := portablePath(f.Path); err != nil {
+			return err
+		}
+		key := strings.ToLower(f.Path)
+		if seen[key] {
+			return fmt.Errorf("duplicate skill file path %q", f.Path)
+		}
+		seen[key] = true
 	}
 	if err := os.MkdirAll(dstDir, 0700); err != nil {
 		return fmt.Errorf("create %s: %w", dstDir, err)
@@ -203,15 +238,15 @@ func writeBodies(dstDir, primary string, files []FileBody) error {
 		return fmt.Errorf("write %s: %w", filepath.Join(dstDir, "SKILL.md"), err)
 	}
 	for _, f := range files {
-		clean := filepath.Clean(filepath.FromSlash(f.Path))
-		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("unsafe skill file path %q", f.Path)
-		}
-		dst := filepath.Join(dstDir, clean)
+		dst := filepath.Join(dstDir, filepath.FromSlash(f.Path))
 		if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(dst), err)
 		}
-		if err := os.WriteFile(dst, []byte(f.Content), 0600); err != nil {
+		mode := fs.FileMode(0600)
+		if strings.HasPrefix(f.Path, "scripts/") {
+			mode = 0700
+		}
+		if err := os.WriteFile(dst, []byte(f.Content), mode); err != nil {
 			return fmt.Errorf("write %s: %w", dst, err)
 		}
 	}
@@ -223,6 +258,15 @@ func writeBodies(dstDir, primary string, files []FileBody) error {
 // empty), and updates the receipt. Returns the entries that were
 // actually removed.
 func Uninstall(skillName string) ([]Installation, error) {
+	return lockedInstallations(func() ([]Installation, error) { return uninstallLocked(skillName) })
+}
+
+func lockedInstallations(fn func() ([]Installation, error)) (out []Installation, err error) {
+	err = withSkillLock(func() error { var e error; out, e = fn(); return e })
+	return
+}
+
+func uninstallLocked(skillName string) ([]Installation, error) {
 	receipt, err := loadReceipt()
 	if err != nil {
 		return nil, err
@@ -270,6 +314,10 @@ func Uninstall(skillName string) ([]Installation, error) {
 // `"praxis-"` prefix naturally; this exclusion handles new
 // prefix-shaped meta-skills as they're added.
 func UninstallByPrefix(prefix string) ([]Installation, error) {
+	return lockedInstallations(func() ([]Installation, error) { return uninstallByPrefixLocked(prefix) })
+}
+
+func uninstallByPrefixLocked(prefix string) ([]Installation, error) {
 	if prefix == "" {
 		return nil, fmt.Errorf("UninstallByPrefix: prefix must be non-empty")
 	}
@@ -319,6 +367,10 @@ func UninstallByPrefix(prefix string) ([]Installation, error) {
 // Meta-skills (anything in ContentFor) are PRESERVED — see UninstallByPrefix
 // for the same exclusion logic.
 func RemoveOrphanedByPrefix(prefix string, hosts []harness.Harness, keep map[string]bool) ([]Installation, error) {
+	return lockedInstallations(func() ([]Installation, error) { return removeOrphanedByPrefixLocked(prefix, hosts, keep) })
+}
+
+func removeOrphanedByPrefixLocked(prefix string, hosts []harness.Harness, keep map[string]bool) ([]Installation, error) {
 	if prefix == "" {
 		return nil, fmt.Errorf("RemoveOrphanedByPrefix: prefix must be non-empty")
 	}
@@ -377,47 +429,169 @@ func List() ([]Installation, error) {
 	return receipt.Skills, nil
 }
 
-// Refresh re-writes the SKILL.md for every installation in the receipt
-// using the current ContentFor(). Used after `praxis update` to pick up
-// new skill content, and exposed as `praxis refresh-skills` for manual
-// invocation. Entries whose skill no longer exists in ContentFor are
-// skipped (not removed) so a future update reintroducing the skill can
-// repopulate them. Returns the entries actually refreshed.
+// Refresh rewrites every embedded skill in the receipt from this binary, one
+// transaction per skill. Catalog skills are skipped: login and refresh-skills
+// fetch those. Used after `praxis update`.
 func Refresh() ([]Installation, error) {
+	return refreshWhere(func(Installation) (bool, error) { return true, nil })
+}
+
+// refreshWhere rewrites the embedded skills at the receipt entries that match,
+// then retires the replaced skills on those hosts.
+func refreshWhere(match func(Installation) (bool, error)) (refreshed []Installation, err error) {
+	err = withSkillLock(func() error {
+		receipt, err := loadReceipt()
+		if err != nil {
+			return err
+		}
+		if repairForeignEntries(&receipt) {
+			if err := saveReceipt(receipt); err != nil {
+				return err
+			}
+		}
+		var names []string
+		hosts := map[string][]harness.Harness{}
+		for _, e := range receipt.Skills {
+			if !IsMetaSkill(e.SkillName) {
+				continue
+			}
+			ok, err := match(e)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				continue
+			}
+			if _, ok := hosts[e.SkillName]; !ok {
+				names = append(names, e.SkillName)
+			}
+			hosts[e.SkillName] = append(hosts[e.SkillName], harness.Harness{Name: e.Harness, SkillDir: filepath.Dir(filepath.Dir(e.Path))})
+		}
+		// One broken skill must not stop the others from refreshing.
+		var errs []error
+		for _, name := range names {
+			w, err := embeddedWrite(name)
+			if err == nil {
+				var out []Installation
+				out, err = applyPackages([]packageWrite{w}, nil, hosts[name])
+				refreshed = append(refreshed, out...)
+			}
+			if err != nil {
+				errs = append(errs, fmt.Errorf("refresh %s: %w", name, err))
+			}
+		}
+		if len(hosts[praxisSkillName]) > 0 {
+			if _, err := retireLegacyLocked(hosts[praxisSkillName]); err != nil {
+				errs = append(errs, fmt.Errorf("retire replaced skills: %w", err))
+			}
+		}
+		return errors.Join(errs...)
+	})
+	return
+}
+
+// repairForeignEntries fixes a project receipt that an older praxis damaged by
+// recording a user-level install in it (a background setup that ran inside the
+// project). An embedded-skill entry whose path is outside the project points
+// at the project's own copy when that exists (with no digest, so the next
+// refresh rewrites it), and is dropped otherwise. The home receipt is never
+// changed. Reports whether the receipt changed.
+func repairForeignEntries(r *Receipt) bool {
+	root, err := paths.ActiveRoot()
+	if err != nil {
+		return false
+	}
+	if homeRoot, herr := paths.Dir(); herr != nil || root == homeRoot {
+		return false
+	}
+	base := filepath.Dir(root)
+	home, _ := paths.Home()
+	have := map[string]bool{}
+	for _, e := range r.Skills {
+		if under(base, e.Path) {
+			have[e.SkillName+"\x00"+e.Harness] = true
+		}
+	}
+	changed := false
+	kept := r.Skills[:0]
+	for _, e := range r.Skills {
+		if !IsMetaSkill(e.SkillName) || under(base, e.Path) {
+			kept = append(kept, e)
+			continue
+		}
+		changed = true
+		rel, rerr := filepath.Rel(home, e.Path)
+		if home == "" || rerr != nil || !filepath.IsLocal(rel) || have[e.SkillName+"\x00"+e.Harness] {
+			continue
+		}
+		if _, serr := os.Stat(filepath.Join(base, rel)); serr != nil {
+			continue
+		}
+		e.Path, e.Digest = filepath.Join(base, rel), ""
+		have[e.SkillName+"\x00"+e.Harness] = true
+		kept = append(kept, e)
+	}
+	r.Skills = kept
+	return changed
+}
+
+// under reports whether path is inside dir.
+func under(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && filepath.IsLocal(rel)
+}
+
+// embeddedWrite is the package write for a skill embedded in this binary.
+func embeddedWrite(name string) (packageWrite, error) {
+	tree, ok := treeSkillFS(name)
+	if !ok {
+		return packageWrite{}, fmt.Errorf("unknown skill %q (only embedded skills install from the binary)", name)
+	}
+	return packageWrite{name: name, source: "embedded", scope: "builtin", write: func(dir string) error { return writeTree(tree, dir) }}, nil
+}
+
+// RetireLegacyBuiltins removes the embedded skills that the praxis package
+// replaced, on each host that now has praxis. Only receipt entries written by
+// an embedded install (or by a praxis too old to record a source) qualify, so
+// an org skill that reuses a legacy name is left alone. The engine backs up
+// any tree it cannot prove unchanged.
+func RetireLegacyBuiltins(hosts []harness.Harness) (retired []Installation, err error) {
+	err = withSkillLock(func() error {
+		var e error
+		retired, e = retireLegacyLocked(hosts)
+		return e
+	})
+	return
+}
+
+func retireLegacyLocked(hosts []harness.Harness) ([]Installation, error) {
 	receipt, err := loadReceipt()
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
-	refreshed := make([]Installation, 0, len(receipt.Skills))
-	for i, entry := range receipt.Skills {
-		// Multi-file tree meta-skills: rewrite the whole tree from embed.
-		if fsys, ok := treeSkillFS(entry.SkillName); ok {
-			if err := writeTree(fsys, filepath.Dir(entry.Path)); err != nil {
-				return refreshed, fmt.Errorf("refresh tree %s: %w", entry.SkillName, err)
+	var retire []Installation
+	var where []harness.Harness
+	seen := map[Installation]bool{}
+	for _, h := range hosts {
+		if _, err := os.Stat(filepath.Join(h.SkillDir, praxisSkillName, "SKILL.md")); err != nil {
+			continue
+		}
+		where = append(where, h)
+		for _, e := range receipt.Skills {
+			if slices.Contains(legacyBuiltinSkills, e.SkillName) && (e.Source == "" || e.Source == "embedded") &&
+				e.Path == filepath.Join(h.SkillDir, e.SkillName, "SKILL.md") && !seen[e] {
+				seen[e] = true
+				retire = append(retire, e)
 			}
-			receipt.Skills[i].InstalledAt = now
-			refreshed = append(refreshed, receipt.Skills[i])
-			continue
 		}
-		body, err := ContentFor(entry.SkillName)
-		if err != nil {
-			// Skill no longer in catalog — leave the file alone, skip.
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(entry.Path), 0700); err != nil {
-			return refreshed, fmt.Errorf("ensure dir for %s: %w", entry.Path, err)
-		}
-		if err := os.WriteFile(entry.Path, []byte(body), 0600); err != nil {
-			return refreshed, fmt.Errorf("refresh %s: %w", entry.Path, err)
-		}
-		receipt.Skills[i].InstalledAt = now
-		refreshed = append(refreshed, receipt.Skills[i])
 	}
-	if err := saveReceipt(receipt); err != nil {
-		return refreshed, fmt.Errorf("save receipt: %w", err)
+	if len(retire) == 0 {
+		return nil, nil
 	}
-	return refreshed, nil
+	if _, err := applyPackages(nil, retire, where); err != nil {
+		return nil, err
+	}
+	return retire, nil
 }
 
 // upsert replaces an existing (skill, harness) entry or appends a new one.
@@ -482,4 +656,124 @@ func saveReceipt(r Receipt) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// installedMode is the mode writeTree gives an embedded file: scripts and
+// executable files are 0700, everything else 0600.
+func installedMode(p string, mode fs.FileMode) fs.FileMode {
+	if mode.Perm()&0111 != 0 || strings.HasPrefix(p, "scripts/") {
+		return 0700
+	}
+	return 0600
+}
+
+// embeddedDigest is the digest an install of embedded skill name records:
+// hashTree's format over what writeTree would write, computed without writing.
+func embeddedDigest(name string) (string, error) {
+	tree, ok := treeSkillFS(name)
+	if !ok {
+		return "", fmt.Errorf("unknown skill %q (only embedded skills install from the binary)", name)
+	}
+	h := sha256.New()
+	err := fs.WalkDir(tree, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			fmt.Fprintf(h, "dir:%s\x00", p)
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		b, err := fs.ReadFile(tree, p)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "file:%s:%o:%d\x00", p, execBits(installedMode(p, info.Mode())), len(b))
+		_, _ = h.Write(b)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// RefreshIfStale rewrites the embedded skills when the receipt records one
+// that this binary would write differently — after a brew upgrade, a
+// `praxis update` or a manual install. The receipt's digest is what was
+// installed, so a skill the user edited does not trigger it. A receipt with no
+// embedded skill is left alone: the first run installs it.
+func RefreshIfStale() ([]Installation, error) {
+	// Only stale entries: a current install elsewhere keeps the user's edits.
+	want := map[string]string{}
+	return refreshWhere(func(e Installation) (bool, error) {
+		d, ok := want[e.SkillName]
+		if !ok {
+			var err error
+			if d, err = embeddedDigest(e.SkillName); err != nil {
+				return false, err
+			}
+			want[e.SkillName] = d
+		}
+		return e.Digest != d, nil
+	})
+}
+
+// InstallCatalogSkill installs one org catalog skill and records its source
+// and scope (global | organization | personal) in the receipt, so a later
+// cleanup can tell a replaced GLOBAL skill from an org skill of the same name.
+func InstallCatalogSkill(name, scope, primary string, files []FileBody, hosts []harness.Harness) (out []Installation, err error) {
+	w := packageWrite{name: name, source: "catalog", scope: scope, write: func(dir string) error { return writeBodies(dir, primary, files) }}
+	err = withSkillLock(func() error {
+		var e error
+		out, e = applyPackages([]packageWrite{w}, nil, hosts)
+		return e
+	})
+	return
+}
+
+// RetireReplacedGlobals removes installed copies of the GLOBAL skills that the
+// praxis and raptor CLIs now ship (skillcatalog.ReplacedBy), on each host where
+// has reports the replacement in place. Only catalog installs qualify; an
+// entry recorded as organization or personal stays. An entry from an older
+// praxis has no scope, so it is treated as global; the next login reinstalls
+// an org skill of that name. Changed copies are backed up first.
+func RetireReplacedGlobals(has func(h harness.Harness, capability string) bool) (retired []Installation, err error) {
+	err = withSkillLock(func() error {
+		receipt, err := loadReceipt()
+		if err != nil {
+			return err
+		}
+		var where []harness.Harness
+		seenHost := map[string]bool{}
+		for _, e := range receipt.Skills {
+			c := skillcatalog.ReplacedBy(e.SkillName)
+			if c == "" || !strings.HasPrefix(e.SkillName, skillcatalog.PraxisPrefix) ||
+				(e.Scope != "" && e.Scope != "global") ||
+				(e.Source != "" && e.Source != "cli" && e.Source != "catalog") {
+				continue
+			}
+			h := harness.Harness{Name: e.Harness, SkillDir: filepath.Dir(filepath.Dir(e.Path))}
+			if !has(h, c) {
+				continue
+			}
+			retired = append(retired, e)
+			if key := h.Name + "\x00" + h.SkillDir; !seenHost[key] {
+				seenHost[key] = true
+				where = append(where, h)
+			}
+		}
+		if len(retired) == 0 {
+			return nil
+		}
+		if _, err := applyPackages(nil, retired, where); err != nil {
+			retired = nil
+			return err
+		}
+		return nil
+	})
+	return
 }

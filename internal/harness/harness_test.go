@@ -3,6 +3,7 @@ package harness
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -114,16 +115,28 @@ func TestDetect_Antigravity_AppDataDir(t *testing.T) {
 	}
 }
 
-func TestDetect_Antigravity_NotOnBareGemini(t *testing.T) {
+func TestDetect_Antigravity_OnBareGemini(t *testing.T) {
 	home := withIsolatedHome(t)
-	// A bare ~/.gemini (Gemini CLI's signal) must NOT trip Antigravity —
-	// the two share the ~/.gemini root and must stay disambiguated.
+	// A standard Antigravity.app install leaves only ~/.gemini (and
+	// ~/.gemini/antigravity, ~/.gemini/config) and no binary on PATH. Like
+	// skoop and raptor, any ~/.gemini folder counts.
 	if err := os.MkdirAll(filepath.Join(home, ".gemini"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	h, _ := ByName("antigravity")
+	if !h.Detected {
+		t.Errorf("Antigravity not detected on ~/.gemini: %+v", h)
+	}
+}
+
+func TestDetect_Antigravity_NotOnAGeminiFile(t *testing.T) {
+	home := withIsolatedHome(t)
+	if err := os.WriteFile(filepath.Join(home, ".gemini"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := ByName("antigravity")
 	if h.Detected {
-		t.Errorf("Antigravity must not be detected on a bare ~/.gemini: %+v", h)
+		t.Errorf("Antigravity detected on a ~/.gemini file: %+v", h)
 	}
 }
 
@@ -209,9 +222,9 @@ func TestProjectScoped(t *testing.T) {
 		{
 			// Paths not under the user's home are left unchanged.
 			name:      "non-home dirs left unchanged",
-			harness:   Harness{Name: "x", SkillDir: "/etc/skills", AgentDir: "/etc/agents"},
-			wantSkill: "/etc/skills",
-			wantAgent: "/etc/agents",
+			harness:   Harness{Name: "x", SkillDir: outsideHome("etc/skills"), AgentDir: outsideHome("etc/agents")},
+			wantSkill: outsideHome("etc/skills"),
+			wantAgent: outsideHome("etc/agents"),
 		},
 	}
 	for _, tt := range tests {
@@ -308,4 +321,13 @@ func TestAllHarnessesHaveAgentDir(t *testing.T) {
 			t.Errorf("harness %q AgentDir = %q, want %q", h.Name, h.AgentDir, got)
 		}
 	}
+}
+
+// outsideHome is an absolute path outside any home folder: /<rel>, or C:\<rel>
+// on Windows, where /<rel> is not absolute.
+func outsideHome(rel string) string {
+	if runtime.GOOS == "windows" {
+		return `C:\` + filepath.FromSlash(rel)
+	}
+	return "/" + rel
 }

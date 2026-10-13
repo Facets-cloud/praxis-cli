@@ -10,6 +10,8 @@ func TestCanonicalGitURL(t *testing.T) {
 		"git@github.com:org/repo.git",
 		"ssh://git@github.com/org/repo.git",
 		"  https://github.com/ORG/Repo.git/ ",
+		"HTTPS://GitHub.com/Org/Repo.git",
+		"SSH://git@github.com/org/repo.GIT",
 	}
 	want := "github.com/org/repo"
 	for _, in := range same {
@@ -27,7 +29,7 @@ func TestCanonicalGitURL(t *testing.T) {
 
 func TestNudgeContextNamesCatalogsAndSkill(t *testing.T) {
 	got := NudgeContext([]string{"capillary-cloud", "saas-cp"})
-	for _, sub := range []string{"capillary-cloud", "saas-cp", "use-ig", "praxis mcp ig"} {
+	for _, sub := range []string{"capillary-cloud", "saas-cp", "references/catalog-read.md", "praxis mcp ig"} {
 		if !contains(got, sub) {
 			t.Errorf("nudge missing %q: %s", sub, got)
 		}

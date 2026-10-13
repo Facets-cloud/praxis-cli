@@ -46,3 +46,18 @@ func homeFacetsURL(t *testing.T) string {
 	}
 	return credentials.ParseRawINI(data)["default"]["control_plane_url"]
 }
+
+// seedLegacyTree writes what an older `login --local` left in a tree: the
+// home section `name` and a [default] copy, in <repo>/.facets/credentials.
+func seedLegacyTree(t *testing.T, repo, name string) {
+	t.Helper()
+	store, err := credentials.LoadHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, section := range []string{name, credentials.DefaultProfileName} {
+		if err := credentials.PutLocal(section, store[name], repo); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

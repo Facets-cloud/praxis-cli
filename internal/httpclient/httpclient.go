@@ -26,14 +26,14 @@ var sensitiveHeaders = []string{"Authorization", "Cookie", "Cookie2", "X-Facets-
 
 // New returns a client that carries a request's method, body, and auth headers
 // across redirects, dropping the auth headers when the target leaves the
-// original domain.
+// original domain. Every request also carries the identity headers.
 //
 // The method/body preservation is not incidental: Go's default policy
 // downgrades POST→GET and drops the body on 301/302/303, so a gateway that
 // redirects to its canonical host would turn every MCP invoke into a body-less
 // GET that 404s.
 func New(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout, CheckRedirect: checkRedirect}
+	return &http.Client{Timeout: timeout, CheckRedirect: checkRedirect, Transport: identityTransport{}}
 }
 
 func checkRedirect(req *http.Request, via []*http.Request) error {

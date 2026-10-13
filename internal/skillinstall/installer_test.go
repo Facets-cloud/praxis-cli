@@ -241,67 +241,13 @@ func TestUninstallByPrefix_KeepsMetaWipesPrefixed(t *testing.T) {
 	}
 }
 
-// TestUninstallByPrefix_KeepsPrefixShapedMetaSkill pins the invariant
-// that prefix-shaped meta-skills (e.g. "praxis-memory") survive the
-// "praxis-" wipe via the IsMetaSkill exclusion. Without this guard, a
-// profile switch would silently remove the memory meta-skill and break
-// the next session's `praxis memory recall` discoverability.
-func TestUninstallByPrefix_KeepsPrefixShapedMetaSkill(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	hosts := fakeHosts(t)
-
-	// Both binary-embedded meta-skills + one org skill.
-	if _, err := Install("praxis", hosts); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Install("praxis-memory", hosts); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := InstallWithBody("praxis-k8s-operations", "k8s body", hosts); err != nil {
-		t.Fatal(err)
-	}
-
-	removed, err := UninstallByPrefix("praxis-")
-	if err != nil {
-		t.Fatalf("UninstallByPrefix err = %v", err)
-	}
-	// Only "praxis-k8s-operations" should be wiped — 1 skill × 3 hosts.
-	if len(removed) != 3 {
-		t.Errorf("removed %d entries; want 3 (only the org skill, across 3 hosts)", len(removed))
-	}
-	for _, e := range removed {
-		if e.SkillName != "praxis-k8s-operations" {
-			t.Errorf("unexpected removal: %q", e.SkillName)
-		}
-	}
-
-	// Both meta-skills must survive — 2 meta × 3 hosts = 6 entries.
-	recorded, err := List()
-	if err != nil {
-		t.Fatalf("List() err = %v", err)
-	}
-	if len(recorded) != 6 {
-		t.Errorf("List() = %d entries after wipe; want 6 (2 meta-skills x 3 hosts)", len(recorded))
-	}
-	survivors := map[string]int{}
-	for _, e := range recorded {
-		survivors[e.SkillName]++
-		if _, err := os.Stat(e.Path); err != nil {
-			t.Errorf("meta-skill file %s should still exist: %v", e.Path, err)
-		}
-	}
-	if survivors["praxis"] != 3 || survivors["praxis-memory"] != 3 {
-		t.Errorf("expected 3 of each meta-skill; got %+v", survivors)
-	}
-}
-
 func TestIsMetaSkill_CoversAllEmbedded(t *testing.T) {
 	tests := []struct {
 		name string
 		want bool
 	}{
 		{"praxis", true},
-		{"praxis-memory", true},
+		{"praxis-memory", false}, // replaced by the praxis package
 		{"praxis-k8s-operations", false},
 		{"random-skill", false},
 		{"", false},
@@ -320,7 +266,7 @@ func TestRemoveOrphanedByPrefix_RemovesOnlyUntrackedUnkeptSkillDirs(t *testing.T
 	hosts := fakeHosts(t)
 	host := hosts[0]
 
-	if _, err := Install("praxis-memory", hosts); err != nil {
+	if _, err := Install("praxis", hosts); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := InstallWithBody("praxis-recorded", "recorded body", hosts); err != nil {
@@ -358,42 +304,11 @@ func TestRemoveOrphanedByPrefix_RemovesOnlyUntrackedUnkeptSkillDirs(t *testing.T
 	for _, dir := range []string{
 		keptDir,
 		thirdPartyDir,
-		filepath.Join(host.SkillDir, "praxis-memory"),
+		filepath.Join(host.SkillDir, "praxis"),
 		filepath.Join(host.SkillDir, "praxis-recorded"),
 	} {
 		if _, err := os.Stat(dir); err != nil {
 			t.Errorf("dir should remain %s: %v", dir, err)
-		}
-	}
-}
-
-func TestMetaSkillNames_ReturnsAllEmbedded(t *testing.T) {
-	names := MetaSkillNames()
-	have := map[string]bool{}
-	for _, n := range names {
-		have[n] = true
-	}
-	for _, want := range []string{"praxis", "praxis-memory"} {
-		if !have[want] {
-			t.Errorf("MetaSkillNames() missing %q; got %v", want, names)
-		}
-	}
-}
-
-func TestContentFor_PraxisMemory_HasFrontmatterAndBody(t *testing.T) {
-	body, err := ContentFor("praxis-memory")
-	if err != nil {
-		t.Fatalf("ContentFor: %v", err)
-	}
-	for _, want := range []string{
-		"name: praxis-memory",
-		"description:",
-		"praxis memory recall",
-		"praxis memory add",
-		"Exit codes",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("praxis-memory body missing %q", want)
 		}
 	}
 }

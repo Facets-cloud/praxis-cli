@@ -21,10 +21,11 @@ import (
 var (
 	detectHarnesses         = harness.Detected
 	installSkill            = skillinstall.Install
-	installSkillBody        = skillinstall.InstallWithBody
-	installSkillTree        = skillinstall.InstallTreeWithBodies
+	installCatalogSkill     = skillinstall.InstallCatalogSkill
+	retireReplacedGlobals   = skillinstall.RetireReplacedGlobals
 	listInstalledSkill      = skillinstall.List
-	refreshSkills           = skillinstall.Refresh
+	refreshIfStale          = skillinstall.RefreshIfStale
+	retireLegacySkills      = skillinstall.RetireLegacyBuiltins
 	fetchCatalog            = skillcatalog.Fetch
 	fetchAgents             = agentcatalog.Fetch
 	installAgents           = agentinstall.Install
@@ -104,7 +105,7 @@ var (
 func init() {
 	refreshSkillsCmd.Flags().BoolVar(&refreshSkillsJSON, "json", false, "JSON output")
 	refreshSkillsCmd.Flags().BoolVar(&refreshSkillsProject, "project", false,
-		"install into the current repo (<cwd>/.claude/skills, ...) instead of the user-level home dir")
+		"pin the current repo to the active profile and install into it (<cwd>/.claude/skills, ...) instead of the user-level home dir")
 }
 
 var refreshSkillsCmd = &cobra.Command{
@@ -119,23 +120,25 @@ flow — useful when you're already logged in and just want to:
   • re-write the meta-skill body after ` + "`brew upgrade praxis`" + `
     (so AI hosts see the new on-disk content immediately)
 
-By default this installs at USER level — the host's home-scope skill
-dir (~/.claude/skills, and ~/.agents/skills shared by Codex and Gemini
-CLI) — so the skills apply across every repo. Pass --project to scope
-the install to the current repo instead, writing to <cwd>/.claude/skills (and the
-equivalent per-host project dirs). Use --project when you only want
-Praxis skills active inside one repository and not globally.
+By default this installs where the active profile is in effect: inside a
+pinned folder, into that folder; elsewhere at USER level — the host's
+home-scope skill dir (~/.claude/skills, and ~/.agents/skills shared by Codex
+and Gemini CLI) — so the skills apply across every repo. Pass --project to
+pin the current repo to the active profile (<cwd>/.facets/profile) and install
+into it, writing to <cwd>/.claude/skills (and the equivalent per-host project
+dirs).
 
 Requires an existing valid login. Exits 3 if not logged in — run
 ` + "`praxis login`" + ` first.
 
-This always re-syncs the ACTIVE profile, so a global ` + "`--profile`" + ` (or
-` + "`$PRAXIS_PROFILE`" + `) naming a DIFFERENT profile is REFUSED (exit 2,
-nothing changed): installing one profile's skills while [default] holds
-another is the exact state this flow prevents. Naming the active profile is
-allowed — it asks for the re-sync that was going to happen anyway. To change
-profiles, use ` + "`praxis profiles use X`" + ` — it switches and re-syncs in
-one step.
+This always re-syncs the profile in effect here (the folder's pin, else
+[default]), so a global ` + "`--profile`" + ` (or ` + "`$PRAXIS_PROFILE`" + `) naming a
+DIFFERENT profile is REFUSED (exit 2, nothing changed): installing one
+profile's skills where another is in effect is the exact state this flow
+prevents. Naming that profile is allowed — it asks for the re-sync that was
+going to happen anyway. To install another profile's skills, pin a folder to it
+(` + "`praxis profiles pin X`" + `, then ` + "`praxis refresh-skills`" + ` there), or make
+it the machine default (` + "`praxis profiles set-default X`" + `).
 
 For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 	Args: cobra.NoArgs,
@@ -154,7 +157,7 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 		// it looks like.
 		acts := credentials.OnDiskActiveName()
 		if refusedExplicitProfile(out, asJSON, "refresh-skills",
-			"run `praxis profiles use %s` — it switches AND re-syncs the skills in one step",
+			"pin a folder to it (`praxis profiles pin %s`) and run refresh-skills there, or make it the machine default with `praxis profiles set-default`",
 			acts) {
 			return nil
 		}
@@ -178,11 +181,11 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 		}
 
 		// --project pins this repo to the active profile (writes
-		// <cwd>/.facets/credentials and <cwd>/.praxis) and scopes the install
+		// <cwd>/.facets/profile and <cwd>/.praxis) and scopes the install
 		// there. Otherwise the install follows the resolved active root: project
 		// when we're already inside a local-mode tree, else user-level.
 		if refreshSkillsProject {
-			_, restore, perr := activateProfile(active.Name, true)
+			_, restore, perr := pinHere(active.Name)
 			if perr != nil {
 				render.PrintError(out, asJSON,
 					fmt.Sprintf("cannot scope to this directory: %v", perr),
@@ -194,10 +197,11 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 			defer restore()
 		}
 
-		// Through the seam, like login and `profiles use` — calling
+		// Through the seam, like login and `profiles set-default` — calling
 		// runPostAuthSetup directly made this the one sync path tests could not
 		// intercept, so nothing pinned that refresh-skills syncs at all.
 		state := postAuthSetup(out, asJSON, active.Profile.URL, active.Profile.Auth())
+		recordOrg(active.Name, active.Profile.URL, state)
 
 		// Report the *effective* scope (where files actually landed).
 		scope := "user"
@@ -209,6 +213,9 @@ For full setup including auth, use ` + "`praxis login`" + ` instead.`,
 				"profile":          active.Name,
 				"scope":            scope,
 				"meta_skill":       state.metaSkill,
+				"raptor_binary":    state.raptorBinary,
+				"raptor_skills":    state.raptorSkills,
+				"raptor_warning":   state.raptorWarning,
 				"removed_skills":   state.removedSkills,
 				"catalog_skills":   state.catalogSkills,
 				"agents":           state.agents,

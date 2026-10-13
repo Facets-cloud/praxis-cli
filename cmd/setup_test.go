@@ -2,11 +2,21 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
+	"github.com/Facets-cloud/praxis-cli/internal/credentials"
+	"github.com/Facets-cloud/praxis-cli/internal/harness"
+	"github.com/Facets-cloud/praxis-cli/internal/httpclient"
+	"github.com/Facets-cloud/praxis-cli/internal/paths"
+	"github.com/Facets-cloud/praxis-cli/internal/skillinstall"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/claudehooks"
 )
@@ -135,48 +145,44 @@ func TestFirstRunBootstrapNoHostStaysRetryable(t *testing.T) {
 	}
 }
 
-func TestInstallBootstrapSkillsWritesGTMSkill(t *testing.T) {
-	// Redirect HOME so the install (and its receipt) land in a temp tree.
+// The bootstrap installs the praxis skill with no login, and retires an
+// embedded skill it replaced that an older praxis left behind.
+func TestInstallBootstrapSkillsInstallsPraxisAndRetiresReplaced(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	n, err := installBootstrapSkills(io.Discard, true)
-	if err != nil {
-		t.Fatalf("install must not error: %v", err)
+	mustMkdir(t, filepath.Join(home, ".claude"))
+	old := filepath.Join(home, ".claude", "skills", "praxis-getting-started")
+	mustMkdir(t, old)
+	if err := os.WriteFile(filepath.Join(old, "SKILL.md"), []byte("old"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	if n == 0 {
-		t.Skip("no AI hosts detected on this machine — nothing to assert")
+	oldPath, _ := json.Marshal(filepath.Join(old, "SKILL.md")) // a Windows path holds backslashes
+	receipt := `{"skills":[{"skill_name":"praxis-getting-started","harness":"claude-code","path":` +
+		string(oldPath) + `,"installed_at":"2026-09-01T00:00:00Z"}]}`
+	mustMkdir(t, filepath.Join(home, ".praxis"))
+	if err := os.WriteFile(filepath.Join(home, ".praxis", "installed.json"), []byte(receipt), 0600); err != nil {
+		t.Fatal(err)
 	}
-	// The getting-started SKILL.md must be written with GTM content, no login.
-	found := false
-	_ = filepath.Walk(home, func(p string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil || info.IsDir() {
-			return nil //nolint:nilerr // deliberate: ignore walk error, skip directory
-		}
-		if filepath.Base(filepath.Dir(p)) == "praxis-getting-started" && filepath.Base(p) == "SKILL.md" {
-			b, _ := os.ReadFile(p)
-			if bodyHas(string(b), "Praxis by Facets") && bodyHas(string(b), "facets.cloud/signup") {
-				found = true
-			}
-		}
-		return nil
-	})
-	if !found {
-		t.Error("getting-started SKILL.md with GTM content was not installed into any host")
-	}
-}
 
-func bodyHas(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
+	n, err := installBootstrapSkills(io.Discard, true)
+	if err != nil || n == 0 {
+		t.Fatalf("installBootstrapSkills = %d, %v", n, err)
 	}
-	return false
+	want, _ := skillinstall.ContentFor("praxis")
+	if got, err := os.ReadFile(filepath.Join(home, ".claude", "skills", "praxis", "SKILL.md")); err != nil || string(got) != want {
+		t.Errorf("praxis skill not installed: %v", err)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("replaced skill still discoverable: %v", err)
+	}
 }
 
 // repairPraxisHooks heals a hook wired from a version-stamped path, and must
 // leave a machine that never logged in without any hooks at all.
 func TestRepairPraxisHooksHealsStalePathAndAddsNone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a bin/praxis symlink without .exe, which LookPath does not find on Windows")
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	binDir := filepath.Join(home, "bin")
@@ -223,6 +229,9 @@ func TestRepairPraxisHooksHealsStalePathAndAddsNone(t *testing.T) {
 
 // An unparseable settings.json must surface, not vanish.
 func TestRepairPraxisHooksReportsUnparseableSettings(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a bin/praxis symlink without .exe, which LookPath does not find on Windows")
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	binDir := filepath.Join(home, "bin")
@@ -257,5 +266,320 @@ func TestRepairPraxisHooksReportsUnparseableSettings(t *testing.T) {
 	}
 	if buf.Reset(); func() string { printHookRepair(&buf, true, repaired, warn); return buf.String() }() != "" {
 		t.Fatalf("printHookRepair printed under --json")
+	}
+}
+
+// The per-command refresh runs for ordinary commands of a release build only.
+func TestMaybeRefreshEmbeddedSkills(t *testing.T) {
+	tests := []struct {
+		version string
+		args    []string
+		want    bool
+	}{
+		{"1.16.0", []string{"mcp", "k8s_cli", "kubectl_get"}, true},
+		{"1.16.0", []string{"-p", "acme", "status"}, true},
+		{"1.16.0", nil, true},
+		{"dev", []string{"status"}, false},
+		{"1.16.0-3-gabc1234", []string{"status"}, false},
+		{"1.16.0", []string{"update"}, false},
+		{"1.16.0", []string{"upgrade", "--yes"}, false},
+		{"1.16.0", []string{"setup"}, false},
+		{"1.16.0", []string{"login"}, false},
+		{"1.16.0", []string{"refresh-skills"}, false},
+		{"1.16.0", []string{"git-credential", "get"}, false},
+		{"1.16.0", []string{"hook", "user-prompt-submit"}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.version+" "+strings.Join(tc.args, " "), func(t *testing.T) {
+			origV, origR, origG := version, refreshIfStale, retireReplacedGlobals
+			calls, retires := 0, 0
+			version = tc.version
+			refreshIfStale = func() ([]skillinstall.Installation, error) { calls++; return nil, nil }
+			retireReplacedGlobals = func(func(harness.Harness, string) bool) ([]skillinstall.Installation, error) {
+				retires++
+				return nil, nil
+			}
+			t.Cleanup(func() { version, refreshIfStale, retireReplacedGlobals = origV, origR, origG })
+			maybeRefreshEmbeddedSkills(tc.args)
+			if (calls == 1) != tc.want || (retires == 1) != tc.want {
+				t.Errorf("refresh calls = %d, retire calls = %d, want %t", calls, retires, tc.want)
+			}
+		})
+	}
+}
+
+// Setup starts once per release version, outside CI, for ordinary commands,
+// and only from the process that takes the claim.
+func TestMaybeStartSetup(t *testing.T) {
+	tests := []struct {
+		name     string
+		version  string
+		args     []string
+		ci       string
+		marker   string        // "" = no setup-version file
+		claimAge time.Duration // 0 = no claim file
+		startErr error
+		want     bool
+	}{
+		{"fresh install", "2.1.0", []string{"status"}, "", "", 0, nil, true},
+		{"after an upgrade", "2.1.0", []string{"mcp", "k8s_cli"}, "", "2.0.2", 0, nil, true},
+		{"bare praxis", "2.1.0", nil, "", "2.0.2", 0, nil, true},
+		{"already ran", "2.1.0", []string{"status"}, "", "2.1.0", 0, nil, false},
+		{"another process started it", "2.1.0", []string{"status"}, "", "2.0.2", time.Minute, nil, false},
+		{"failed setup, retry later", "2.1.0", []string{"status"}, "", "2.0.2", 59 * time.Minute, nil, false},
+		{"failed setup, retry now", "2.1.0", []string{"status"}, "", "2.0.2", 2 * time.Hour, nil, true},
+		{"dev build", "dev", []string{"status"}, "", "", 0, nil, false},
+		{"describe build", "2.1.0-3-gabc1234", []string{"status"}, "", "", 0, nil, false},
+		{"CI", "2.1.0", []string{"status"}, "true", "", 0, nil, false},
+		{"prompt hook", "2.1.0", []string{"hook", "user-prompt-submit"}, "", "", 0, nil, false},
+		{"ig hook", "2.1.0", []string{"ig", "hook"}, "", "", 0, nil, false},
+		{"login runs raptor itself", "2.1.0", []string{"login"}, "", "", 0, nil, false},
+		{"update", "2.1.0", []string{"update"}, "", "", 0, nil, false},
+		{"setup itself", "2.1.0", []string{"setup"}, "", "", 0, nil, false},
+		{"start fails", "2.1.0", []string{"status"}, "", "2.0.2", 0, os.ErrPermission, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			for _, k := range httpclient.CIEnvVars() {
+				t.Setenv(k, "")
+			}
+			t.Setenv("CI", tc.ci)
+			dir := filepath.Join(home, ".praxis")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			marker, claim := filepath.Join(dir, setupVersionFile), filepath.Join(dir, setupClaimFile)
+			if tc.marker != "" {
+				if err := os.WriteFile(marker, []byte(tc.marker+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.claimAge > 0 {
+				if err := os.WriteFile(claim, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				old := time.Now().Add(-tc.claimAge)
+				if err := os.Chtimes(claim, old, old); err != nil {
+					t.Fatal(err)
+				}
+			}
+			origV, origS := version, startSetup
+			starts := 0
+			version = tc.version
+			startSetup = func(string) error { starts++; return tc.startErr }
+			t.Cleanup(func() { version, startSetup = origV, origS })
+
+			maybeStartSetup(tc.args)
+
+			if (starts == 1) != tc.want {
+				t.Fatalf("starts = %d, want started %t", starts, tc.want)
+			}
+			// Only the setup process records the version.
+			b, _ := os.ReadFile(marker)
+			if got := strings.TrimSpace(string(b)); got != tc.marker {
+				t.Errorf("setup-version = %q, want %q", got, tc.marker)
+			}
+			info, err := os.Stat(claim)
+			switch {
+			case tc.want && tc.startErr == nil:
+				if err != nil || time.Since(info.ModTime()) > time.Minute {
+					t.Errorf("want a fresh claim, got %v", err)
+				}
+			case tc.want:
+				if err == nil {
+					t.Error("a failed start must release the claim")
+				}
+			case tc.claimAge == 0 && err == nil:
+				t.Error("a skipped command must not take the claim")
+			}
+		})
+	}
+}
+
+// The background setup gets its own log, and the caller does not wait for it.
+func TestStartBackgroundSetup(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".praxis")
+	orig := setupExecutable
+	t.Cleanup(func() { setupExecutable = orig })
+
+	setupExecutable = func() (string, error) { return trueBinary(t), nil }
+	if err := startBackgroundSetup(dir); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "setup.log")); err != nil {
+		t.Errorf("setup.log: %v", err)
+	}
+
+	setupExecutable = func() (string, error) { return filepath.Join(dir, "missing"), nil }
+	// Windows reports a missing program as exec.ErrNotFound.
+	if err := startBackgroundSetup(dir); !errors.Is(err, os.ErrNotExist) && !errors.Is(err, exec.ErrNotFound) {
+		t.Errorf("missing binary: err = %v, want ErrNotExist", err)
+	}
+}
+
+// A successful setup records its version and releases the claim.
+func TestSetupRecordsVersion(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if !claimSetup(filepath.Join(home, ".praxis", setupClaimFile), time.Now()) {
+		t.Fatal("claim")
+	}
+	origV := version
+	version = "2.1.0"
+	t.Cleanup(func() { version = origV })
+	var out bytes.Buffer
+	setupCmd.SetOut(&out)
+	t.Cleanup(func() { setupCmd.SetOut(nil) })
+
+	if err := setupCmd.RunE(setupCmd, nil); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(home, ".praxis", setupVersionFile))
+	if err != nil || strings.TrimSpace(string(b)) != "2.1.0" {
+		t.Errorf("setup-version = %q, %v; want 2.1.0", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".praxis", setupClaimFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("claim after a successful setup: %v, want removed", err)
+	}
+}
+
+// trueBinary is a program that starts and exits at once on this platform.
+func trueBinary(t *testing.T) string {
+	if runtime.GOOS == "windows" {
+		p, err := exec.LookPath("whoami.exe")
+		if err != nil {
+			t.Skip("whoami.exe not found")
+		}
+		return p
+	}
+	return "/usr/bin/true"
+}
+
+// After an upgrade, setup refreshes the praxis skill in every recorded project
+// tree, and forgets trees whose receipt is gone.
+func TestRefreshProjectSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := filepath.Join(home, "repo")
+	root := filepath.Join(repo, ".praxis")
+	restore := paths.OverrideActiveRoot(root)
+	host := harness.Harness{Name: "claude-code", SkillDir: filepath.Join(repo, ".claude", "skills")}
+	if _, err := skillinstall.Install("praxis", []harness.Harness{host}); err != nil {
+		t.Fatal(err)
+	}
+	restore()
+	// Make the project's copy stale, as an older praxis would have left it.
+	receipt := filepath.Join(root, "installed.json")
+	data, err := os.ReadFile(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r skillinstall.Receipt
+	if err := json.Unmarshal(data, &r); err != nil {
+		t.Fatal(err)
+	}
+	fresh := r.Skills[0].Digest
+	r.Skills[0].Digest = "stale"
+	if data, err = json.Marshal(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(receipt, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{repo, repo, filepath.Join(home, "gone")} {
+		recordProject(p)
+	}
+
+	refreshProjectSkills()
+
+	data, _ = os.ReadFile(receipt)
+	if !strings.Contains(string(data), fresh) || strings.Contains(string(data), `"stale"`) {
+		t.Errorf("project receipt was not refreshed:\n%s", data)
+	}
+	if !strings.HasPrefix(r.Skills[0].Path, repo) {
+		t.Fatalf("the install escaped the project tree: %s", r.Skills[0].Path)
+	}
+	_, l := loadProjects()
+	if strings.Join(l.Projects, ",") != repo {
+		t.Errorf("registry = %v, want only the live tree, once", l.Projects)
+	}
+}
+
+// Setup installs user-level skills, so run inside a project tree it still
+// writes the home receipt and leaves the project receipt alone.
+func TestSetup_InsideAProject_WritesTheHomeReceipt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	clearFacetsEnv(t)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	seedPAT(t, "default", "https://d.test", "td")
+	repo := repoUnderHome(t, home)
+	if err := credentials.WritePin(repo, "default"); err != nil {
+		t.Fatal(err)
+	}
+	inDir(t, repo)
+	setupCmd.SetOut(io.Discard)
+	t.Cleanup(func() { setupCmd.SetOut(nil) })
+
+	if err := setupCmd.RunE(setupCmd, nil); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	// Compare decoded paths: JSON escapes each Windows separator, so the raw
+	// file never contains the plain path.
+	data, err := os.ReadFile(filepath.Join(home, ".praxis", "installed.json"))
+	var receipt struct {
+		Skills []struct {
+			Path string `json:"path"`
+		} `json:"skills"`
+	}
+	if err == nil {
+		err = json.Unmarshal(data, &receipt)
+	}
+	userLevel := filepath.Join(home, ".claude", "skills", "praxis")
+	found := false
+	for _, s := range receipt.Skills {
+		found = found || strings.HasPrefix(s.Path, userLevel)
+	}
+	if err != nil || !found {
+		t.Errorf("home receipt = %s, %v; want the user-level praxis skill", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".praxis", "installed.json")); !os.IsNotExist(err) {
+		t.Errorf("project receipt written by setup: %v", err)
+	}
+}
+
+// The background setup starts in the home folder, not the caller's.
+func TestStartBackgroundSetup_RunsInHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as the praxis binary")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".praxis")
+	script := filepath.Join(t.TempDir(), "praxis")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\npwd\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	orig := setupExecutable
+	t.Cleanup(func() { setupExecutable = orig })
+	setupExecutable = func() (string, error) { return script, nil }
+	if err := startBackgroundSetup(dir); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(home)
+	var got string
+	for i := 0; i < 50; i++ {
+		b, _ := os.ReadFile(filepath.Join(dir, "setup.log"))
+		if got = strings.TrimSpace(string(b)); got != "" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if resolved, _ := filepath.EvalSymlinks(got); resolved != want {
+		t.Errorf("background setup ran in %q, want home %q", got, want)
 	}
 }
