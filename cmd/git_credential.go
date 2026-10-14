@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/Facets-cloud/praxis-cli/internal/credentials"
 	"github.com/spf13/cobra"
 )
+
+// credHelperStderr is where the fallthrough hint is written. It's a var so tests
+// can capture it; git never reads the helper's stderr, so a line here is safe.
+var credHelperStderr io.Writer = os.Stderr
 
 func init() {
 	rootCmd.AddCommand(gitCredentialCmd)
@@ -130,14 +135,18 @@ func runGitCredential(out io.Writer, in io.Reader, op string, gw func() (string,
 	}
 
 	err := mintAndEmit(out, attrs, gw)
-	if err != nil && isBrokeredHost(attrs["host"]) {
-		// A host we always broker failing to mint is a real misconfiguration —
-		// surface it so the user sees why the push was refused.
-		return err
+	if err != nil {
+		if isBrokeredHost(attrs["host"]) {
+			// A host we always broker failing to mint is a real misconfiguration —
+			// surface it so the user sees why the push was refused.
+			return err
+		}
+		// Non-brokered host: stay silent on stdout so git falls through, but hint on
+		// stderr — git's own "could not read Username" never names praxis or the host.
+		fmt.Fprintf(credHelperStderr,
+			"praxis git-credential: no credential brokered for host %q; git will fall back to its other credential sources\n",
+			attrs["host"])
 	}
-	// A custom host (a GitHub Enterprise Server we only broker when the org has a
-	// matching enterprise PAT) that didn't mint falls through silently, so an
-	// unscoped helper never breaks a push to a host we don't broker.
 	return nil
 }
 

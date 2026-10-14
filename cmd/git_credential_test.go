@@ -144,6 +144,62 @@ func TestGitCredentialGet_NonBrokeredHostFallsThrough(t *testing.T) {
 	}
 }
 
+func TestGitCredentialGet_NonBrokeredHostPrintsStderrHint(t *testing.T) {
+	// A non-brokered host that mints nothing must still fall through on stdout,
+	// but print a one-line stderr hint naming the host — otherwise git's cryptic
+	// "could not read Username" is the only signal the user ever sees.
+	origCall := callMCP
+	defer func() { callMCP = origCall }()
+	callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+		return []byte(`{"isError":true,"content":[{"type":"text","text":"no credential for host"}]}`), 200, nil
+	}
+
+	origErr := credHelperStderr
+	defer func() { credHelperStderr = origErr }()
+	var errBuf bytes.Buffer
+	credHelperStderr = &errBuf
+
+	var out bytes.Buffer
+	in := strings.NewReader("protocol=https\nhost=gitlab.unlinked.example\n\n")
+	if err := runGitCredential(&out, in, "get",
+		func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil }); err != nil {
+		t.Fatalf("non-brokered host must fall through, got err %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("must emit no credential on stdout, got %q", out.String())
+	}
+	hint := errBuf.String()
+	if !strings.Contains(hint, "no credential brokered") || !strings.Contains(hint, "gitlab.unlinked.example") {
+		t.Fatalf("expected a stderr hint naming the host, got %q", hint)
+	}
+}
+
+func TestGitCredentialGet_BrokeredSuccessNoStderrHint(t *testing.T) {
+	// The hint fires only on fall-through. A successful mint must leave stderr
+	// clean, so the happy path stays quiet.
+	origCall := callMCP
+	defer func() { callMCP = origCall }()
+	callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+		env := `{"content":[{"type":"text","text":"{\"username\":\"x-access-token\",\"password\":\"ghs_ok\"}"}]}`
+		return []byte(env), 200, nil
+	}
+
+	origErr := credHelperStderr
+	defer func() { credHelperStderr = origErr }()
+	var errBuf bytes.Buffer
+	credHelperStderr = &errBuf
+
+	var out bytes.Buffer
+	in := strings.NewReader("protocol=https\nhost=github.com\npath=o/r\n\n")
+	if err := runGitCredential(&out, in, "get",
+		func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil }); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if errBuf.Len() != 0 {
+		t.Fatalf("happy path must not write stderr, got %q", errBuf.String())
+	}
+}
+
 func TestGitCredentialGet_EnterpriseServerHostMints(t *testing.T) {
 	// A custom GitHub Enterprise Server host the server CAN vend for: the
 	// helper forwards the host and emits the returned enterprise credential.
