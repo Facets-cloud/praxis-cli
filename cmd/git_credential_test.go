@@ -144,6 +144,62 @@ func TestGitCredentialGet_NonBrokeredHostFallsThrough(t *testing.T) {
 	}
 }
 
+func TestGitCredentialGet_NonBrokeredHostPrintsStderrHint(t *testing.T) {
+	// A non-brokered host that mints nothing must still fall through on stdout,
+	// but print a one-line stderr hint naming the host — otherwise git's cryptic
+	// "could not read Username" is the only signal the user ever sees.
+	origCall := callMCP
+	defer func() { callMCP = origCall }()
+	callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+		return []byte(`{"isError":true,"content":[{"type":"text","text":"no credential for host"}]}`), 200, nil
+	}
+
+	origErr := credHelperStderr
+	defer func() { credHelperStderr = origErr }()
+	var errBuf bytes.Buffer
+	credHelperStderr = &errBuf
+
+	var out bytes.Buffer
+	in := strings.NewReader("protocol=https\nhost=gitlab.unlinked.example\n\n")
+	if err := runGitCredential(&out, in, "get",
+		func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil }); err != nil {
+		t.Fatalf("non-brokered host must fall through, got err %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("must emit no credential on stdout, got %q", out.String())
+	}
+	hint := errBuf.String()
+	if !strings.Contains(hint, "no credential brokered") || !strings.Contains(hint, "gitlab.unlinked.example") {
+		t.Fatalf("expected a stderr hint naming the host, got %q", hint)
+	}
+}
+
+func TestGitCredentialGet_BrokeredSuccessNoStderrHint(t *testing.T) {
+	// The hint fires only on fall-through. A successful mint must leave stderr
+	// clean, so the happy path stays quiet.
+	origCall := callMCP
+	defer func() { callMCP = origCall }()
+	callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+		env := `{"content":[{"type":"text","text":"{\"username\":\"x-access-token\",\"password\":\"ghs_ok\"}"}]}`
+		return []byte(env), 200, nil
+	}
+
+	origErr := credHelperStderr
+	defer func() { credHelperStderr = origErr }()
+	var errBuf bytes.Buffer
+	credHelperStderr = &errBuf
+
+	var out bytes.Buffer
+	in := strings.NewReader("protocol=https\nhost=github.com\npath=o/r\n\n")
+	if err := runGitCredential(&out, in, "get",
+		func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil }); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if errBuf.Len() != 0 {
+		t.Fatalf("happy path must not write stderr, got %q", errBuf.String())
+	}
+}
+
 func TestGitCredentialGet_EnterpriseServerHostMints(t *testing.T) {
 	// A custom GitHub Enterprise Server host the server CAN vend for: the
 	// helper forwards the host and emits the returned enterprise credential.
@@ -168,6 +224,63 @@ func TestGitCredentialGet_EnterpriseServerHostMints(t *testing.T) {
 	if !strings.Contains(string(sentBody), `"host":"github.acme.com"`) {
 		t.Fatalf("custom host must be forwarded to the gateway, got %s", sentBody)
 	}
+}
+
+func TestGitCredentialGet_SelfHostedVCSMints(t *testing.T) {
+	// A self-hosted GitLab/Bitbucket host the org has linked: the helper
+	// forwards the custom host verbatim (incl. any :port) and emits the OAuth
+	// app credential the server returns — the same generic custom-host path as
+	// a GitHub Enterprise Server, just a different per-provider username.
+	tests := []struct {
+		host     string
+		username string
+		token    string
+	}{
+		{"gitlab.corp.example", "oauth2", "glat_self"},
+		{"gitlab-pub.famapp.in", "oauth2", "glat_self"},
+		{"gitlab.corp.example:8443", "oauth2", "glat_self"}, // self-hosted on a custom port
+		{"bitbucket.corp.example", "x-token-auth", "bbat_self"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.host, func(t *testing.T) {
+			orig := callMCP
+			defer func() { callMCP = orig }()
+			var sentBody []byte
+			callMCP = func(baseURL string, auth map[string]string, mcp, fn string, body []byte, timeout time.Duration) ([]byte, int, error) {
+				sentBody = body
+				env := `{"content":[{"type":"text","text":"{\"username\":\"` + tc.username +
+					`\",\"password\":\"` + tc.token + `\"}"}]}`
+				return []byte(env), 200, nil
+			}
+			var out bytes.Buffer
+			in := strings.NewReader("protocol=https\nhost=" + tc.host + "\npath=team/repo\n\n")
+			if err := runGitCredential(&out, in, "get",
+				func() (string, map[string]string, error) { return "https://gw", bearer("tok"), nil }); err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			// The custom host is forwarded to the gateway verbatim (incl. port);
+			// the server is what normalizes and matches it to a linked account.
+			if !strings.Contains(string(sentBody), `"host":"`+tc.host+`"`) {
+				t.Fatalf("self-hosted host must be forwarded verbatim, got %s", sentBody)
+			}
+			if !strings.Contains(out.String(), "host="+tc.host+"\n") {
+				t.Fatalf("expected host echoed back, got %q", out.String())
+			}
+			if !strings.Contains(out.String(), "username="+tc.username+"\n") {
+				t.Fatalf("expected username %q from server, got %q", tc.username, out.String())
+			}
+			if !strings.Contains(out.String(), "password="+tc.token+"\n") {
+				t.Fatalf("expected the minted token, got %q", out.String())
+			}
+		})
+	}
+}
+
+func TestGitCredentialGet_SelfHostedUnlinkedFallsThrough(t *testing.T) {
+	// A self-hosted GitLab host the org has NOT linked: the server refuses
+	// (vends nothing), and the helper falls through silently — no token, no
+	// error — so git prompts normally and an unscoped helper never breaks.
+	assertRefusalFallsThrough(t, "gitlab.unlinked.example")
 }
 
 func TestGitCredentialGet_BrokeredHostSurfacesError(t *testing.T) {

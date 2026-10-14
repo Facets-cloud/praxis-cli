@@ -11,7 +11,11 @@ base commit and repo instructions before editing. Preserve unrelated changes.
 - Ordinary local Git can use `praxis git-credential`, an HTTPS credential broker.
   It is Git's helper protocol, not a `praxis git clone` command. Let Git consume
   the short-lived token; never run helper `get` to display it. Credentials transit
-  the local process even though they are centrally managed.
+  the local process even though they are centrally managed. It brokers github.com /
+  GitHub Enterprise Cloud, gitlab.com, bitbucket.org, and any self-hosted
+  GitHub/GitLab/Bitbucket the org has linked; for any other host it emits nothing
+  so Git falls back, printing a `no credential brokered for host` line to stderr
+  that names the host.
 - Discover `vcs_cli.run_gh_cli` through the MCP manifest for server-side GitHub
   operations. Pass the explicit `repo` and command without `gh`/`--repo` according
   to its schema. It is not arbitrary shell execution or generic GitLab access.
