@@ -121,6 +121,26 @@ in-process MCP reference (`run_cloud_cli(...)`) is rewritten to a
 `praxis mcp <mcp> <fn> --arg …` shell-out — see
 `internal/skillcatalog` and `internal/render/preamble.go`.
 
+### Where skill content goes
+
+Since agent-factory #1723, a praxis CLI that claims `praxis-v1` / `raptor-v1`
+does not get the GLOBAL seeds that those skills replace. Thus the seeds in
+agent-factory are not the place for new CLI guidance. Put each topic in one
+place only:
+
+- Praxis topics (cloud, k8s, New Relic, duties, custom agents, task DAGs, ig,
+  Slack): a file in `internal/skillinstall/embedded/praxis/references/`, with a
+  link from the embedded `SKILL.md`.
+- Facets topics (blueprints, modules, releases, environments): the raptor repo,
+  `skills/raptor/references/`. raptor installs its own skill.
+- Hosted web chat only: an agent-factory seed with `surface: ui`.
+
+Do not add a new GLOBAL to agent-factory's `CLI_PORTABLE_GLOBAL_SKILLS`. That
+list is only for old CLIs (1.15 and older) that send no claim. Do not keep a
+second copy of a topic in a seed, because the two copies drift. When the
+embedded skill replaces a GLOBAL, add its name to `replaced.go` here and to
+`CONSOLIDATED_GLOBAL_SKILLS` in agent-factory's `routes/cli_skills.py`.
+
 ## Profile selection and local mode
 
 **Selecting a profile is a read; nothing writes the store to select.** The
