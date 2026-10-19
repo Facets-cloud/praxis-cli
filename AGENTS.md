@@ -362,8 +362,10 @@ one update. Tests must never start it for real: `TestMain` stubs
 
 ## Windows
 
-praxis ships for Windows (amd64, arm64). The `test-windows` CI job must stay
-green.
+praxis ships for Windows (amd64, arm64). The Windows tests must stay green.
+PRs do not run them, because Windows minutes cost 2x. `release.yml` runs them
+before goreleaser, so a Windows break stops the release. Before you merge a
+change to Windows code, run them on your branch: `gh workflow run ci.yml --ref <branch>`.
 
 - **Home folder:** use `paths.Home()`. Never call `os.UserHomeDir()` or read
   `$HOME` directly: on Windows Go reads `USERPROFILE`. raptor uses the same
