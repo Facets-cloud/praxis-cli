@@ -71,7 +71,7 @@ it tells you to run `praxis update`. Set `PRAXIS_NO_AUTO_UPGRADE=1` to turn
 it off. `praxis update` updates praxis (with `brew` for a Homebrew install),
 then raptor.
 
-Latest release: <https://github.com/Facets-cloud/praxis-releases/releases/latest>.
+Latest release: <https://github.com/Facets-cloud/praxis-cli/releases/latest>.
 
 ## Set up
 
