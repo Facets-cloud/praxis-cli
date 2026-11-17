@@ -4,6 +4,15 @@
 > Gemini CLI and Antigravity. Your AI operates the CLI; you install the
 > binary and sign in once.
 
+## Quick install
+
+```bash
+brew install --cask Facets-cloud/tap/praxis
+praxis login --url <your-control-plane-url>
+```
+
+Linux and Windows: see [Install](#install).
+
 ## What your AI can do
 
 After `praxis login`, your AI host can:
